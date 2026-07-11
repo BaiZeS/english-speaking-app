@@ -1,8 +1,8 @@
 """FastAPI 应用入口。"""
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from loguru import logger
