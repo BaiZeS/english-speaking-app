@@ -1,4 +1,5 @@
 """健康检查端点测试。"""
+
 from __future__ import annotations
 
 import pytest

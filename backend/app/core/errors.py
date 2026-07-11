@@ -1,4 +1,5 @@
 """应用错误类型与全局异常处理。"""
+
 from __future__ import annotations
 
 from fastapi import FastAPI, Request

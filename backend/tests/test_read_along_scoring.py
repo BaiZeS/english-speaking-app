@@ -28,7 +28,10 @@ def test_completeness_drops_on_missing_words() -> None:
     ref = "Hello world friend"
     res = score_read_along(
         ref_text=ref,
-        asr=_asr(recognized="Hello world", word_scores=[AsrWord("Hello", 90, None), AsrWord("world", 90, None)]),
+        asr=_asr(
+            recognized="Hello world",
+            word_scores=[AsrWord("Hello", 90, None), AsrWord("world", 90, None)],
+        ),
         speech_rate_wpm=120.0,
         pause_count=0,
     )
@@ -40,7 +43,9 @@ def test_low_pronunciation_words_drag_total_down() -> None:
     ref = "Hello world"
     res = score_read_along(
         ref_text=ref,
-        asr=_asr(recognized=ref, word_scores=[AsrWord("Hello", 30, None), AsrWord("world", 30, None)]),
+        asr=_asr(
+            recognized=ref, word_scores=[AsrWord("Hello", 30, None), AsrWord("world", 30, None)]
+        ),
         speech_rate_wpm=120.0,
         pause_count=0,
     )

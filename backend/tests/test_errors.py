@@ -1,4 +1,5 @@
 """应用错误类型与全局异常处理测试。"""
+
 from __future__ import annotations
 
 import pytest
