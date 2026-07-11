@@ -24,7 +24,7 @@ async def list_lessons(book: str = Query(..., min_length=1)) -> list[LessonSumma
             lesson_no=r.lesson_no,
             title=r.title,
             role_count=len(r.roles),
-            duration_s=0.0,
+            duration_s=0.0,  # TODO: compute from audio
         )
         for r in rows
     ]

@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.errors import AppError
+
 # Tests can monkeypatch this
 _CORPUS_ROOT: Path = Path(__file__).resolve().parent.parent.parent / "data"
 
@@ -31,28 +33,33 @@ class CorpusLesson:
     roles: list[CorpusRole]
 
 
-def _file_for(book: str, lesson_no: int) -> Path:
-    return _CORPUS_ROOT / book / f"lesson_{lesson_no:03d}.json"
+def _book_dir(book: str) -> Path:
+    """Resolve book to a directory, rejecting path traversal outside the corpus root."""
+    root = _CORPUS_ROOT.resolve()
+    resolved = (_CORPUS_ROOT / book).resolve()
+    if not resolved.is_relative_to(root):
+        raise AppError(400, "invalid book", "INVALID_BOOK")
+    return resolved
 
 
 def list_lessons(book: str) -> list[CorpusLesson]:
     out: list[CorpusLesson] = []
-    book_dir = _CORPUS_ROOT / book
+    book_dir = _book_dir(book)
     if not book_dir.is_dir():
         return out
-    for i, path in enumerate(sorted(book_dir.glob("lesson_*.json")), start=1):
-        out.append(_parse(path, synthetic_id=i, book=book))
+    for path in sorted(book_dir.glob("lesson_*.json")):
+        out.append(_parse(path, book=book))
     return out
 
 
 def get_lesson(book: str, lesson_no: int) -> CorpusLesson | None:
-    path = _file_for(book, lesson_no)
+    path = _book_dir(book) / f"lesson_{lesson_no:03d}.json"
     if not path.is_file():
         return None
-    return _parse(path, synthetic_id=lesson_no, book=book)
+    return _parse(path, book=book)
 
 
-def _parse(path: Path, synthetic_id: int, book: str) -> CorpusLesson:
+def _parse(path: Path, book: str) -> CorpusLesson:
     raw = json.loads(path.read_text(encoding="utf-8"))
     roles = [
         CorpusRole(
@@ -70,7 +77,7 @@ def _parse(path: Path, synthetic_id: int, book: str) -> CorpusLesson:
         for r in raw["roles"]
     ]
     return CorpusLesson(
-        id=synthetic_id,
+        id=raw["lesson"],
         book=book,
         lesson_no=raw["lesson"],
         title=raw["title"],
