@@ -12,7 +12,12 @@ from app.models import db as _db_models  # noqa: F401  (register tables)
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", settings.database_url.replace("+asyncpg", ""))
+db_url = settings.database_url
+if db_url.startswith("sqlite+"):
+    db_url = db_url.replace("sqlite+aiosqlite", "sqlite")
+elif db_url.startswith("postgresql+asyncpg"):
+    db_url = db_url.replace("+asyncpg", "")
+config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 
