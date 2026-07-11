@@ -9,6 +9,7 @@ from loguru import logger
 
 from app.api.v1 import health
 from app.config import settings
+from app.core.errors import install_error_handler
 
 
 @asynccontextmanager
@@ -26,6 +27,7 @@ app = FastAPI(
     redoc_url="/redoc" if settings.env != "production" else None,
 )
 
+install_error_handler(app)
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 
 
