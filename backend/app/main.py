@@ -10,10 +10,12 @@ from loguru import logger
 from app.api.v1 import health
 from app.config import settings
 from app.core.errors import install_error_handler
+from app.core.logging import configure_logging
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging("INFO")
     logger.info("Starting English Assistant API | env={}", settings.env)
     yield
     logger.info("Shutting down")
