@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from loguru import logger
 
-from app.api.v1 import health, history, lessons, score, tts
+from app.api.v1 import dialogue, health, history, lessons, score, tts
 from app.config import settings
 from app.core.errors import install_error_handler
 from app.core.logging import configure_logging
@@ -31,6 +31,7 @@ app = FastAPI(
 )
 
 install_error_handler(app)
+app.include_router(dialogue.router, prefix="/api/v1")
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(history.router, prefix="/api/v1")
 app.include_router(lessons.router, prefix="/api/v1")
