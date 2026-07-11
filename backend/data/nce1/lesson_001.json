@@ -1,0 +1,23 @@
+{
+  "book": "nce1",
+  "lesson": 1,
+  "title": "A Private Conversation",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "nce1-L1-A1", "text": "Excuse me, is this your handbag?", "translation": "打扰一下，这是您的手提包吗？"},
+        {"id": "nce1-L1-A2", "text": "Yes, it is.", "translation": "是的，是我的。"},
+        {"id": "nce1-L1-A3", "text": "Thank you very much.", "translation": "非常感谢。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "nce1-L1-B1", "text": "Pardon?", "translation": "什么？"},
+        {"id": "nce1-L1-B2", "text": "Is this your handbag?", "translation": "这是您的手提包吗？"},
+        {"id": "nce1-L1-B3", "text": "Oh, yes, it is. Thank you.", "translation": "哦，是的，是我的。谢谢。"}
+      ]
+    }
+  ]
+}
