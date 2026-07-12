@@ -1,0 +1,54 @@
+buildUponDefaultConfig: true
+
+config:
+  validation: false
+
+naming:
+  FunctionNaming:
+    # @Composable functions are PascalCase; ignore them.
+    active: false
+
+style:
+  MagicNumber:
+    active: true
+    ignoreEnums: true
+    ignoreAnnotation: true
+    ignorePropertyDeclaration: true
+    ignoreNamedArgument: true
+    ignoreLocalVariableDeclaration: true
+  ReturnCount:
+    max: 4
+  LoopWithTooManyJumpStatements:
+    maxJumpCount: 2
+  MaxLineLength:
+    excludes:
+      - '**/test/**'
+
+complexity:
+  LongMethod:
+    threshold: 80
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 9
+  CyclomaticComplexMethod:
+    threshold: 18
+  TooManyFunctions:
+    thresholdInFiles: 30
+  LargeClass:
+    threshold: 300
+
+empty-blocks:
+  EmptyFunctionBody:
+    style: false
+
+exceptions:
+  SwallowedException:
+    active: false
+  TooGenericExceptionCaught:
+    active: false
+  TooGenericExceptionThrown:
+    active: false
+
+potential-bugs:
+  UnsafeCallOnNullableType:
+    active: true
