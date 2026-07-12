@@ -29,19 +29,19 @@ jobs:
 
       - name: Install deps
         working-directory: backend
-        run: uv sync --frozen --extra dev 2>&1 || uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Ruff check
         working-directory: backend
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Ruff format check
         working-directory: backend
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: mypy
         working-directory: backend
-        run: mypy app
+        run: uv run mypy app
 
   test:
     name: pytest
@@ -82,11 +82,11 @@ jobs:
 
       - name: Install deps
         working-directory: backend
-        run: uv sync --frozen --extra dev 2>&1 || uv pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev
 
       - name: Run tests
         working-directory: backend
         env:
           DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/english_test
           REDIS_URL: redis://localhost:6379/0
-        run: pytest --cov=app --cov-report=xml --cov-report=term --cov-fail-under=85
+        run: uv run pytest --cov=app --cov-report=xml --cov-report=term --cov-fail-under=85
