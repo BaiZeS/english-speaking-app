@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
@@ -17,7 +18,13 @@ async def _get_or_create_user(db: AsyncSession, device_id: str) -> User:
     if user is None:
         user = User(device_id=device_id)
         db.add(user)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Concurrent insert raced us; the user now exists - re-fetch.
+            await db.rollback()
+            res = await db.execute(select(User).where(User.device_id == device_id))
+            user = res.scalar_one()
     return user
 
 

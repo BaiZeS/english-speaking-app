@@ -11,7 +11,9 @@ _provider = XunfeiTTSProvider()
 
 
 @router.get("/tts", response_model=TtsResponse)
-async def tts(text: str = Query(...), voice: str = Query("k12_female")) -> TtsResponse:
+async def tts(
+    text: str = Query(..., max_length=500), voice: str = Query("k12_female")
+) -> TtsResponse:
     if not text.strip():
         raise AppError(status_code=400, message="text must not be empty", code="BAD_REQUEST")
     r = await _provider.synthesize(text, voice)

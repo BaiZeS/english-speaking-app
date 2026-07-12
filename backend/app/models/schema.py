@@ -53,10 +53,10 @@ class WordScore(BaseModel):
 
 class ScoreRequest(BaseModel):
     lesson_id: int
-    line_id: str
-    ref_text: str
+    line_id: str = Field(max_length=64)
+    ref_text: str = Field(max_length=2000)
     mode: str = "k12"
-    audio: bytes
+    audio: bytes = Field(max_length=10_000_000)
 
 
 class ScoreResponse(BaseModel):
@@ -72,14 +72,14 @@ class ScoreResponse(BaseModel):
 
 
 class HistoryWriteRequest(BaseModel):
-    device_id: str
+    device_id: str = Field(max_length=128)
     lesson_id: int
-    line_id: str
-    audio_path: str
-    score_total: float
-    score_pronunciation: float
-    score_fluency: float
-    score_completeness: float
+    line_id: str = Field(max_length=64)
+    audio_path: str = Field(max_length=512)
+    score_total: float = Field(ge=0, le=100)
+    score_pronunciation: float = Field(ge=0, le=100)
+    score_fluency: float = Field(ge=0, le=100)
+    score_completeness: float = Field(ge=0, le=100)
 
 
 class HistoryItem(BaseModel):

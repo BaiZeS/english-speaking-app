@@ -23,31 +23,33 @@ async def score(req: ScoreRequest) -> ScoreResponse:
     # 1. Persist audio to a tmp path (real impl: object storage)
     audio_path = _save_audio(req.audio)
 
-    # 2. Run ASR
-    asr_result = await _asr.recognize(audio=req.audio, ref_text=req.ref_text)
+    try:
+        # 2. Run ASR
+        asr_result = await _asr.recognize(audio=req.audio, ref_text=req.ref_text)
 
-    # 3. Estimate speech rate (rough: ASR recognized words over a 4s budget window)
-    word_count = max(1, len(asr_result.recognized.split()))
-    speech_rate_wpm = (word_count / 4.0) * 60.0
+        # 3. Estimate speech rate (rough: ASR recognized words over a 4s budget window)
+        word_count = max(1, len(asr_result.recognized.split()))
+        speech_rate_wpm = (word_count / 4.0) * 60.0
 
-    # 4. Score
-    scored = score_read_along(
-        ref_text=req.ref_text,
-        asr=asr_result,
-        speech_rate_wpm=speech_rate_wpm,
-        pause_count=0,
-    )
-    # best-effort cleanup; ignore failures
-    with contextlib.suppress(OSError):
-        os.unlink(audio_path)
-    return ScoreResponse(
-        total=scored.total,
-        pronunciation=scored.pronunciation,
-        fluency=scored.fluency,
-        completeness=scored.completeness,
-        word_details=scored.word_details,
-        suggestion=scored.suggestion,
-    )
+        # 4. Score
+        scored = score_read_along(
+            ref_text=req.ref_text,
+            asr=asr_result,
+            speech_rate_wpm=speech_rate_wpm,
+            pause_count=0,
+        )
+        return ScoreResponse(
+            total=scored.total,
+            pronunciation=scored.pronunciation,
+            fluency=scored.fluency,
+            completeness=scored.completeness,
+            word_details=scored.word_details,
+            suggestion=scored.suggestion,
+        )
+    finally:
+        # best-effort cleanup; ignore failures
+        with contextlib.suppress(OSError):
+            os.unlink(audio_path)
 
 
 def _save_audio(audio: bytes) -> str:
