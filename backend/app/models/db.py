@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
@@ -42,15 +42,13 @@ class Lesson(Base):
     role_count: Mapped[int] = mapped_column(Integer, default=0)
     duration_s: Mapped[float] = mapped_column(Float, default=0.0)
 
-    history: Mapped[list["History"]] = relationship(back_populates="lesson")  # noqa: UP037
-
 
 class History(Base):
     __tablename__ = "history"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    lesson_id: Mapped[int] = mapped_column(Integer, ForeignKey("lessons.id"), index=True)
+    lesson_id: Mapped[int] = mapped_column(Integer, index=True)
     line_id: Mapped[str] = mapped_column(String(64))
     audio_path: Mapped[str] = mapped_column(String(512))
     score_total: Mapped[float] = mapped_column(Float)
@@ -58,8 +56,6 @@ class History(Base):
     score_fluency: Mapped[float] = mapped_column(Float)
     score_completeness: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
-    lesson: Mapped["Lesson"] = relationship(back_populates="history")  # noqa: UP037
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("id", _uuid())
