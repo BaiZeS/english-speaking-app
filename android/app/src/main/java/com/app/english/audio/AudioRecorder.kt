@@ -10,7 +10,7 @@ import timber.log.Timber
  * Records microphone audio to a .m4a (AAC in MPEG-4) file via MediaRecorder.
  * Caller owns the lifecycle: [start] then [stop] (or [cancel]).
  */
-class AudioRecorder(context: Context) {
+class AudioRecorder(private val context: Context) {
     private val cacheDir = context.cacheDir
     private var recorder: MediaRecorder? = null
     private var outputFile: File? = null
