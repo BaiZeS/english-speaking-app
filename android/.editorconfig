@@ -1,0 +1,7 @@
+root = true
+
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+# @Composable functions are PascalCase; the function-naming rule flags them as a
+# false positive, so disable it (standard practice for Compose projects).
+ktlint_standard_function-naming = disabled

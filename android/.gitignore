@@ -1,0 +1,17 @@
+# Build outputs
+build/
+.gradle/
+
+# Local SDK location (do not commit)
+local.properties
+
+# APKs
+*.apk
+
+# IDE
+.idea/
+captures/
+.cxx/
+
+# Keep the gradle wrapper jar
+!gradle/wrapper/gradle-wrapper.jar
