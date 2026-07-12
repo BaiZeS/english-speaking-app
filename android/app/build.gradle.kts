@@ -5,7 +5,6 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.ktlint)
     alias(libs.plugins.detekt)
 }
 
@@ -110,13 +109,6 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-}
-
-ktlint {
-    version.set("1.3.1")
-    android.set(true)
-    outputToConsole.set(true)
-    ignoreFailures.set(false)
 }
 
 detekt {
