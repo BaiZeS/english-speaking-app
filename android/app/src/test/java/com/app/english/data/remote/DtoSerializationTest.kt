@@ -13,6 +13,7 @@ class DtoSerializationTest {
         ignoreUnknownKeys = true
         explicitNulls = false
         coerceInputValues = true
+        encodeDefaults = true
     }
 
     @Test
