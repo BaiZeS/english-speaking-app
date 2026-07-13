@@ -1,11 +1,11 @@
 # English Speaking Assistant · Backend
 
-FastAPI 后端，提供语料、TTS、ASR 评分、历史等 API。
+FastAPI 后端，提供语料、TTS、ISE 语音评测、历史等 API。
 
 ## 快速开始
 
-> L1 阶段 ASR/TTS 用 stub，**不需要讯飞凭据**即可跑通课程列表 / 录音评分 / 历史的完整闭环。
-> 真实发音（TTS）需要讯飞凭据，见下文「讯飞凭据（可选）」。
+> 讯飞 TTS（在线合成）与 ISE（语音评测，逐词音素评分）已接入。配 `.env` 凭据即走真实服务；
+> 未配凭据时自动 fallback 到 stub，课程列表 / 录音评分 / 历史的完整闭环仍可跑通。
 
 ### 1. 起依赖（Postgres + Redis）
 
@@ -51,15 +51,21 @@ curl http://localhost:8000/api/v1/health
 | 模拟器 | `http://10.0.2.2:8000/api/v1/`（APK 默认值，无需改） |
 | 真机 | `http://<电脑局域网IP>:8000/api/v1/`（在 app「设置」页改，手机与电脑同 WiFi） |
 
-### 讯飞凭据（可选）
+### 讯飞凭据（可选，配了走真实服务）
 
-L1 不配也能跑（用 stub）。要真实 TTS 发音 / ASR 评分，在 `backend/.env` 填：
+不配也能跑（fallback 到 stub）。要真实 TTS 发音 + ISE 逐词评分，在 `backend/.env` 填：
 
 ```
 XUNFEI_APP_ID=...
 XUNFEI_API_KEY=...
 XUNFEI_API_SECRET=...
+# 可选（覆盖默认值）
+XUNFEI_TTS_DEFAULT_VCN=xiaoyan          # 默认发音人
+XUNFEI_TTS_VOICES=xiaoyan,x4_xiaoyan    # App「设置」页可选发音人列表
 ```
+
+- **TTS**：v2 在线合成，输出 mp3，按 (text, voice) 落盘缓存（`static/tts/`，同文本复用，省配额）。
+- **ISE 评分**：提交 PCM（16kHz L16 mono）后走语音评测，返回 0-100 的 total/pronunciation/fluency/completeness + 每词 `word_details`（含 `score` 与 `ipa` 音素）。原始评分 1-5 → 映射到 0-100。
 
 ### 备选：Docker Compose 一键起全部
 
@@ -96,7 +102,7 @@ backend/
 | GET | `/api/v1/lessons` | 课文列表 | ✓ |
 | GET | `/api/v1/lessons/{id}/roles` | 角色台词 | ✓ |
 | GET | `/api/v1/tts` | TTS 合成 | ✓ |
-| POST | `/api/v1/score` | 评分 | ✓ |
+| POST | `/api/v1/score` | 评分（真实 ISE 逐词音素，输入 base64 PCM L16 16kHz）| ✓ |
 | GET | `/api/v1/history` | 历史 | ✓ |
 | POST | `/api/v1/history` | 写历史 | ✓ |
 | POST | `/api/v1/dialogue/generate` | 场景生成 | stub |
