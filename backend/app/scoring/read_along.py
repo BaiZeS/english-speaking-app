@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from app.models.schema import WordScore
 from app.services.interfaces import AsrResult
+
+# 去除词首尾标点 (用于 ISE 评测词与参考词对齐: ref "world," vs ISE "world")
+_STRIP_PUNCT = re.compile(r"^[^\w']+|[^\w']+$")
+
+
+def _normalize(word: str) -> str:
+    return _STRIP_PUNCT.sub("", word.lower())
 
 
 @dataclass(frozen=True)
@@ -54,7 +62,8 @@ def score_read_along(
     asr_by_idx = dict(enumerate(asr.word_scores))
     for i, ref_w in enumerate(ref_words):
         w = asr_by_idx.get(i)
-        if w is not None and w.word.lower() == ref_w.lower():
+        # 对齐时忽略首尾标点 (ref "world," vs ISE "world"), 输出保留原参考词
+        if w is not None and _normalize(w.word) == _normalize(ref_w):
             details.append(WordScore(word=ref_w, score=w.score, ipa=w.ipa))
         else:
             details.append(WordScore(word=ref_w, score=0.0, ipa=None))
