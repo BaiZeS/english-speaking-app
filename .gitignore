@@ -28,6 +28,8 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+# 运行时生成的静态资源 (TTS 合成音频落盘目录等)
+backend/static/
 
 # ====== Android / Kotlin / Gradle ======
 .gradle/

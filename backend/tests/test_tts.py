@@ -6,6 +6,18 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _force_stub_tts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """强制 TTS 走 stub: 本测试只校验 /tts 端点接线, 不依赖真实讯飞凭证/网络.
+
+    与 tests/test_xunfei_asr.py 同样的 monkeypatch 风格. 否则本地有 .env 真实凭证时,
+    provider 会真的调用讯飞返回 .mp3 (而非 stub 的 .m4a), 断言会随环境抖动.
+    """
+    monkeypatch.setattr("app.services.xunfei_tts.settings.xunfei_app_id", "")
+    monkeypatch.setattr("app.services.xunfei_tts.settings.xunfei_api_key", "")
+    monkeypatch.setattr("app.services.xunfei_tts.settings.xunfei_api_secret", "")
+
+
 @pytest.mark.asyncio
 async def test_tts_returns_audio_url_and_duration() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:

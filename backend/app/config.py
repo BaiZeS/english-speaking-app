@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     xunfei_api_key: str = Field(default="")
     xunfei_api_secret: str = Field(default="")
 
+    # ====== 讯飞 TTS ======
+    xunfei_tts_default_vcn: str = Field(default="xiaoyan")
+    # 逗号分隔的发音人列表, env 里用 XUNFEI_TTS_VOICES=xiaoyan,x4_xiaoyan
+    xunfei_tts_voices: str = Field(default="xiaoyan,x4_xiaoyan")
+    # 合成音频文件的存放目录, 挂载到 /static
+    tts_audio_dir: str = Field(default="static/tts")
+
     # ====== OpenAI / 阿里 (备选) ======
     openai_api_key: str = Field(default="")
     openai_base_url: str = Field(default="https://api.openai.com/v1")
