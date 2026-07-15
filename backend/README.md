@@ -60,11 +60,13 @@ XUNFEI_APP_ID=...
 XUNFEI_API_KEY=...
 XUNFEI_API_SECRET=...
 # 可选（覆盖默认值）
-XUNFEI_TTS_DEFAULT_VCN=xiaoyan          # 默认发音人
-XUNFEI_TTS_VOICES=xiaoyan,x4_xiaoyan    # App「设置」页可选发音人列表
+XUNFEI_TTS_DEFAULT_VCN=x5_EnUs_Grant_flow      # 默认发音人 (美式英文女, 超拟人)
+XUNFEI_TTS_VOICES=x5_EnUs_Grant_flow,x5_EnUs_Lila_flow  # App「设置」页可选发音人列表
+XUNFEI_SPARK_TTS_PASSWORD=ak-xxx                   # 超拟人控制台拿 APIPassword
 ```
 
-- **TTS**：v2 在线合成，输出 mp3，按 (text, voice) 落盘缓存（`static/tts/`，同文本复用，省配额）。
+- **超拟人 TTS (主)**：Spark 大模型合成, 24kHz mp3, 自动句末 [p300] 停顿, 按 (text, voice) 落盘缓存 (`static/tts/`, 同文本复用, 省配额).
+- **v2 老接口 (fallback)**：仅在 Spark 凭据缺失或调用失败时启用, 音色机械不推荐.
 - **ISE 评分**：提交 PCM（16kHz L16 mono）后走语音评测，返回 0-100 的 total/pronunciation/fluency/completeness + 每词 `word_details`（含 `score` 与 `ipa` 音素）。原始评分 1-5 → 映射到 0-100。
 
 ### 备选：Docker Compose 一键起全部

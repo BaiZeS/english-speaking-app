@@ -17,7 +17,9 @@ class SettingsViewModel @Inject constructor(private val settingsStore: SettingsS
         private set
     val deviceId: String = settingsStore.deviceId
 
-    val availableVoices: List<String> = listOf("k12_female", "k12_male")
+    // Xunfei Spark super-natural TTS voices (US English).
+    // Grant: mature female; Lila: younger female.
+    val availableVoices: List<String> = listOf("x5_EnUs_Grant_flow", "x5_EnUs_Lila_flow")
 
     fun updateBaseUrl(url: String) {
         baseUrl = url

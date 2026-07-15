@@ -62,3 +62,6 @@ yarn-error.log*
 *.log
 .tmp/
 .cache/
+# 本地工具缓存 / 误生成产物
+.codegraph/
+backend/package-lock.json

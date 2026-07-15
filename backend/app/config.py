@@ -33,11 +33,24 @@ class Settings(BaseSettings):
     xunfei_api_secret: str = Field(default="")
 
     # ====== 讯飞 TTS ======
-    xunfei_tts_default_vcn: str = Field(default="xiaoyan")
-    # 逗号分隔的发音人列表, env 里用 XUNFEI_TTS_VOICES=xiaoyan,x4_xiaoyan
-    xunfei_tts_voices: str = Field(default="xiaoyan,x4_xiaoyan")
+    # 默认 vcn 走超拟人 Spark TTS (美式英文女声). 切换到 v2 老音色 (xiaoyan 等)
+    # 只需把 default 改回去并配 XUNFEI_API_KEY/SECRET, 不需改代码.
+    xunfei_tts_default_vcn: str = Field(default="x5_EnUs_Grant_flow")
+    # 逗号分隔的发音人列表, app 设置页可切换. 必须是 Spark TTS 控制台已开通的 vcn.
+    xunfei_tts_voices: str = Field(
+        default="x5_EnUs_Grant_flow,x5_EnUs_Lila_flow"
+    )
     # 合成音频文件的存放目录, 挂载到 /static
     tts_audio_dir: str = Field(default="static/tts")
+
+    # ====== 讯飞 超拟人 TTS (主用) ======
+    # Spark 超拟人合成 API (https://www.xfyun.cn/doc/spark/super%20smart-tts.html)
+    # 鉴权用 APIPassword + x-api-key 请求头, 比 v2 的 hmac-sha256 URL 鉴权简单.
+    # 端点固定, 控制台开通后即用. 未配置则自动 fallback 到 v2 老接口, 再降级到 stub.
+    xunfei_spark_tts_password: str = Field(default="")
+    xunfei_spark_tts_url: str = Field(
+        default="wss://cbm01.cn-huabei-1.xf-yun.com/v1/private/mcd9m97e6"
+    )
 
     # ====== OpenAI / 阿里 (备选) ======
     openai_api_key: str = Field(default="")

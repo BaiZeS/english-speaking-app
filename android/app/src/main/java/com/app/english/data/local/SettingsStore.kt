@@ -47,6 +47,8 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_VOICE = "voice"
-        private const val DEFAULT_VOICE = "k12_female"
+
+        // Xunfei Spark super-natural TTS, US English female (x5_EnUs_Grant_flow).
+        private const val DEFAULT_VOICE = "x5_EnUs_Grant_flow"
     }
 }
