@@ -4,7 +4,7 @@ Kotlin + Jetpack Compose 原生 Android 客户端。
 
 ## 状态
 
-✅ **Phase 2 L1 跟读闭环完成** — K12 + 新概念 1 跟读场景端到端跑通（选课 -> 播放 TTS -> 录音跟读 -> 提交评分 -> 看历史）。APK 由 `android-ci` 构建，最新绿色 run 见 Actions 页。
+✅ **三种练习模式已接入** — 跟读（句子序列 + 最近五句）、角色对话（A 播放 / B 录音评分）、自由对话（AI 建议回答 + 每轮评分）。APK 由 `android-ci` 构建，最新绿色 run 见 Actions 页。
 
 录音用 `AudioRecord` 直接采 PCM L16 16kHz mono，提交后端走真实讯飞 ISE 逐词音素评分（不再经 AAC/M4A 转码）。
 

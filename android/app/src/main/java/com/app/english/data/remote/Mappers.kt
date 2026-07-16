@@ -56,3 +56,30 @@ fun HistoryItemDto.toDomain(): HistoryItem = HistoryItem(
     scoreCompleteness = scoreCompleteness,
     createdAt = createdAt
 )
+
+
+fun DialogueLineDto.toDomain(): com.app.english.domain.model.DialogueLine =
+    com.app.english.domain.model.DialogueLine(
+        id = id,
+        role = role,
+        text = text,
+        translation = translation,
+        isUser = isUser
+    )
+
+fun DialogueGenerateResponseDto.toDomain(): com.app.english.domain.model.DialogueSession =
+    com.app.english.domain.model.DialogueSession(
+        sceneId = sceneId,
+        status = status,
+        title = title,
+        lines = lines.map { it.toDomain() },
+        suggestedReply = suggestedReply
+    )
+
+fun DialogueTurnResponseDto.toDomain(): com.app.english.domain.model.DialogueTurn =
+    com.app.english.domain.model.DialogueTurn(
+        replyText = replyText,
+        suggestedReply = suggestedReply,
+        recognizedText = recognizedText,
+        replyAudioUrl = replyAudioUrl
+    )

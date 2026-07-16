@@ -140,4 +140,30 @@ class DtoSerializationTest {
         assertEquals(2, list[0].roleCount)
         assertEquals("B", list[1].title)
     }
+
+    @Test
+    fun dialogueGenerateResponse_decodesSuggestedReply() {
+        val payload = """
+            {"scene_id":"daily_conversation","status":"stub","title":"Daily conversation",
+             "lines":[{"id":"line-1","role":"assistant","text":"Hi!","is_user":false}],
+             "suggested_reply":"I am fine."}
+        """.trimIndent()
+        val dto = json.decodeFromString(DialogueGenerateResponseDto.serializer(), payload)
+        assertEquals("daily_conversation", dto.sceneId)
+        assertEquals("Hi!", dto.lines.first().text)
+        assertEquals("I am fine.", dto.suggestedReply)
+    }
+
+    @Test
+    fun dialogueTurnRequest_serializesSnakeCaseFields() {
+        val request = DialogueTurnRequestDto(
+            sceneId = "daily_conversation",
+            history = listOf(DialogueMessageDto("assistant", "Hi!")),
+            userAudioB64 = "AAAA"
+        )
+        val encoded = json.encodeToString(DialogueTurnRequestDto.serializer(), request)
+        assertTrue(encoded.contains("\"scene_id\":\"daily_conversation\""))
+        assertTrue(encoded.contains("\"user_audio_b64\":\"AAAA\""))
+    }
+
 }

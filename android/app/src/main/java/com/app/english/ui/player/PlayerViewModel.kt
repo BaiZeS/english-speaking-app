@@ -28,14 +28,22 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 private const val MIN_SCORE_TO_ADVANCE = 60.0
+private const val RECENT_SENTENCE_COUNT = 5
 
+data class PracticeTurn(val role: String, val line: Line, val isUserTurn: Boolean)
 data class ScoredLine(val line: Line, val result: ScoreResult)
 
 data class PlayerUiState(
     val isLoading: Boolean = true,
+    val mode: PlayerMode = PlayerMode.READ_ALONG,
     val lessonTitle: String = "",
     val roleName: String = "",
+    /** Lines the user must read. In dialogue mode these are role B's lines. */
     val lines: List<Line> = emptyList(),
+    /** Complete interleaved transcript used by dialogue mode. */
+    val conversation: List<PracticeTurn> = emptyList(),
+    /** Role A's prompt corresponding to each user line in dialogue mode. */
+    val prompts: List<Line?> = emptyList(),
     val currentIndex: Int = 0,
     val isPlayingReference: Boolean = false,
     val isRecording: Boolean = false,
@@ -47,11 +55,18 @@ data class PlayerUiState(
     val finished: Boolean = false
 ) {
     val currentLine: Line? get() = lines.getOrNull(currentIndex)
+    val currentPrompt: Line? get() = prompts.getOrNull(currentIndex)
     val isLastLine: Boolean get() = currentIndex >= lines.lastIndex
-
-    // Spec §4.1: a line scoring < 60 must be re-recorded once before advancing.
     val canAdvance: Boolean
         get() = currentScore != null && (currentScore.total >= MIN_SCORE_TO_ADVANCE || hasRetaken)
+
+    /** The most recent five sentences, with the current sentence at the end. */
+    val recentLines: List<Line>
+        get() {
+            val end = (currentIndex + 1).coerceAtMost(lines.size)
+            val start = (end - RECENT_SENTENCE_COUNT).coerceAtLeast(0)
+            return lines.subList(start, end)
+        }
 }
 
 @HiltViewModel
@@ -68,15 +83,9 @@ class PlayerViewModel @Inject constructor(
     val lessonId: Int = requireNotNull(savedStateHandle.get<Int>(Route.Player.ARG_LESSON_ID)) {
         "lessonId argument required"
     }
-    private val mode: PlayerMode =
-        PlayerMode.fromWire(savedStateHandle.get<String>(Route.Player.ARG_MODE))
+    private val mode = PlayerMode.fromWire(savedStateHandle.get<String>(Route.Player.ARG_MODE))
 
-    // roleName only required for DIALOGUE; READ_ALONG flattens every role.
-    private val roleName: String? =
-        savedStateHandle.get<String>(Route.Player.ARG_ROLE_NAME)
-            ?.takeIf { it != Route.Player.NO_ROLE }
-
-    private val _state = MutableStateFlow(PlayerUiState())
+    private val _state = MutableStateFlow(PlayerUiState(mode = mode))
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
     init {
@@ -90,19 +99,25 @@ class PlayerViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true, error = null) }
             _state.value = try {
                 val lesson = repository.getLessonRoles(lessonId, BOOK)
-                val (displayRole, lines) = resolveLines(lesson)
-                if (lines.isEmpty()) {
+                val resolved = resolvePractice(lesson)
+                if (resolved.lines.isEmpty()) {
                     _state.value.copy(
                         isLoading = false,
-                        error = "No lines for mode=$mode, role=$roleName"
+                        error = if (mode == PlayerMode.DIALOGUE) {
+                            "这篇课文暂时没有可练习的角色 B 台词"
+                        } else {
+                            "这篇课文暂时没有可练习的句子"
+                        }
                     )
                 } else {
                     PlayerUiState(
                         isLoading = false,
+                        mode = mode,
                         lessonTitle = lesson.title,
-                        roleName = displayRole,
-                        lines = lines,
-                        currentIndex = 0
+                        roleName = resolved.responseRole,
+                        lines = resolved.lines,
+                        conversation = resolved.conversation,
+                        prompts = resolved.prompts
                     )
                 }
             } catch (e: Exception) {
@@ -111,34 +126,86 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun resolveLines(lesson: LessonDetail): Pair<String, List<Line>> {
-        // READ_ALONG: flatten every role's lines in source order.
-        // DIALOGUE: take the user-picked role's lines; missing role -> empty.
-        return when (mode) {
-            PlayerMode.READ_ALONG -> {
-                val flat = lesson.roles.flatMap { it.lines }
-                "" to flat
+    private data class ResolvedPractice(
+        val responseRole: String,
+        val lines: List<Line>,
+        val prompts: List<Line?>,
+        val conversation: List<PracticeTurn>
+    )
+
+    private fun resolvePractice(lesson: LessonDetail): ResolvedPractice = when (mode) {
+        PlayerMode.READ_ALONG -> {
+            val ordered = interleaveRoles(lesson).flatMap(::splitSentences)
+            ResolvedPractice(
+                responseRole = "",
+                lines = ordered,
+                prompts = List(ordered.size) { null },
+                conversation = ordered.map { PracticeTurn("", it, true) }
+            )
+        }
+        PlayerMode.DIALOGUE -> {
+            val assistant = lesson.roles.getOrNull(0)
+            val user = lesson.roles.getOrNull(1)
+            val assistantName = assistant?.name.orEmpty()
+            val userName = user?.name.orEmpty()
+            val userLines = user?.lines.orEmpty()
+            val prompts = userLines.mapIndexed { index, _ -> assistant?.lines?.getOrNull(index) }
+            val transcript = buildList {
+                val count = maxOf(assistant?.lines?.size ?: 0, userLines.size)
+                repeat(count) { index ->
+                    assistant?.lines?.getOrNull(index)?.let {
+                        add(PracticeTurn(assistantName, it, false))
+                    }
+                    userLines.getOrNull(index)?.let {
+                        add(PracticeTurn(userName, it, true))
+                    }
+                }
             }
-            PlayerMode.DIALOGUE -> {
-                val role = lesson.roles.firstOrNull { it.name == roleName }
-                if (role == null) "" to emptyList() else role.name to role.lines
-            }
+            ResolvedPractice(
+                responseRole = user?.name.orEmpty(),
+                lines = userLines,
+                prompts = prompts,
+                conversation = transcript
+            )
+        }
+        // Free dialogue has its own screen and ViewModel.
+        PlayerMode.FREE_DIALOGUE -> ResolvedPractice("", emptyList(), emptyList(), emptyList())
+    }
+
+    /** Split a corpus line into speakable sentences without reintroducing role labels. */
+    private fun splitSentences(line: Line): List<Line> {
+        val parts = line.text
+            .split(SENTENCE_BOUNDARY)
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+        if (parts.size <= 1) return listOf(line)
+        return parts.mapIndexed { index, text ->
+            line.copy(id = "${line.id}-s${index + 1}".take(64), text = text)
+        }
+    }
+
+    /** Preserve the dialogue order while removing role labels for read-along. */
+    private fun interleaveRoles(lesson: LessonDetail): List<Line> = buildList {
+        val count = lesson.roles.maxOfOrNull { it.lines.size } ?: 0
+        repeat(count) { index ->
+            lesson.roles.forEach { role -> role.lines.getOrNull(index)?.let(::add) }
         }
     }
 
     fun playReference() {
-        val line = _state.value.currentLine ?: return
-        if (_state.value.isPlayingReference || _state.value.isRecording) return
+        val state = _state.value
+        val line = state.currentPrompt ?: state.currentLine ?: return
+        if (state.isPlayingReference || state.isRecording) return
         viewModelScope.launch {
             _state.update { it.copy(isPlayingReference = true, error = null) }
             try {
                 val url = repository.getTtsAudioUrl(line.text, settingsStore.getVoice())
                 audioPlayer.play(url) {
-                    _state.update { state -> state.copy(isPlayingReference = false) }
+                    _state.update { current -> current.copy(isPlayingReference = false) }
                 }
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isPlayingReference = false, error = "TTS 播放失败: ${e.message}")
+                    it.copy(isPlayingReference = false, error = "标准音播放失败：${e.message}")
                 }
             }
         }
@@ -158,7 +225,7 @@ class PlayerViewModel @Inject constructor(
                     )
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(error = "录音启动失败: ${e.message}") }
+                _state.update { it.copy(error = "录音启动失败：${e.message}") }
             }
         }
     }
@@ -175,16 +242,23 @@ class PlayerViewModel @Inject constructor(
             }
             try {
                 val base64 = withContext(Dispatchers.IO) { audioEncoder.encode(file) }
-                val result = repository.score(lessonId, line.id, line.text, base64)
-                _state.update {
-                    it.copy(
+                val result = repository.score(
+                    lessonId = lessonId,
+                    lineId = line.id,
+                    refText = line.text,
+                    audioBase64 = base64,
+                    mode = mode.wire
+                )
+                _state.update { current ->
+                    val withoutCurrent = current.lineScores.filterNot { it.line.id == line.id }
+                    current.copy(
                         isSubmitting = false,
                         currentScore = result,
-                        lineScores = it.lineScores + ScoredLine(line, result)
+                        lineScores = withoutCurrent + ScoredLine(line, result)
                     )
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(isSubmitting = false, error = "评分失败: ${e.message}") }
+                _state.update { it.copy(isSubmitting = false, error = "评分失败：${e.message}") }
             } finally {
                 file.delete()
             }
@@ -193,7 +267,7 @@ class PlayerViewModel @Inject constructor(
 
     fun nextLine() {
         val state = _state.value
-        if (state.isRecording || state.isSubmitting) return
+        if (state.isRecording || state.isSubmitting || !state.canAdvance) return
         if (state.isLastLine) {
             finish(state)
         } else {
@@ -236,10 +310,9 @@ class PlayerViewModel @Inject constructor(
         scoreSessionHolder.session = session
         viewModelScope.launch {
             try {
-                val lastLine = state.currentLine
                 historyRepository.write(
                     lessonId = lessonId,
-                    lineId = lastLine?.id ?: "session",
+                    lineId = state.currentLine?.id ?: "session",
                     audioPath = "session_${lessonId}_${System.currentTimeMillis()}",
                     scoreTotal = session.totalScore,
                     scorePronunciation = session.pronunciation,
@@ -253,19 +326,16 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun dismissError() {
-        _state.update { it.copy(error = null) }
-    }
+    fun dismissError() = _state.update { it.copy(error = null) }
 
     override fun onCleared() {
         super.onCleared()
         audioPlayer.release()
-        if (_state.value.isRecording) {
-            audioRecorder.cancel()
-        }
+        if (_state.value.isRecording) audioRecorder.cancel()
     }
 
     private companion object {
+        val SENTENCE_BOUNDARY = Regex("(?<=[.!?。！？])\\s+")
         const val BOOK = "nce1"
     }
 }

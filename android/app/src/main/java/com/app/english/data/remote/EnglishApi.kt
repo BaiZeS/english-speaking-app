@@ -22,6 +22,14 @@ interface EnglishApi {
         @Query("voice") voice: String = "x5_EnUs_Grant_flow"
     ): TtsResponseDto
 
+    @POST("dialogue/generate")
+    suspend fun generateDialogue(
+        @Body request: DialogueGenerateRequestDto
+    ): DialogueGenerateResponseDto
+
+    @POST("dialogue/turn")
+    suspend fun dialogueTurn(@Body request: DialogueTurnRequestDto): DialogueTurnResponseDto
+
     @POST("score")
     suspend fun score(@Body request: ScoreRequestDto): ScoreResponseDto
 

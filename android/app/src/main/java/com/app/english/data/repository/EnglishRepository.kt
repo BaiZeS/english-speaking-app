@@ -1,8 +1,13 @@
 package com.app.english.data.repository
 
+import com.app.english.data.remote.DialogueGenerateRequestDto
+import com.app.english.data.remote.DialogueMessageDto
+import com.app.english.data.remote.DialogueTurnRequestDto
 import com.app.english.data.remote.EnglishApi
 import com.app.english.data.remote.ScoreRequestDto
 import com.app.english.data.remote.toDomain
+import com.app.english.domain.model.DialogueSession
+import com.app.english.domain.model.DialogueTurn
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.LessonSummary
 import com.app.english.domain.model.ScoreResult
@@ -20,6 +25,13 @@ interface EnglishRepository {
         audioBase64: String,
         mode: String = "k12"
     ): ScoreResult
+    suspend fun generateDialogue(scene: String, mode: String = "adult"): DialogueSession =
+        error("Dialogue generation is not supported by this repository")
+    suspend fun dialogueTurn(
+        sceneId: String,
+        history: List<DialogueMessageDto>,
+        userAudioBase64: String
+    ): DialogueTurn = error("Dialogue turns are not supported by this repository")
 }
 
 @Singleton
@@ -49,4 +61,19 @@ class EnglishRepositoryImpl @Inject constructor(private val api: EnglishApi) : E
         )
         return api.score(request).toDomain()
     }
+
+    override suspend fun generateDialogue(scene: String, mode: String): DialogueSession =
+        api.generateDialogue(DialogueGenerateRequestDto(scene = scene, mode = mode)).toDomain()
+
+    override suspend fun dialogueTurn(
+        sceneId: String,
+        history: List<DialogueMessageDto>,
+        userAudioBase64: String
+    ): DialogueTurn = api.dialogueTurn(
+        DialogueTurnRequestDto(
+            sceneId = sceneId,
+            history = history,
+            userAudioB64 = userAudioBase64
+        )
+    ).toDomain()
 }

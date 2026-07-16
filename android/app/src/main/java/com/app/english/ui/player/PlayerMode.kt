@@ -1,20 +1,15 @@
 package com.app.english.ui.player
 
-/**
- * Practice mode for the player screen.
- *
- * - READ_ALONG: all lines from every role are flattened into one sequence.
- *   The user reads each line in order without role distinction.
- *
- * - DIALOGUE: the user picks a role (A or B) and follows only that role's
- *   lines. This is the original NCE role-based practice flow.
- *
- * The wire format is lowercase (e.g. "read_along"), used in navigation
- * arguments so deep links / future API hooks stay stable.
- */
+/** The three practice modes exposed by the app. */
 enum class PlayerMode(val wire: String) {
+    /** Sentence-by-sentence practice with no role distinction. */
     READ_ALONG("read_along"),
-    DIALOGUE("dialogue");
+
+    /** A and B alternate; A is played and B is recorded and scored. */
+    DIALOGUE("dialogue"),
+
+    /** AI/user conversation with a suggested answer on every turn. */
+    FREE_DIALOGUE("free_dialogue");
 
     companion object {
         fun fromWire(value: String?): PlayerMode =

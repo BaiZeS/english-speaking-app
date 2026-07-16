@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.ScoreColorMapper
+import com.app.english.domain.model.Line
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
@@ -73,8 +74,8 @@ fun PlayerScreen(
         if (state.finished) onFinish()
     }
     LaunchedEffect(state.error) {
-        state.error?.let { msg ->
-            snackbarHostState.showSnackbar(msg)
+        state.error?.let { message ->
+            snackbarHostState.showSnackbar(message)
             viewModel.dismissError()
         }
     }
@@ -86,13 +87,15 @@ fun PlayerScreen(
                 title = {
                     Column {
                         Text(text = state.lessonTitle, style = MaterialTheme.typography.titleMedium)
-                        // READ_ALONG mode: state.roleName is empty, skip the "Role X" prefix.
-                        val rolePrefix = state.roleName.takeIf { it.isNotBlank() }
-                            ?.let { "Role $it - " } ?: ""
-                        val progress =
-                            "${rolePrefix}Line ${state.currentIndex + 1}/${state.lines.size}"
                         Text(
-                            text = progress,
+                            text = when (state.mode) {
+                                PlayerMode.READ_ALONG ->
+                                    "跟读模式 · 第 ${state.currentIndex + 1}/${state.lines.size} 句"
+                                PlayerMode.DIALOGUE ->
+                                    "对话模式 · 角色 ${state.roleName} · 第 " +
+                                        "${state.currentIndex + 1}/${state.lines.size} 句"
+                                PlayerMode.FREE_DIALOGUE -> "自由对话模式"
+                            },
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -113,7 +116,6 @@ fun PlayerScreen(
                 modifier = Modifier.padding(padding),
                 onRetry = viewModel::reload
             )
-
             else -> PlayerContent(
                 state = state,
                 micGranted = micPermission.status.isGranted,
@@ -145,19 +147,56 @@ private fun PlayerContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         if (line == null) {
-            Text("没有可朗读的台词", style = MaterialTheme.typography.bodyLarge)
+            Text("没有可朗读的句子", style = MaterialTheme.typography.bodyLarge)
             return@Column
         }
 
-        LineHeader(line.text, line.ipa, line.translation)
-        if (!micGranted) {
-            PermissionHint(onRequestPermission = onRequestPermission)
+        when (state.mode) {
+            PlayerMode.READ_ALONG -> {
+                RecentSentenceList(
+                    lines = state.recentLines,
+                    currentLineId = line.id,
+                    completedCount = state.currentIndex
+                )
+                LineHeader(
+                    title = "请跟读当前句",
+                    text = line.text,
+                    ipa = line.ipa,
+                    translation = line.translation
+                )
+                ReferenceButton(
+                    isPlaying = state.isPlayingReference,
+                    label = "播放标准音",
+                    onClick = onPlayReference
+                )
+            }
+            PlayerMode.DIALOGUE -> {
+                DialogueTranscript(
+                    conversation = state.conversation,
+                    currentLineId = line.id
+                )
+                state.currentPrompt?.let { prompt ->
+                    PromptCard(
+                        role = "角色 A",
+                        text = prompt.text,
+                        isPlaying = state.isPlayingReference,
+                        onPlay = onPlayReference
+                    )
+                }
+                LineHeader(
+                    title = "轮到角色 ${state.roleName}，请朗读",
+                    text = line.text,
+                    ipa = line.ipa,
+                    translation = line.translation
+                )
+            }
+            PlayerMode.FREE_DIALOGUE -> Unit
         }
 
-        ReferenceButton(isPlaying = state.isPlayingReference, onClick = onPlayReference)
+        if (!micGranted) PermissionHint(onRequestPermission = onRequestPermission)
 
         RecordButton(
             isRecording = state.isRecording,
@@ -189,12 +228,114 @@ private fun PlayerContent(
 }
 
 @Composable
-private fun LineHeader(text: String, ipa: String?, translation: String?) {
+private fun RecentSentenceList(lines: List<Line>, currentLineId: String, completedCount: Int) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("最近五句", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = if (completedCount == 0) "从第一句开始" else "已完成 $completedCount 句，继续保持",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            lines.forEachIndexed { index, sentence ->
+                val current = sentence.id == currentLineId
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (current) "▶" else "✓",
+                        color = if (current) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.width(28.dp)
+                    )
+                    Text(
+                        text = sentence.text,
+                        style = if (current) MaterialTheme.typography.bodyLarge
+                        else MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
+                        color = if (current) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (index != lines.lastIndex) {
+                    Spacer(Modifier.padding(top = 1.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialogueTranscript(conversation: List<PracticeTurn>, currentLineId: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("完整对话", style = MaterialTheme.typography.titleMedium)
+            conversation.forEach { turn ->
+                val current = turn.line.id == currentLineId
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (current) MaterialTheme.colorScheme.primaryContainer
+                            else Color.Transparent,
+                            MaterialTheme.shapes.small
+                        )
+                        .padding(10.dp)
+                ) {
+                    Text(
+                        text = "角色 ${turn.role}" + if (turn.isUserTurn) " · 你" else "",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (turn.isUserTurn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(text = turn.line.text, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PromptCard(role: String, text: String, isPlaying: Boolean, onPlay: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(role, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            OutlinedButton(
+                onClick = onPlay,
+                enabled = !isPlaying,
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text(if (isPlaying) "播放中..." else "播放角色 A")
+            }
+        }
+    }
+}
+
+@Composable
+private fun LineHeader(title: String, text: String, ipa: String?, translation: String?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.padding(16.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
             Text(text = text, style = MaterialTheme.typography.headlineMedium)
             ipa?.takeIf { it.isNotBlank() }?.let {
                 Text(
@@ -220,10 +361,7 @@ private fun LineHeader(text: String, ipa: String?, translation: String?) {
 private fun PermissionHint(onRequestPermission: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Text(
-                text = "需要录音权限才能进行跟读练习。",
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text("需要录音权限才能进行口语练习。", style = MaterialTheme.typography.bodyMedium)
             Button(onClick = onRequestPermission, modifier = Modifier.padding(top = 8.dp)) {
                 Text("授予权限")
             }
@@ -232,7 +370,7 @@ private fun PermissionHint(onRequestPermission: () -> Unit) {
 }
 
 @Composable
-private fun ReferenceButton(isPlaying: Boolean, onClick: () -> Unit) {
+private fun ReferenceButton(isPlaying: Boolean, label: String, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -240,7 +378,7 @@ private fun ReferenceButton(isPlaying: Boolean, onClick: () -> Unit) {
     ) {
         Icon(Icons.Filled.PlayArrow, contentDescription = null)
         Spacer(Modifier.width(8.dp))
-        Text(if (isPlaying) "播放中..." else "播放标准音")
+        Text(if (isPlaying) "播放中..." else label)
     }
 }
 
@@ -259,10 +397,7 @@ private fun RecordButton(
             onClick = {},
             modifier = Modifier.fillMaxWidth(),
             enabled = false
-        ) {
-            Text("评分中...")
-        }
-
+        ) { Text("评分中...") }
         isRecording -> Button(
             onClick = onStopAndSubmit,
             modifier = Modifier.fillMaxWidth(),
@@ -272,7 +407,6 @@ private fun RecordButton(
             Spacer(Modifier.width(8.dp))
             Text("停止录音并评分")
         }
-
         else -> Button(
             onClick = { if (micGranted) onStartRecording() else onRequestPermission() },
             modifier = Modifier.fillMaxWidth()
@@ -286,12 +420,8 @@ private fun RecordButton(
 
 @Composable
 private fun AdvanceButton(canAdvance: Boolean, isLastLine: Boolean, onNext: () -> Unit) {
-    Button(
-        onClick = onNext,
-        modifier = Modifier.fillMaxWidth(),
-        enabled = canAdvance
-    ) {
-        Text(if (isLastLine) "完成" else "下一句")
+    Button(onClick = onNext, modifier = Modifier.fillMaxWidth(), enabled = canAdvance) {
+        Text(if (isLastLine) "完成练习" else "下一句")
     }
 }
 
@@ -311,13 +441,7 @@ private fun ScorePanel(score: ScoreResult, needsRerecord: Boolean) {
                 )
                 Text(text = "总分", style = MaterialTheme.typography.titleMedium)
             }
-
-            SubScoreRow(
-                pronunciation = score.pronunciation,
-                fluency = score.fluency,
-                completeness = score.completeness
-            )
-
+            SubScoreRow(score.pronunciation, score.fluency, score.completeness)
             if (needsRerecord) {
                 Text(
                     text = "得分低于 60，请重录一次后再继续。",
@@ -325,7 +449,6 @@ private fun ScorePanel(score: ScoreResult, needsRerecord: Boolean) {
                     color = MaterialTheme.colorScheme.error
                 )
             }
-
             score.suggestion?.takeIf { it.isNotBlank() }?.let { suggestion ->
                 Text(
                     text = "建议：$suggestion",
@@ -333,7 +456,6 @@ private fun ScorePanel(score: ScoreResult, needsRerecord: Boolean) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
             if (score.wordDetails.isNotEmpty()) {
                 Text("单词得分", style = MaterialTheme.typography.titleMedium)
                 FlowRow(
@@ -364,10 +486,7 @@ private fun SubScoreRow(pronunciation: Double, fluency: Double, completeness: Do
 @Composable
 private fun SubScorePill(label: String, value: Double, modifier: Modifier = Modifier) {
     val color = ScoreColorMapper.level(value).color()
-    Column(
-        modifier = modifier.padding(4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = modifier.padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = value.toInt().toString(),
             style = MaterialTheme.typography.titleLarge,
@@ -375,7 +494,7 @@ private fun SubScorePill(label: String, value: Double, modifier: Modifier = Modi
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = label,
+            label,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -388,14 +507,10 @@ private fun WordChip(word: String, scoreColor: Color) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .background(scoreColor, CircleShape)
-        )
+        Box(modifier = Modifier.size(10.dp).background(scoreColor, CircleShape))
         Spacer(Modifier.width(6.dp))
         Text(
-            text = word,
+            word,
             style = MaterialTheme.typography.bodyMedium,
             color = scoreColor,
             fontWeight = FontWeight.SemiBold

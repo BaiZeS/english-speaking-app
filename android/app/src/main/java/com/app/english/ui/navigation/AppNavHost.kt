@@ -20,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.app.english.ui.freedialogue.FreeDialogueScreen
 import com.app.english.ui.history.HistoryDetailScreen
 import com.app.english.ui.history.HistoryListScreen
 import com.app.english.ui.lesson.LessonDetailScreen
@@ -86,10 +87,11 @@ fun AppNavHost() {
             ) {
                 LessonDetailScreen(
                     onBack = { navController.popBackStack() },
-                    onStartPractice = { lessonId, mode, roleName ->
-                        navController.navigate(
-                            Route.Player.create(lessonId, mode, roleName)
-                        )
+                    onStartPractice = { lessonId, mode ->
+                        navController.navigate(Route.Player.create(lessonId, mode))
+                    },
+                    onStartFreeDialogue = { lessonId ->
+                        navController.navigate(Route.FreeDialogue.create(lessonId))
                     }
                 )
             }
@@ -102,6 +104,21 @@ fun AppNavHost() {
                 )
             ) {
                 PlayerScreen(
+                    onBack = { navController.popBackStack() },
+                    onFinish = {
+                        navController.navigate(Route.ScoreResult.route) {
+                            popUpTo(Route.Lessons.route)
+                        }
+                    }
+                )
+            }
+            composable(
+                route = Route.FreeDialogue.route,
+                arguments = listOf(
+                    navArgument(Route.FreeDialogue.ARG_LESSON_ID) { type = NavType.IntType }
+                )
+            ) {
+                FreeDialogueScreen(
                     onBack = { navController.popBackStack() },
                     onFinish = {
                         navController.navigate(Route.ScoreResult.route) {

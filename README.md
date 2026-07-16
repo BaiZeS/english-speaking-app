@@ -9,7 +9,7 @@
 | 设计 | ✅ Spec 已定（见 `docs/superpowers/specs/2026-07-11-english-speaking-app-design.md`）|
 | Phase 1 基建 | ✅ 后端脚手架 + CI（backend-ci 全绿）|
 | Phase 2 L1 MVP（K12 + 新概念 1 跟读）| ✅ 后端 9 端点 + 真实讯飞 TTS/ISE 评分 + Android 客户端完成，APK 由 CI 构建（android-ci 全绿）；⏳ 真机联调 |
-| Phase 3 L2 场景填位 | ⏳ |
+| 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；自由对话无 LLM 凭据时使用确定性 fallback |
 
 ## 仓库结构
 

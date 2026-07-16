@@ -14,20 +14,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -44,7 +41,8 @@ import com.app.english.ui.player.PlayerMode
 @Composable
 fun LessonDetailScreen(
     onBack: () -> Unit,
-    onStartPractice: (lessonId: Int, mode: PlayerMode, roleName: String?) -> Unit,
+    onStartPractice: (lessonId: Int, mode: PlayerMode) -> Unit,
+    onStartFreeDialogue: (lessonId: Int) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LessonDetailViewModel = hiltViewModel()
 ) {
@@ -53,10 +51,10 @@ fun LessonDetailScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Practice mode") },
+                title = { Text("练习模式") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -69,10 +67,10 @@ fun LessonDetailScreen(
                 modifier = Modifier.padding(padding),
                 onRetry = viewModel::load
             )
-
             is LessonDetailUiState.Success -> ModeList(
                 lesson = current.lesson,
-                onStart = { mode, role -> onStartPractice(viewModel.lessonId, mode, role) },
+                onStart = { mode -> onStartPractice(viewModel.lessonId, mode) },
+                onStartFreeDialogue = { onStartFreeDialogue(viewModel.lessonId) },
                 modifier = Modifier.padding(padding)
             )
         }
@@ -82,13 +80,14 @@ fun LessonDetailScreen(
 @Composable
 private fun ModeList(
     lesson: LessonDetail,
-    onStart: (PlayerMode, String?) -> Unit,
+    onStart: (PlayerMode) -> Unit,
+    onStartFreeDialogue: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val totalLines = lesson.roles.sumOf { it.lines.size }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
             Column {
@@ -97,101 +96,88 @@ private fun ModeList(
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Text(text = lesson.title, style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    text = lesson.title,
-                    style = MaterialTheme.typography.headlineSmall
+                    text = "选择一种方式开始练习",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
         }
         item {
-            ReadAlongCard(
-                totalLines = totalLines,
-                onClick = { onStart(PlayerMode.READ_ALONG, null) }
+            ModeCard(
+                icon = Icons.Filled.MenuBook,
+                title = "跟读模式",
+                description = "按句子练习，最近五句会显示在屏幕上，不区分角色。",
+                meta = "$totalLines 句 · 标准音 + 发音评分",
+                onClick = { onStart(PlayerMode.READ_ALONG) },
+                highlighted = true
             )
         }
         item {
-            DialogueCard(
-                lesson = lesson,
-                onPickRole = { role -> onStart(PlayerMode.DIALOGUE, role) }
+            ModeCard(
+                icon = Icons.Filled.ChatBubbleOutline,
+                title = "对话模式",
+                description = "完整展示角色 A/B 对话。点击播放 A，轮到 B 时由你朗读并评分。",
+                meta = "角色 A 示范 · 角色 B 跟读",
+                onClick = { onStart(PlayerMode.DIALOGUE) }
+            )
+        }
+        item {
+            ModeCard(
+                icon = Icons.Filled.AutoAwesome,
+                title = "自由对话模式",
+                description = "和 AI 自由交流，每轮提供建议回答，你可以自由发挥并获得评分。",
+                meta = "AI 场景 · 每轮评分",
+                onClick = onStartFreeDialogue
             )
         }
     }
 }
 
 @Composable
-private fun ReadAlongCard(totalLines: Int, onClick: () -> Unit) {
+private fun ModeCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    description: String,
+    meta: String,
+    onClick: () -> Unit,
+    highlighted: Boolean = false
+) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        ),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.MenuBook,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "Read along",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+            containerColor = if (highlighted) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surface
             }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "Read every line in order, no role split.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(12.dp))
-            AssistChip(
-                onClick = onClick,
-                label = { Text("$totalLines lines") },
-                colors = AssistChipDefaults.assistChipColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            )
-        }
-    }
-}
-
-@Composable
-private fun DialogueCard(lesson: LessonDetail, onPickRole: (String) -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp)
+        )
     ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.ChatBubbleOutline,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = "Dialogue",
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "Pick a role and follow its lines.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(modifier = Modifier.padding(18.dp), verticalAlignment = Alignment.Top) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (highlighted) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                modifier = Modifier.padding(top = 2.dp)
             )
-            Spacer(Modifier.height(12.dp))
-            // One row of role chips; tap to enter. Wraps when many roles.
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                lesson.roles.forEach { role ->
-                    OutlinedButton(onClick = { onPickRole(role.name) }) {
-                        Text("Role ${role.name} - ${role.lines.size} lines")
-                    }
-                }
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(text = title, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(6.dp))
+                Text(text = description, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

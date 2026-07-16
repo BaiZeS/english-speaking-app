@@ -67,6 +67,49 @@ data class ScoreResponseDto(
 )
 
 @Serializable
+data class DialogueLineDto(
+    val id: String,
+    val role: String,
+    val text: String,
+    val translation: String? = null,
+    @SerialName("is_user") val isUser: Boolean = false
+)
+
+@Serializable
+data class DialogueGenerateRequestDto(
+    val scene: String,
+    val mode: String = "adult"
+)
+
+@Serializable
+data class DialogueGenerateResponseDto(
+    @SerialName("scene_id") val sceneId: String,
+    val status: String,
+    val title: String,
+    val lines: List<DialogueLineDto>,
+    @SerialName("suggested_reply") val suggestedReply: String
+)
+
+@Serializable
+data class DialogueMessageDto(val role: String, val text: String)
+
+@Serializable
+data class DialogueTurnRequestDto(
+    @SerialName("scene_id") val sceneId: String,
+    val history: List<DialogueMessageDto>,
+    @SerialName("user_audio_b64") val userAudioB64: String = ""
+)
+
+@Serializable
+data class DialogueTurnResponseDto(
+    val status: String,
+    @SerialName("reply_text") val replyText: String,
+    @SerialName("reply_audio_url") val replyAudioUrl: String? = null,
+    @SerialName("suggested_reply") val suggestedReply: String,
+    @SerialName("recognized_text") val recognizedText: String? = null
+)
+
+@Serializable
 data class HistoryWriteRequestDto(
     @SerialName("device_id") val deviceId: String,
     @SerialName("lesson_id") val lessonId: Int,

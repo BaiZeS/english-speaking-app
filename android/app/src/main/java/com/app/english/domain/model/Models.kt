@@ -42,3 +42,27 @@ data class HistoryItem(
     val scoreCompleteness: Double,
     val createdAt: String
 )
+
+
+data class DialogueLine(
+    val id: String,
+    val role: String,
+    val text: String,
+    val translation: String? = null,
+    val isUser: Boolean = false
+)
+
+data class DialogueSession(
+    val sceneId: String,
+    val status: String,
+    val title: String,
+    val lines: List<DialogueLine>,
+    val suggestedReply: String
+)
+
+data class DialogueTurn(
+    val replyText: String,
+    val suggestedReply: String,
+    val recognizedText: String? = null,
+    val replyAudioUrl: String? = null
+)

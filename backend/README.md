@@ -107,8 +107,8 @@ backend/
 | POST | `/api/v1/score` | 评分（真实 ISE 逐词音素，输入 base64 PCM L16 16kHz）| ✓ |
 | GET | `/api/v1/history` | 历史 | ✓ |
 | POST | `/api/v1/history` | 写历史 | ✓ |
-| POST | `/api/v1/dialogue/generate` | 场景生成 | stub |
-| POST | `/api/v1/dialogue/turn` | 多轮对话 | stub |
+| POST | `/api/v1/dialogue/generate` | 自由对话开场 + 建议回答 | stub fallback / ready provider |
+| POST | `/api/v1/dialogue/turn` | 多轮对话下一轮 + 建议回答 | stub fallback / ready provider |
 
 ## 测试
 
@@ -118,3 +118,10 @@ pytest --cov=app --cov-fail-under=85
 ruff check . && ruff format --check .
 mypy app
 ```
+
+
+## 三种练习流程
+
+- **跟读模式**：后端课程台词按角色轮次交错后，客户端去掉角色标签，逐句展示最近五句；每句沿用 `/tts` + `/score`。
+- **对话模式**：客户端将课程的角色 A/B 交错成完整对话，仅把角色 B 设为用户目标；点击「播放角色 A」后录制并评分角色 B。
+- **自由对话模式**：先调用 `/dialogue/generate` 获得 AI 开场和建议回答；用户自由录音后用建议回答作为评分参考，再调用 `/dialogue/turn` 获取下一轮。未配置 LLM 时使用内置场景 fallback，保证 APK 流程可联调。
