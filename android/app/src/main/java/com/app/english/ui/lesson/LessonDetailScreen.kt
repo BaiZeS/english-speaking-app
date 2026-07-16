@@ -53,10 +53,10 @@ fun LessonDetailScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("选择练习模式") },
+                title = { Text("Practice mode") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -136,21 +136,21 @@ private fun ReadAlongCard(totalLines: Int, onClick: () -> Unit) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "跟读练习",
+                    text = "Read along",
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "按顺序朗读全部句子, 不区分角色, 适合熟悉全文.",
+                text = "Read every line in order, no role split.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Spacer(Modifier.height(12.dp))
             AssistChip(
                 onClick = onClick,
-                label = { Text("共 $totalLines 句") },
+                label = { Text("$totalLines lines") },
                 colors = AssistChipDefaults.assistChipColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
@@ -160,10 +160,7 @@ private fun ReadAlongCard(totalLines: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DialogueCard(
-    lesson: LessonDetail,
-    onPickRole: (String) -> Unit
-) {
+private fun DialogueCard(lesson: LessonDetail, onPickRole: (String) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp)
@@ -177,22 +174,22 @@ private fun DialogueCard(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "对话练习",
+                    text = "Dialogue",
                     style = MaterialTheme.typography.titleLarge
                 )
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "选择一个角色, 跟着该角色的台词练习对话.",
+                text = "Pick a role and follow its lines.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(12.dp))
-            // 一行放所有角色 chip, 单击即进入. 角色太多时水平滚动.
+            // One row of role chips; tap to enter. Wraps when many roles.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 lesson.roles.forEach { role ->
                     OutlinedButton(onClick = { onPickRole(role.name) }) {
-                        Text("角色 ${role.name} · ${role.lines.size} 句")
+                        Text("Role ${role.name} - ${role.lines.size} lines")
                     }
                 }
             }

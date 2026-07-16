@@ -12,6 +12,7 @@ sealed class Route(val route: String) {
         const val ARG_LESSON_ID = "lessonId"
         const val ARG_MODE = "mode"
         const val ARG_ROLE_NAME = "roleName"
+
         // "_" is the wire-format placeholder for "no role" (read-along mode).
         // Path-based so deep links survive, query-based would be too noisy.
         const val NO_ROLE = "_"

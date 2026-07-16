@@ -70,7 +70,8 @@ class PlayerViewModel @Inject constructor(
     }
     private val mode: PlayerMode =
         PlayerMode.fromWire(savedStateHandle.get<String>(Route.Player.ARG_MODE))
-    // roleName 仅 DIALOGUE 模式需要; READ_ALONG 走拍平的全集
+
+    // roleName only required for DIALOGUE; READ_ALONG flattens every role.
     private val roleName: String? =
         savedStateHandle.get<String>(Route.Player.ARG_ROLE_NAME)
             ?.takeIf { it != Route.Player.NO_ROLE }
@@ -93,7 +94,7 @@ class PlayerViewModel @Inject constructor(
                 if (lines.isEmpty()) {
                     _state.value.copy(
                         isLoading = false,
-                        error = "该模式下没有可朗读的台词 (mode=$mode, role=$roleName)"
+                        error = "No lines for mode=$mode, role=$roleName"
                     )
                 } else {
                     PlayerUiState(
@@ -111,8 +112,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun resolveLines(lesson: LessonDetail): Pair<String, List<Line>> {
-        // READ_ALONG: 把所有角色的台词按出现顺序拍平 (A1, B1, A2, B2, ...), 不区分角色.
-        // DIALOGUE: 拿用户选的角色的台词; 若该角色不存在, 返回空 (LoadLesson 会报错误).
+        // READ_ALONG: flatten every role's lines in source order.
+        // DIALOGUE: take the user-picked role's lines; missing role -> empty.
         return when (mode) {
             PlayerMode.READ_ALONG -> {
                 val flat = lesson.roles.flatMap { it.lines }

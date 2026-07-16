@@ -86,10 +86,11 @@ fun PlayerScreen(
                 title = {
                     Column {
                         Text(text = state.lessonTitle, style = MaterialTheme.typography.titleMedium)
-                        // READ_ALONG 模式 state.roleName 为空, 跳过 "角色 X · " 前缀
+                        // READ_ALONG mode: state.roleName is empty, skip the "Role X" prefix.
                         val rolePrefix = state.roleName.takeIf { it.isNotBlank() }
-                            ?.let { "角色 $it · " } ?: ""
-                        val progress = "${rolePrefix}第 ${state.currentIndex + 1}/${state.lines.size} 句"
+                            ?.let { "Role $it - " } ?: ""
+                        val progress =
+                            "${rolePrefix}Line ${state.currentIndex + 1}/${state.lines.size}"
                         Text(
                             text = progress,
                             style = MaterialTheme.typography.labelLarge
