@@ -9,6 +9,7 @@ import com.app.english.audio.AudioRecorder
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.HistoryRepository
+import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.Line
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.navigation.Route
@@ -67,10 +68,12 @@ class PlayerViewModel @Inject constructor(
     val lessonId: Int = requireNotNull(savedStateHandle.get<Int>(Route.Player.ARG_LESSON_ID)) {
         "lessonId argument required"
     }
-    private val roleName: String =
-        requireNotNull(savedStateHandle.get<String>(Route.Player.ARG_ROLE_NAME)) {
-            "roleName argument required"
-        }
+    private val mode: PlayerMode =
+        PlayerMode.fromWire(savedStateHandle.get<String>(Route.Player.ARG_MODE))
+    // roleName 仅 DIALOGUE 模式需要; READ_ALONG 走拍平的全集
+    private val roleName: String? =
+        savedStateHandle.get<String>(Route.Player.ARG_ROLE_NAME)
+            ?.takeIf { it != Route.Player.NO_ROLE }
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -86,20 +89,38 @@ class PlayerViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true, error = null) }
             _state.value = try {
                 val lesson = repository.getLessonRoles(lessonId, BOOK)
-                val role = lesson.roles.firstOrNull { r -> r.name == roleName }
-                if (role == null) {
-                    _state.value.copy(isLoading = false, error = "角色不存在: $roleName")
+                val (displayRole, lines) = resolveLines(lesson)
+                if (lines.isEmpty()) {
+                    _state.value.copy(
+                        isLoading = false,
+                        error = "该模式下没有可朗读的台词 (mode=$mode, role=$roleName)"
+                    )
                 } else {
                     PlayerUiState(
                         isLoading = false,
                         lessonTitle = lesson.title,
-                        roleName = role.name,
-                        lines = role.lines,
+                        roleName = displayRole,
+                        lines = lines,
                         currentIndex = 0
                     )
                 }
             } catch (e: Exception) {
                 _state.value.copy(isLoading = false, error = e.message ?: "加载课文失败")
+            }
+        }
+    }
+
+    private fun resolveLines(lesson: LessonDetail): Pair<String, List<Line>> {
+        // READ_ALONG: 把所有角色的台词按出现顺序拍平 (A1, B1, A2, B2, ...), 不区分角色.
+        // DIALOGUE: 拿用户选的角色的台词; 若该角色不存在, 返回空 (LoadLesson 会报错误).
+        return when (mode) {
+            PlayerMode.READ_ALONG -> {
+                val flat = lesson.roles.flatMap { it.lines }
+                "" to flat
+            }
+            PlayerMode.DIALOGUE -> {
+                val role = lesson.roles.firstOrNull { it.name == roleName }
+                if (role == null) "" to emptyList() else role.name to role.lines
             }
         }
     }

@@ -86,8 +86,10 @@ fun AppNavHost() {
             ) {
                 LessonDetailScreen(
                     onBack = { navController.popBackStack() },
-                    onRoleSelected = { lessonId, roleName ->
-                        navController.navigate(Route.Player.create(lessonId, roleName))
+                    onStartPractice = { lessonId, mode, roleName ->
+                        navController.navigate(
+                            Route.Player.create(lessonId, mode, roleName)
+                        )
                     }
                 )
             }
@@ -95,6 +97,7 @@ fun AppNavHost() {
                 route = Route.Player.route,
                 arguments = listOf(
                     navArgument(Route.Player.ARG_LESSON_ID) { type = NavType.IntType },
+                    navArgument(Route.Player.ARG_MODE) { type = NavType.StringType },
                     navArgument(Route.Player.ARG_ROLE_NAME) { type = NavType.StringType }
                 )
             ) {

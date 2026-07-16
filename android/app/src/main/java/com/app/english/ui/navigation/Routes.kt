@@ -8,10 +8,18 @@ sealed class Route(val route: String) {
         fun create(lessonId: Int): String = "lesson/$lessonId"
     }
 
-    data object Player : Route("player/{lessonId}/{roleName}") {
+    data object Player : Route("player/{lessonId}/{mode}/{roleName}") {
         const val ARG_LESSON_ID = "lessonId"
+        const val ARG_MODE = "mode"
         const val ARG_ROLE_NAME = "roleName"
-        fun create(lessonId: Int, roleName: String): String = "player/$lessonId/$roleName"
+        // "_" is the wire-format placeholder for "no role" (read-along mode).
+        // Path-based so deep links survive, query-based would be too noisy.
+        const val NO_ROLE = "_"
+        fun create(
+            lessonId: Int,
+            mode: com.app.english.ui.player.PlayerMode,
+            roleName: String? = null
+        ): String = "player/$lessonId/${mode.wire}/${roleName ?: NO_ROLE}"
     }
 
     data object ScoreResult : Route("score_result")
