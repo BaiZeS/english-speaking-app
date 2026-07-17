@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,10 +56,19 @@ class _CacheEntry:
 class AppVersionResolver:
     """Resolve the latest APK version, env-first then GitHub."""
 
-    def __init__(self, *, cache_ttl: float = CACHE_TTL_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        cache_ttl: float = CACHE_TTL_SECONDS,
+        http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
+    ) -> None:
         self._cache_ttl = cache_ttl
         self._cache: _CacheEntry | None = None
         self._lock = asyncio.Lock()
+        # Tests can inject a MockTransport-backed client by passing a
+        # factory here; production leaves it None and we open a fresh
+        # httpx.AsyncClient per request.
+        self._http_client_factory = http_client_factory
 
     async def resolve(self) -> ResolvedVersion:
         """Return the latest version, preferring explicit env over GitHub."""
@@ -126,7 +136,14 @@ class AppVersionResolver:
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # Tests inject a pre-built client (MockTransport-backed); production
+        # builds a fresh one per request. We never share state across calls.
+        client_cm = (
+            self._http_client_factory()
+            if self._http_client_factory is not None
+            else httpx.AsyncClient(timeout=15.0)
+        )
+        async with client_cm as client:
             response = await client.get(url, headers=headers)
             if response.status_code == 404:
                 logger.info("GitHub repo {} has no published releases yet", repo)
