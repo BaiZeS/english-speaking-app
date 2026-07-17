@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     # 是否强制升级 (``min_supported_version`` 大于此值的客户端必须升级才能进)
     app_min_supported_version: str = Field(default="")
 
+    # ====== App 版本 (GitHub Releases 自动回源) ======
+    # APP_GITHUB_REPO 设为 "owner/name" 后, GET /api/v1/app/version 会去
+    # GitHub Releases API 拿 latest release 的 tag + APK asset URL. 走 TTL 缓存
+    # (5 分钟) 避免触发 60 req/h 限流. 显式设置的 app_apk_url /
+    # app_latest_version 始终覆盖 GitHub 回源, 方便自托管或灰度.
+    app_github_repo: str = Field(default="")
+    app_github_token: str = Field(default="")
+    app_github_asset_name: str = Field(default="app-debug.apk")
+    # 当一个 release 带多个 .apk asset 时, 按这个 glob 优先匹配.
+    app_github_asset_glob: str = Field(default="EnglishAssistant-*.apk")
+
     # ====== TTS 缓存 ======
     tts_cache_ttl: int = Field(default=86400)
 

@@ -91,8 +91,30 @@ docker compose up -d        # 起 postgres + redis + api 容器
 
 ### App 自动更新
 
-App 启动时会拉取 GET /api/v1/app/version 比较版本号, 有新版本弹更新对话框
-(强制升级时强制弹窗). 服务端配置:
+App 启动时会拉取 ``GET /api/v1/app/version`` 比较版本号, 有新版本弹更新对话框
+(强制升级时强制弹窗). 服务端按优先级回源:
+
+  1) **环境变量直给** — 自托管或灰度场景: 显式设 ``APP_APK_URL`` 即覆盖.
+  2) **GitHub Releases 自动回源** (推荐) — 设 ``APP_GITHUB_REPO=owner/name``, 后端
+     调 GitHub Releases API 拿 latest release 的 tag + APK asset URL, 走 5 分钟
+     TTL 缓存避免触发 60 req/h 限流. Asset 选择规则: 先按精确文件名匹配
+     (``APP_GITHUB_ASSET_NAME``), 再按 glob 通配 (``APP_GITHUB_ASSET_GLOB``,
+     默认 ``EnglishAssistant-*.apk``), 最后回退任意 .apk.
+  3) **占位返回** — 都不设时返回 ``APP_LATEST_VERSION`` 但 ``apk_url=""``,
+     弹窗能渲染但下载按钮禁用, 适合纯 dev 环境.
+
+**GitHub 自动出包** — 配合 ``.github/workflows/release.yml`` (push tag 触发):
+
+```bash
+# 打 tag + push, CI 自动构建并上传 GitHub Release (asset 命名
+# EnglishAssistant-{version}.apk, 与默认 glob 匹配), 客户端下次启动即可弹更新.
+git tag v1.2.0
+git push --tags
+# 也可 Actions 页 "Run workflow" 手动指定 tag.
+```
+
+强制升级门槛: ``APP_MIN_SUPPORTED_VERSION=1.0.0`` 表示低于 1.0.0 的客户端必须升级,
+弹窗无法关闭; 留空表示不强制.
 
 
 
@@ -128,7 +150,7 @@ backend/
 | POST | `/api/v1/dialogue/generate` | 自由对话开场 + 建议回答 | stub fallback / ready provider |
 | POST | `/api/v1/dialogue/turn` | 多轮对话下一轮 + 建议回答 | stub fallback / ready provider |
 | GET | /api/v1/llm/models | 自由对话可选模型目录（由后端 LLM 配置决定）| ✓ |
-| GET | /api/v1/app/version | App 自动更新元数据（最新版本、APK URL、是否强制升级）| ✓ |
+| GET | /api/v1/app/version | App 自动更新元数据 (latest/min 版本 + APK URL + 是否强制 + source=env\|github\|default) | ✓ |
 
 
 ## 测试

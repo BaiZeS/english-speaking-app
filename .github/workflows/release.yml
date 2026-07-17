@@ -1,0 +1,104 @@
+name: Release APK
+
+# Trigger only on:
+#   - tag push matching v* (e.g. v1.2.0)
+#   - manual dispatch from the Actions tab (handy for hotfixes)
+# Tag-driven release lets the backend's AppVersionResolver pick up the new
+# version automatically (it queries GitHub Releases API for the latest tag),
+# without anyone editing the .env.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name to publish (e.g. v1.2.0). Leave empty to use the current ref.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # don't cancel a release that's already uploading
+
+jobs:
+  release:
+    name: Build + publish APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '11076708'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          # workflow_dispatch callers may pass an explicit tag; tag pushes
+          # already carry the ref. ``github.ref_name`` strips the leading
+          # ``refs/tags/`` automatically for tag-triggered runs.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Derive version (strip leading v)
+        id: version
+        run: echo "value=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Make gradlew executable
+        working-directory: android
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK to versioned asset name
+        # Release UI is much friendlier when the asset shows e.g.
+        # EnglishAssistant-1.2.0.apk; the backend's default glob
+        # (EnglishAssistant-*.apk) picks this up automatically.
+        working-directory: android
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "app/build/outputs/apk/debug/EnglishAssistant-${{ steps.version.outputs.value }}.apk"
+          ls -lh app/build/outputs/apk/debug/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: "English Assistant ${{ steps.version.outputs.value }}"
+          body: |
+            ## English Assistant ${{ steps.version.outputs.value }}
+
+            Auto-published by `.github/workflows/release.yml`. The APK below is
+            picked up by the in-app auto-update flow once the backend's
+            `APP_GITHUB_REPO` is configured (see `backend/README.md`).
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          files: |
+            android/app/build/outputs/apk/debug/EnglishAssistant-${{ steps.version.outputs.value }}.apk
+          fail_on_unmatched_files: true
