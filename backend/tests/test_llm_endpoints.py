@@ -118,7 +118,7 @@ async def test_dialogue_generate_uses_mock_llm_when_configured(
         def chat(self) -> _Chat:
             return _Chat()
 
-    async def _factory(**_: object) -> _Client:
+    def _factory(**_: object) -> _Client:
         return _Client()
 
     import app.services.llm_provider as lp
@@ -132,7 +132,8 @@ async def test_dialogue_generate_uses_mock_llm_when_configured(
     data = r.json()
     assert r.status_code == 200
     assert data["status"] == "ready"
-    assert data["model_id"] == "qwen-plus"  # qwen-turbo is not in default catalog -> fallback
+    # qwen-turbo is in the curated catalog, so the requested id is honored.
+    assert data["model_id"] == "qwen-turbo"
     assert "How is your day" in data["lines"][0]["text"]
 
 
@@ -169,7 +170,7 @@ async def test_dialogue_turn_parses_llm_json_payload(
         def chat(self) -> _Chat:
             return _Chat()
 
-    async def _factory(**_: object) -> _Client:
+    def _factory(**_: object) -> _Client:
         return _Client()
 
     import app.services.llm_provider as lp
@@ -217,7 +218,7 @@ async def test_dialogue_turn_degrades_to_stub_when_llm_raises(
         def chat(self) -> _Chat:
             return _Chat()
 
-    async def _factory(**_: object) -> _Client:
+    def _factory(**_: object) -> _Client:
         return _Client()
 
     import app.services.llm_provider as lp
