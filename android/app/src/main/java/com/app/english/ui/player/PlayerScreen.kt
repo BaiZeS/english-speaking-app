@@ -245,17 +245,26 @@ private fun RecentSentenceList(lines: List<Line>, currentLineId: String, complet
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = if (current) "▶" else "✓",
-                        color = if (current) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.tertiary,
+                        color = if (current) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.tertiary
+                        },
                         modifier = Modifier.width(28.dp)
                     )
                     Text(
                         text = sentence.text,
-                        style = if (current) MaterialTheme.typography.bodyLarge
-                        else MaterialTheme.typography.bodyMedium,
+                        style = if (current) {
+                            MaterialTheme.typography.bodyLarge
+                        } else {
+                            MaterialTheme.typography.bodyMedium
+                        },
                         fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
-                        color = if (current) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (current) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
                 }
                 if (index != lines.lastIndex) {
@@ -277,8 +286,11 @@ private fun DialogueTranscript(conversation: List<PracticeTurn>, currentLineId: 
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(
-                            if (current) MaterialTheme.colorScheme.primaryContainer
-                            else Color.Transparent,
+                            if (current) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                Color.Transparent
+                            },
                             MaterialTheme.shapes.small
                         )
                         .padding(10.dp)
@@ -286,8 +298,11 @@ private fun DialogueTranscript(conversation: List<PracticeTurn>, currentLineId: 
                     Text(
                         text = "角色 ${turn.role}" + if (turn.isUserTurn) " · 你" else "",
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (turn.isUserTurn) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (turn.isUserTurn) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
                     )
                     Text(text = turn.line.text, style = MaterialTheme.typography.bodyLarge)
                 }

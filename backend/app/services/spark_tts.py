@@ -127,10 +127,7 @@ class SparkTtsProvider:
         voice_norm = _normalize_voice(voice)
 
         # 无 Spark 凭据 → 退到 v2 老接口 (兼容未升级控制台的环境)
-        if not (
-            settings.xunfei_spark_tts_password
-            and settings.xunfei_app_id
-        ):
+        if not (settings.xunfei_spark_tts_password and settings.xunfei_app_id):
             logger.debug("spark tts creds missing, fallback to v2: {!r}", text[:30])
             return await self._legacy.synthesize(text, voice_norm)
 
@@ -140,9 +137,7 @@ class SparkTtsProvider:
             with open(disk_path, "rb") as f:
                 audio_bytes = f.read()
             duration_ms = max(200, len(audio_bytes) // 48)  # mp3@24k 约 48B/ms
-            return TtsResult(
-                audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path
-            )
+            return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
 
         try:
             audio_bytes = await self._synthesize(text, voice_norm)
@@ -157,12 +152,8 @@ class SparkTtsProvider:
         with open(disk_path, "wb") as f:
             f.write(audio_bytes)
         duration_ms = max(200, len(audio_bytes) // 48)
-        logger.info(
-            "spark tts ok vcn={} bytes={} -> {}", voice_norm, len(audio_bytes), url_path
-        )
-        return TtsResult(
-            audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path
-        )
+        logger.info("spark tts ok vcn={} bytes={} -> {}", voice_norm, len(audio_bytes), url_path)
+        return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
 
     async def _synthesize(self, text: str, voice_norm: str) -> bytes:
         """连接 wss, 一次性发送 status=2 请求, 累积流式返回的音频块."""
@@ -188,9 +179,7 @@ class SparkTtsProvider:
                 if code != 0:
                     sid = header.get("sid", "")
                     msg = header.get("message", "unknown")
-                    raise RuntimeError(
-                        f"spark tts code={code} sid={sid} msg={msg}"
-                    )
+                    raise RuntimeError(f"spark tts code={code} sid={sid} msg={msg}")
                 payload = resp.get("payload") or {}
                 audio = payload.get("audio") or {}
                 audio_b64 = audio.get("audio")

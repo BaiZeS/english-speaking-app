@@ -16,11 +16,8 @@ sealed class Route(val route: String) {
         const val ARG_ROLE_NAME = "roleName"
         const val NO_ROLE = "_"
 
-        fun create(
-            lessonId: Int,
-            mode: PlayerMode,
-            roleName: String? = null
-        ): String = "player/$lessonId/${mode.wire}/${roleName ?: NO_ROLE}"
+        fun create(lessonId: Int, mode: PlayerMode, roleName: String? = null): String =
+            "player/$lessonId/${mode.wire}/${roleName ?: NO_ROLE}"
     }
 
     data object FreeDialogue : Route("free_dialogue/{lessonId}") {

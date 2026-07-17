@@ -51,9 +51,7 @@ def test_pause_after_sentence_end_punctuation() -> None:
 
 
 def test_request_frame_matches_spark_schema() -> None:
-    frame = _build_request_frame(
-        app_id="app123", voice="x5_EnUs_Grant_flow", text_b64="aGVsbG8="
-    )
+    frame = _build_request_frame(app_id="app123", voice="x5_EnUs_Grant_flow", text_b64="aGVsbG8=")
     assert frame["header"]["app_id"] == "app123"
     assert frame["header"]["status"] == 2  # 一次性合成
     tts = frame["parameter"]["tts"]
@@ -174,9 +172,7 @@ def _audio_frame(audio_bytes: bytes, status: int) -> str:
 
 
 @pytest.mark.asyncio
-async def test_synthesize_sends_x_api_key_header(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+async def test_synthesize_sends_x_api_key_header(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """鉴权: APIPassword 必须通过 x-api-key 请求头传给 wss, 不要走 URL 鉴权."""
     monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
     monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
@@ -231,9 +227,7 @@ async def test_synthesize_accumulates_streaming_frames(
 
 
 @pytest.mark.asyncio
-async def test_synthesize_raises_on_error_code(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+async def test_synthesize_raises_on_error_code(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """header.code != 0 必须抛 RuntimeError, 让 SparkTtsProvider 自动 fallback 到 v2."""
     monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
     monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
@@ -284,9 +278,7 @@ async def test_synthesize_falls_back_when_creds_missing(
 
 
 @pytest.mark.asyncio
-async def test_synthesize_uses_disk_cache(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+async def test_synthesize_uses_disk_cache(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """命中磁盘缓存时, 不再发请求 (network call 计数为 0)."""
     monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
     monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
