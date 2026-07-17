@@ -36,6 +36,12 @@ interface EnglishApi {
     @POST("history")
     suspend fun writeHistory(@Body request: HistoryWriteRequestDto): HistoryItemDto
 
+    @GET("llm/models")
+    suspend fun listLlmModels(): LlmModelsResponseDto
+
+    @GET("app/version")
+    suspend fun getAppVersion(): AppVersionResponseDto
+
     @GET("history")
     suspend fun listHistory(
         @Query("device_id") deviceId: String,

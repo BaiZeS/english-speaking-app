@@ -43,7 +43,6 @@ data class HistoryItem(
     val createdAt: String
 )
 
-
 data class DialogueLine(
     val id: String,
     val role: String,
@@ -65,4 +64,19 @@ data class DialogueTurn(
     val suggestedReply: String,
     val recognizedText: String? = null,
     val replyAudioUrl: String? = null
+)
+
+data class LlmModel(
+    val id: String,
+    val displayName: String,
+    val provider: String,
+    val description: String
+)
+
+data class AppVersion(
+    val latestVersion: String,
+    val minSupportedVersion: String,
+    val apkUrl: String,
+    val releaseNotes: String,
+    val forceUpdate: Boolean
 )

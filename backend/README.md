@@ -78,6 +78,24 @@ docker compose up -d        # 起 postgres + redis + api 容器
 
 > 注意：`api` 服务会 `build .`（需 Dockerfile）。本地开发推荐用上面的 `uv run` 方式，更快、改代码即时生效。
 
+
+### 自由对话 LLM（可选，配了走真实生成）
+
+未配置 LLM 时, /dialogue/* 走内置 deterministic fallback (4 个场景的开场白 + 建议回答);
+配置后会自动调用 OpenAI 兼容端点生成开场与每一轮回答. 默认指向阿里云百炼 Maas:
+
+
+
+前端会从 GET /api/v1/llm/models 拉取模型清单, 用户在设置页选择具体 model_id,
+下次自由对话请求会透传到后端. 后端调用失败会自动降级回 stub, 不会让 APK 流程中断.
+
+### App 自动更新
+
+App 启动时会拉取 GET /api/v1/app/version 比较版本号, 有新版本弹更新对话框
+(强制升级时强制弹窗). 服务端配置:
+
+
+
 ## 项目结构
 
 ```
@@ -109,6 +127,9 @@ backend/
 | POST | `/api/v1/history` | 写历史 | ✓ |
 | POST | `/api/v1/dialogue/generate` | 自由对话开场 + 建议回答 | stub fallback / ready provider |
 | POST | `/api/v1/dialogue/turn` | 多轮对话下一轮 + 建议回答 | stub fallback / ready provider |
+| GET | /api/v1/llm/models | 自由对话可选模型目录（由后端 LLM 配置决定）| ✓ |
+| GET | /api/v1/app/version | App 自动更新元数据（最新版本、APK URL、是否强制升级）| ✓ |
+
 
 ## 测试
 

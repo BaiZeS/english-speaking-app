@@ -37,9 +37,7 @@ class Settings(BaseSettings):
     # 只需把 default 改回去并配 XUNFEI_API_KEY/SECRET, 不需改代码.
     xunfei_tts_default_vcn: str = Field(default="x5_EnUs_Grant_flow")
     # 逗号分隔的发音人列表, app 设置页可切换. 必须是 Spark TTS 控制台已开通的 vcn.
-    xunfei_tts_voices: str = Field(
-        default="x5_EnUs_Grant_flow,x5_EnUs_Lila_flow"
-    )
+    xunfei_tts_voices: str = Field(default="x5_EnUs_Grant_flow,x5_EnUs_Lila_flow")
     # 合成音频文件的存放目录, 挂载到 /static
     tts_audio_dir: str = Field(default="static/tts")
 
@@ -56,6 +54,26 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="")
     openai_base_url: str = Field(default="https://api.openai.com/v1")
     aliyun_dashscope_key: str = Field(default="")
+
+    # ====== LLM (自由对话) ======
+    # OpenAI 兼容端点 (阿里云百炼 Maas / OpenAI / 其它第三方代理都行).
+    # 留空时 ``/dialogue/*`` 自动回退到内置 deterministic fallback.
+    llm_base_url: str = Field(default="")
+    llm_api_key: str = Field(default="")
+    llm_default_model: str = Field(default="qwen-plus")
+    # 逗号分隔的模型白名单, 限制客户端可选范围; 留空则用代码内置的百炼目录.
+    llm_allowed_models: str = Field(default="")
+    # JSON 数组, 给企业自建代理场景追加自定义模型:
+    #   '[{"id":"my-gpt","display_name":"My GPT","provider":"custom","description":"内网代理"}]'
+    llm_extra_models_json: str = Field(default="")
+
+    # ====== App 版本 (自动更新) ======
+    # 客户端启动时拉取 ``GET /api/v1/app/version`` 比较, 大于当前版本就弹更新.
+    app_latest_version: str = Field(default="1.0.0")
+    app_apk_url: str = Field(default="")
+    app_release_notes: str = Field(default="")
+    # 是否强制升级 (``min_supported_version`` 大于此值的客户端必须升级才能进)
+    app_min_supported_version: str = Field(default="")
 
     # ====== TTS 缓存 ======
     tts_cache_ttl: int = Field(default=86400)

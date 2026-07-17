@@ -10,8 +10,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Persistent per-install settings: stable device id (used as `device_id` for
- * /history), backend base URL override, and preferred TTS voice.
+ * Persistent per-install settings:
+ *  - stable device id (used as `device_id` for /history)
+ *  - backend base URL override
+ *  - preferred TTS voice
+ *  - selected LLM model id for free dialogue
+ *  - the latest version for which the user dismissed the update prompt
  */
 @Singleton
 class SettingsStore @Inject constructor(@ApplicationContext private val context: Context) {
@@ -33,6 +37,30 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         prefs.edit { putString(KEY_VOICE, voice) }
     }
 
+    /** Selected LLM model id; `null` means "use backend default". */
+    fun getSelectedModelId(): String? =
+        prefs.getString(KEY_LLM_MODEL_ID, null)?.takeIf { it.isNotBlank() }
+
+    fun setSelectedModelId(modelId: String?) {
+        prefs.edit {
+            if (modelId.isNullOrBlank()) {
+                remove(
+                    KEY_LLM_MODEL_ID
+                )
+            } else {
+                putString(KEY_LLM_MODEL_ID, modelId)
+            }
+        }
+    }
+
+    /** Last version string the user acknowledged (dismissed) the update prompt for. */
+    fun getDismissedUpdateVersion(): String? =
+        prefs.getString(KEY_DISMISSED_UPDATE_VERSION, null)?.takeIf { it.isNotBlank() }
+
+    fun setDismissedUpdateVersion(version: String) {
+        prefs.edit { putString(KEY_DISMISSED_UPDATE_VERSION, version) }
+    }
+
     private fun ensureDeviceId(): String {
         prefs.getString(KEY_DEVICE_ID, null)?.let { return it }
         val id = UUID.randomUUID().toString()
@@ -47,6 +75,8 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_VOICE = "voice"
+        private const val KEY_LLM_MODEL_ID = "llm_model_id"
+        private const val KEY_DISMISSED_UPDATE_VERSION = "dismissed_update_version"
 
         // Xunfei Spark super-natural TTS, US English female (x5_EnUs_Grant_flow).
         private const val DEFAULT_VOICE = "x5_EnUs_Grant_flow"

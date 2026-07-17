@@ -10,6 +10,8 @@
 | Phase 1 基建 | ✅ 后端脚手架 + CI（backend-ci 全绿）|
 | Phase 2 L1 MVP（K12 + 新概念 1 跟读）| ✅ 后端 9 端点 + 真实讯飞 TTS/ISE 评分 + Android 客户端完成，APK 由 CI 构建（android-ci 全绿）；⏳ 真机联调 |
 | 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；自由对话无 LLM 凭据时使用确定性 fallback |
+| LLM 自由对话 | ✅ 后端接入百炼 OpenAI 兼容端点 + `/llm/models` 目录端点；客户端设置页可选模型，未配置时自动降级 |
+| 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）|
 
 ## 仓库结构
 

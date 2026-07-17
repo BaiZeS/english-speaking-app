@@ -6,10 +6,12 @@ import com.app.english.data.remote.DialogueTurnRequestDto
 import com.app.english.data.remote.EnglishApi
 import com.app.english.data.remote.ScoreRequestDto
 import com.app.english.data.remote.toDomain
+import com.app.english.domain.model.AppVersion
 import com.app.english.domain.model.DialogueSession
 import com.app.english.domain.model.DialogueTurn
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.LessonSummary
+import com.app.english.domain.model.LlmModel
 import com.app.english.domain.model.ScoreResult
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,13 +27,21 @@ interface EnglishRepository {
         audioBase64: String,
         mode: String = "k12"
     ): ScoreResult
-    suspend fun generateDialogue(scene: String, mode: String = "adult"): DialogueSession =
-        error("Dialogue generation is not supported by this repository")
+    suspend fun generateDialogue(
+        scene: String,
+        mode: String = "adult",
+        modelId: String? = null
+    ): DialogueSession = error("Dialogue generation is not supported by this repository")
     suspend fun dialogueTurn(
         sceneId: String,
         history: List<DialogueMessageDto>,
-        userAudioBase64: String
+        userAudioBase64: String,
+        modelId: String? = null
     ): DialogueTurn = error("Dialogue turns are not supported by this repository")
+    suspend fun listLlmModels(): List<LlmModel> =
+        error("LLM model catalog is not supported by this repository")
+    suspend fun getAppVersion(): AppVersion =
+        error("App version lookup is not supported by this repository")
 }
 
 @Singleton
@@ -62,18 +72,30 @@ class EnglishRepositoryImpl @Inject constructor(private val api: EnglishApi) : E
         return api.score(request).toDomain()
     }
 
-    override suspend fun generateDialogue(scene: String, mode: String): DialogueSession =
-        api.generateDialogue(DialogueGenerateRequestDto(scene = scene, mode = mode)).toDomain()
+    override suspend fun generateDialogue(
+        scene: String,
+        mode: String,
+        modelId: String?
+    ): DialogueSession = api.generateDialogue(
+        DialogueGenerateRequestDto(scene = scene, mode = mode, modelId = modelId)
+    ).toDomain()
 
     override suspend fun dialogueTurn(
         sceneId: String,
         history: List<DialogueMessageDto>,
-        userAudioBase64: String
+        userAudioBase64: String,
+        modelId: String?
     ): DialogueTurn = api.dialogueTurn(
         DialogueTurnRequestDto(
             sceneId = sceneId,
             history = history,
-            userAudioB64 = userAudioBase64
+            userAudioB64 = userAudioBase64,
+            modelId = modelId
         )
     ).toDomain()
+
+    override suspend fun listLlmModels(): List<LlmModel> =
+        api.listLlmModels().models.map { it.toDomain() }
+
+    override suspend fun getAppVersion(): AppVersion = api.getAppVersion().toDomain()
 }

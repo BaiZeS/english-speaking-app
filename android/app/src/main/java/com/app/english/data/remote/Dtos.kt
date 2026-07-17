@@ -78,7 +78,8 @@ data class DialogueLineDto(
 @Serializable
 data class DialogueGenerateRequestDto(
     val scene: String,
-    val mode: String = "adult"
+    val mode: String = "adult",
+    @SerialName("model_id") val modelId: String? = null
 )
 
 @Serializable
@@ -87,7 +88,8 @@ data class DialogueGenerateResponseDto(
     val status: String,
     val title: String,
     val lines: List<DialogueLineDto>,
-    @SerialName("suggested_reply") val suggestedReply: String
+    @SerialName("suggested_reply") val suggestedReply: String,
+    @SerialName("model_id") val modelId: String? = null
 )
 
 @Serializable
@@ -97,7 +99,8 @@ data class DialogueMessageDto(val role: String, val text: String)
 data class DialogueTurnRequestDto(
     @SerialName("scene_id") val sceneId: String,
     val history: List<DialogueMessageDto>,
-    @SerialName("user_audio_b64") val userAudioB64: String = ""
+    @SerialName("user_audio_b64") val userAudioB64: String = "",
+    @SerialName("model_id") val modelId: String? = null
 )
 
 @Serializable
@@ -106,7 +109,8 @@ data class DialogueTurnResponseDto(
     @SerialName("reply_text") val replyText: String,
     @SerialName("reply_audio_url") val replyAudioUrl: String? = null,
     @SerialName("suggested_reply") val suggestedReply: String,
-    @SerialName("recognized_text") val recognizedText: String? = null
+    @SerialName("recognized_text") val recognizedText: String? = null,
+    @SerialName("model_id") val modelId: String? = null
 )
 
 @Serializable
@@ -119,6 +123,29 @@ data class HistoryWriteRequestDto(
     @SerialName("score_pronunciation") val scorePronunciation: Double,
     @SerialName("score_fluency") val scoreFluency: Double,
     @SerialName("score_completeness") val scoreCompleteness: Double
+)
+
+@Serializable
+data class LlmModelDto(
+    val id: String,
+    @SerialName("display_name") val displayName: String,
+    val provider: String,
+    val description: String = ""
+)
+
+@Serializable
+data class LlmModelsResponseDto(
+    val models: List<LlmModelDto>,
+    @SerialName("default_model") val defaultModel: String
+)
+
+@Serializable
+data class AppVersionResponseDto(
+    @SerialName("latest_version") val latestVersion: String,
+    @SerialName("min_supported_version") val minSupportedVersion: String,
+    @SerialName("apk_url") val apkUrl: String,
+    @SerialName("release_notes") val releaseNotes: String = "",
+    @SerialName("force_update") val forceUpdate: Boolean = false
 )
 
 @Serializable

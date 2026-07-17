@@ -166,4 +166,61 @@ class DtoSerializationTest {
         assertTrue(encoded.contains("\"user_audio_b64\":\"AAAA\""))
     }
 
+    @Test
+    fun llmModelsResponse_decodesCatalogAndDefault() {
+        val payload = """
+            {"models":[
+              {"id":"qwen-plus","display_name":"Qwen Plus","provider":"bailian","description":"balance"},
+              {"id":"deepseek-v3","display_name":"DeepSeek V3","provider":"bailian","description":"natural"}
+             ],"default_model":"qwen-plus"}
+        """.trimIndent()
+        val dto = json.decodeFromString(LlmModelsResponseDto.serializer(), payload)
+        assertEquals(2, dto.models.size)
+        assertEquals("qwen-plus", dto.defaultModel)
+        assertEquals("Qwen Plus", dto.models[0].displayName)
+        assertEquals("bailian", dto.models[0].provider)
+    }
+
+    @Test
+    fun appVersionResponse_decodesAllFields() {
+        val payload = """
+            {"latest_version":"1.2.0","min_supported_version":"1.0.0",
+             "apk_url":"https://example.com/app.apk",
+             "release_notes":"new",
+             "force_update":true}
+        """.trimIndent()
+        val dto = json.decodeFromString(AppVersionResponseDto.serializer(), payload)
+        assertEquals("1.2.0", dto.latestVersion)
+        assertEquals("1.0.0", dto.minSupportedVersion)
+        assertEquals("https://example.com/app.apk", dto.apkUrl)
+        assertTrue(dto.forceUpdate)
+    }
+
+    @Test
+    fun dialogueGenerateRequest_serializesModelId() {
+        val request = DialogueGenerateRequestDto(
+            scene = "daily_conversation",
+            mode = "adult",
+            modelId = "qwen-plus"
+        )
+        val encoded = json.encodeToString(DialogueGenerateRequestDto.serializer(), request)
+        assertTrue(
+            "missing model_id field: $encoded",
+            encoded.contains("\"model_id\":\"qwen-plus\"")
+        )
+    }
+
+    @Test
+    fun dialogueTurnRequest_serializesModelId() {
+        val request = DialogueTurnRequestDto(
+            sceneId = "daily_conversation",
+            history = listOf(DialogueMessageDto("assistant", "Hi!")),
+            modelId = "qwen-turbo"
+        )
+        val encoded = json.encodeToString(DialogueTurnRequestDto.serializer(), request)
+        assertTrue(
+            "missing model_id field: $encoded",
+            encoded.contains("\"model_id\":\"qwen-turbo\"")
+        )
+    }
 }

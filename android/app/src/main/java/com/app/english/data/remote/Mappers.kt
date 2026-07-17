@@ -57,7 +57,6 @@ fun HistoryItemDto.toDomain(): HistoryItem = HistoryItem(
     createdAt = createdAt
 )
 
-
 fun DialogueLineDto.toDomain(): com.app.english.domain.model.DialogueLine =
     com.app.english.domain.model.DialogueLine(
         id = id,
@@ -82,4 +81,21 @@ fun DialogueTurnResponseDto.toDomain(): com.app.english.domain.model.DialogueTur
         suggestedReply = suggestedReply,
         recognizedText = recognizedText,
         replyAudioUrl = replyAudioUrl
+    )
+
+fun LlmModelDto.toDomain(): com.app.english.domain.model.LlmModel =
+    com.app.english.domain.model.LlmModel(
+        id = id,
+        displayName = displayName,
+        provider = provider,
+        description = description
+    )
+
+fun AppVersionResponseDto.toDomain(): com.app.english.domain.model.AppVersion =
+    com.app.english.domain.model.AppVersion(
+        latestVersion = latestVersion,
+        minSupportedVersion = minSupportedVersion,
+        apkUrl = apkUrl,
+        releaseNotes = releaseNotes,
+        forceUpdate = forceUpdate
     )

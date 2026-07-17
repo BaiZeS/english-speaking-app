@@ -73,7 +73,11 @@ class FreeDialogueViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             _state.value = try {
-                val session = repository.generateDialogue(SCENE, "adult")
+                val session = repository.generateDialogue(
+                    SCENE,
+                    "adult",
+                    settingsStore.getSelectedModelId()
+                )
                 session.toUiState()
             } catch (e: Exception) {
                 _state.value.copy(isLoading = false, error = e.message ?: "加载自由对话失败")
@@ -151,7 +155,12 @@ class FreeDialogueViewModel @Inject constructor(
                         text = it.text
                     )
                 } + DialogueMessageDto(role = "user", text = "（本轮自由回答）")
-                val next = repository.dialogueTurn(current.sceneId, history, base64)
+                val next = repository.dialogueTurn(
+                    current.sceneId,
+                    history,
+                    base64,
+                    settingsStore.getSelectedModelId()
+                )
                 _state.update {
                     it.copy(
                         isSubmitting = false,
