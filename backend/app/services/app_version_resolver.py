@@ -147,10 +147,12 @@ class AppVersionResolver:
             response = await client.get(url, headers=headers)
             if response.status_code == 404:
                 logger.info("GitHub repo {} has no published releases yet", repo)
+                # Surface the env fallback so operators can still see the
+                # "you forgot to publish" case via a non-zero version.
                 return ResolvedVersion(
-                    latest_version="0.0.0",
-                    apk_url="",
-                    release_notes="",
+                    latest_version=settings.app_latest_version or "0.0.0",
+                    apk_url=settings.app_apk_url,
+                    release_notes=settings.app_release_notes,
                     source="default",
                 )
             response.raise_for_status()
