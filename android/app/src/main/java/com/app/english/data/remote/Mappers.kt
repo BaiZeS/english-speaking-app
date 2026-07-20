@@ -1,5 +1,8 @@
 package com.app.english.data.remote
 
+import com.app.english.domain.model.Book
+import com.app.english.domain.model.DailyScore
+import com.app.english.domain.model.DialogueScene
 import com.app.english.domain.model.HistoryItem
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.LessonSummary

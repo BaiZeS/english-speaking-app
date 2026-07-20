@@ -40,7 +40,7 @@ async def test_dialogue_generate_includes_opening_and_suggested_reply() -> None:
         r = await c.post("/api/v1/dialogue/generate", json=payload)
     assert r.status_code == 200
     data = r.json()
-    assert data["title"] == "Ordering coffee"
+    assert data["title"] == "点咖啡"
     assert data["lines"][0]["role"] == "assistant"
     assert data["suggested_reply"]
 
