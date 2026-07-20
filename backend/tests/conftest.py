@@ -43,3 +43,14 @@ async def client() -> AsyncIterator[AsyncClient]:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def db() -> AsyncIterator[AsyncSession]:
+    """Bare AsyncSession into the same in-memory sqlite the autouse fixture creates.
+
+    The client fixture overrides get_db on the app, so use this for tests
+    that need to seed rows directly (e.g. timestamp-sensitive aggregations)."""
+    sm = get_sessionmaker()
+    async with sm() as session:
+        yield session
