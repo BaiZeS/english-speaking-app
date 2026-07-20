@@ -12,7 +12,7 @@ from app.models.db import History
 
 
 async def _seed_history(
-    db: AsyncSession, user_id: int, scores: list[tuple[int, datetime, float]]
+    db: AsyncSession, user_id: str, scores: list[tuple[int, datetime, float]]
 ) -> None:
     """Insert (lesson_id, created_at, total_score) rows for a user."""
     for lesson_id, created_at, total in scores:
@@ -66,7 +66,7 @@ async def test_stats_aggregates_overall_and_per_sub_skill(
     assert r.status_code == 201
 
     user_id_row = await db.execute(select(History.user_id).order_by(History.id.desc()).limit(1))
-    user_id = int(user_id_row.scalar_one())
+    user_id = user_id_row.scalar_one()  # UUID string
 
     now = datetime.now(UTC)
     await _seed_history(
@@ -105,7 +105,7 @@ async def test_streak_counts_consecutive_days_ending_today(
     )
     assert r.status_code == 201
     user_id_row = await db.execute(select(History.user_id).order_by(History.id.desc()).limit(1))
-    user_id = int(user_id_row.scalar_one())
+    user_id = user_id_row.scalar_one()  # UUID string
 
     today = datetime.now(UTC)
     await _seed_history(
@@ -140,7 +140,7 @@ async def test_daily_buckets_skip_empty_days(db: AsyncSession, client: httpx.Asy
         },
     )
     user_id_row = await db.execute(select(History.user_id).order_by(History.id.desc()).limit(1))
-    user_id = int(user_id_row.scalar_one())
+    user_id = user_id_row.scalar_one()  # UUID string
 
     today = datetime.now(UTC)
     await _seed_history(
