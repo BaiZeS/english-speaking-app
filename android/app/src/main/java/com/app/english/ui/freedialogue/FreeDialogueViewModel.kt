@@ -8,9 +8,11 @@ import com.app.english.audio.AudioPlayer
 import com.app.english.audio.AudioRecorder
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.remote.DialogueMessageDto
+import com.app.english.data.repository.BooksRepository
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.HistoryRepository
 import com.app.english.domain.model.DialogueLine
+import com.app.english.domain.model.DialogueScene
 import com.app.english.domain.model.DialogueSession
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.navigation.Route
@@ -34,6 +36,9 @@ data class FreeDialogueScore(val suggestedReply: String, val result: ScoreResult
 
 data class FreeDialogueUiState(
     val isLoading: Boolean = true,
+    val isLoadingScenes: Boolean = false,
+    val scenes: List<DialogueScene> = emptyList(),
+    val selectedSceneId: String = "",
     val sceneId: String = "",
     val title: String = "自由对话",
     val messages: List<FreeDialogueMessage> = emptyList(),
@@ -50,6 +55,7 @@ data class FreeDialogueUiState(
 @HiltViewModel
 class FreeDialogueViewModel @Inject constructor(
     private val repository: EnglishRepository,
+    private val booksRepository: BooksRepository,
     private val historyRepository: HistoryRepository,
     private val audioRecorder: AudioRecorder,
     private val audioPlayer: AudioPlayer,
@@ -66,15 +72,53 @@ class FreeDialogueViewModel @Inject constructor(
     val state: StateFlow<FreeDialogueUiState> = _state.asStateFlow()
 
     init {
-        generate()
+        loadScenes()
+    }
+
+    fun selectScene(sceneId: String) {
+        if (sceneId == _state.value.selectedSceneId) return
+        settingsStore.setSelectedSceneId(sceneId)
+        generate(sceneId)
+    }
+
+    private fun loadScenes() {
+        viewModelScope.launch {
+            _state.update { it.copy(isLoadingScenes = true) }
+            val scenes = try {
+                booksRepository.listDialogueScenes()
+            } catch (e: Exception) {
+                Timber.w(e, 'Failed to load dialogue scenes')
+                emptyList()
+            }
+            val storedSceneId = settingsStore.getSelectedSceneId()
+            val initial = storedSceneId?.takeIf { id -> scenes.any { it.id == id } }
+                ?: scenes.firstOrNull()?.id
+                ?: FALLBACK_SCENE
+            if (initial != storedSceneId) {
+                settingsStore.setSelectedSceneId(initial)
+            }
+            _state.update {
+                it.copy(
+                    scenes = scenes,
+                    selectedSceneId = initial ?: "",
+                    isLoadingScenes = false
+                )
+            }
+            generate(initial ?: FALLBACK_SCENE)
+        }
     }
 
     fun generate() {
+        val scene = _state.value.selectedSceneId.ifBlank { FALLBACK_SCENE }
+        generate(scene)
+    }
+
+    private fun generate(sceneId: String) {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             _state.value = try {
                 val session = repository.generateDialogue(
-                    SCENE,
+                    sceneId,
                     "adult",
                     settingsStore.getSelectedModelId()
                 )
@@ -239,6 +283,7 @@ class FreeDialogueViewModel @Inject constructor(
     }
 
     private companion object {
-        const val SCENE = "daily_conversation"
+        // Used when /dialogue/scenes returns an empty list (offline / older backend).
+        const val FALLBACK_SCENE = "daily_conversation"
     }
 }

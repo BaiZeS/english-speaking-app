@@ -42,6 +42,15 @@ interface EnglishApi {
     @GET("app/version")
     suspend fun getAppVersion(): AppVersionResponseDto
 
+    @GET("books")
+    suspend fun listBooks(): BooksResponseDto
+
+    @GET("dialogue/scenes")
+    suspend fun listDialogueScenes(): DialogueScenesResponseDto
+
+    @GET("stats")
+    suspend fun getStats(@Query("device_id") deviceId: String): StatsResponseDto
+
     @GET("history")
     suspend fun listHistory(
         @Query("device_id") deviceId: String,

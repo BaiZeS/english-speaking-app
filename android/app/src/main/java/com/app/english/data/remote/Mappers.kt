@@ -99,3 +99,39 @@ fun AppVersionResponseDto.toDomain(): com.app.english.domain.model.AppVersion =
         releaseNotes = releaseNotes,
         forceUpdate = forceUpdate
     )
+
+fun BookDto.toDomain(): Book = Book(
+    id = id,
+    displayName = displayName,
+    description = description,
+    level = level,
+    lessonCount = lessonCount
+)
+
+fun DialogueSceneDto.toDomain(): DialogueScene = DialogueScene(
+    id = id,
+    title = title,
+    description = description
+)
+
+fun DailyScoreDto.toDomain(): DailyScore = DailyScore(
+    date = date,
+    avgTotal = avgTotal,
+    avgPronunciation = avgPronunciation,
+    avgFluency = avgFluency,
+    avgCompleteness = avgCompleteness,
+    sessions = sessions
+)
+
+fun StatsResponseDto.toDomain(): PracticeStats = PracticeStats(
+    totalSessions = totalSessions,
+    avgTotal = avgTotal,
+    avgPronunciation = avgPronunciation,
+    avgFluency = avgFluency,
+    avgCompleteness = avgCompleteness,
+    bestTotal = bestTotal,
+    recentSessions = recentSessions,
+    streakDays = streakDays,
+    daily = daily.map { it.toDomain() },
+    lessonsAttempted = lessonsAttempted
+)

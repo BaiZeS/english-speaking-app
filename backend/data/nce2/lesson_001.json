@@ -1,0 +1,21 @@
+{
+  "book": "nce2",
+  "lesson": 1,
+  "title": "A Private Conversation (B)",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "nce2-L1-A1", "text": "Excuse me, I believe this is your umbrella.", "translation": "打扰一下，我相信这是您的伞。"},
+        {"id": "nce2-L1-A2", "text": "Oh yes, thank you so much.", "translation": "哦是的，太感谢了。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "nce2-L1-B1", "text": "Sorry?", "translation": "不好意思？"},
+        {"id": "nce2-L1-B2", "text": "I think you dropped this.", "translation": "我想这是您掉的。"}
+      ]
+    }
+  ]
+}

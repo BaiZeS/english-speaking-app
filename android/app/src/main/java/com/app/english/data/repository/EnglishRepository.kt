@@ -7,11 +7,14 @@ import com.app.english.data.remote.EnglishApi
 import com.app.english.data.remote.ScoreRequestDto
 import com.app.english.data.remote.toDomain
 import com.app.english.domain.model.AppVersion
+import com.app.english.domain.model.Book
+import com.app.english.domain.model.DialogueScene
 import com.app.english.domain.model.DialogueSession
 import com.app.english.domain.model.DialogueTurn
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.LessonSummary
 import com.app.english.domain.model.LlmModel
+import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.ScoreResult
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,6 +45,11 @@ interface EnglishRepository {
         error("LLM model catalog is not supported by this repository")
     suspend fun getAppVersion(): AppVersion =
         error("App version lookup is not supported by this repository")
+    suspend fun listBooks(): List<Book> = error("Books catalog is not supported by this repository")
+    suspend fun listDialogueScenes(): List<DialogueScene> =
+        error("Dialogue scenes catalog is not supported by this repository")
+    suspend fun getStats(deviceId: String): PracticeStats =
+        error("Stats lookup is not supported by this repository")
 }
 
 @Singleton
@@ -98,4 +106,12 @@ class EnglishRepositoryImpl @Inject constructor(private val api: EnglishApi) : E
         api.listLlmModels().models.map { it.toDomain() }
 
     override suspend fun getAppVersion(): AppVersion = api.getAppVersion().toDomain()
+
+    override suspend fun listBooks(): List<Book> = api.listBooks().books.map { it.toDomain() }
+
+    override suspend fun listDialogueScenes(): List<DialogueScene> =
+        api.listDialogueScenes().scenes.map { it.toDomain() }
+
+    override suspend fun getStats(deviceId: String): PracticeStats =
+        api.getStats(deviceId).toDomain()
 }

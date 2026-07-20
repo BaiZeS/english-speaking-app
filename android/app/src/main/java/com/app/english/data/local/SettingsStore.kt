@@ -15,6 +15,8 @@ import javax.inject.Singleton
  *  - backend base URL override
  *  - preferred TTS voice
  *  - selected LLM model id for free dialogue
+ *  - selected book id for the lesson list (default = empty = use server default)
+ *  - selected dialogue scene id (default = empty = use server default)
  *  - the latest version for which the user dismissed the update prompt
  */
 @Singleton
@@ -53,6 +55,26 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         }
     }
 
+    /** Selected book id; `null` means "let the server pick the default". */
+    fun getSelectedBookId(): String? =
+        prefs.getString(KEY_BOOK_ID, null)?.takeIf { it.isNotBlank() }
+
+    fun setSelectedBookId(bookId: String?) {
+        prefs.edit {
+            if (bookId.isNullOrBlank()) remove(KEY_BOOK_ID) else putString(KEY_BOOK_ID, bookId)
+        }
+    }
+
+    /** Selected dialogue scene id; `null` means "let the server pick the default". */
+    fun getSelectedSceneId(): String? =
+        prefs.getString(KEY_SCENE_ID, null)?.takeIf { it.isNotBlank() }
+
+    fun setSelectedSceneId(sceneId: String?) {
+        prefs.edit {
+            if (sceneId.isNullOrBlank()) remove(KEY_SCENE_ID) else putString(KEY_SCENE_ID, sceneId)
+        }
+    }
+
     /** Last version string the user acknowledged (dismissed) the update prompt for. */
     fun getDismissedUpdateVersion(): String? =
         prefs.getString(KEY_DISMISSED_UPDATE_VERSION, null)?.takeIf { it.isNotBlank() }
@@ -76,6 +98,8 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_VOICE = "voice"
         private const val KEY_LLM_MODEL_ID = "llm_model_id"
+        private const val KEY_BOOK_ID = "book_id"
+        private const val KEY_SCENE_ID = "scene_id"
         private const val KEY_DISMISSED_UPDATE_VERSION = "dismissed_update_version"
 
         // Xunfei Spark super-natural TTS, US English female (x5_EnUs_Grant_flow).

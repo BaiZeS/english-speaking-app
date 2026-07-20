@@ -28,7 +28,13 @@ sealed class Route(val route: String) {
     data object ScoreResult : Route("score_result")
     data object History : Route("history")
     data object HistoryDetail : Route("history_detail")
+    data object Dashboard : Route("dashboard")
     data object Settings : Route("settings")
 }
 
-val topLevelRoutes = setOf(Route.Lessons.route, Route.History.route, Route.Settings.route)
+val topLevelRoutes = setOf(
+    Route.Dashboard.route,
+    Route.Lessons.route,
+    Route.History.route,
+    Route.Settings.route
+)

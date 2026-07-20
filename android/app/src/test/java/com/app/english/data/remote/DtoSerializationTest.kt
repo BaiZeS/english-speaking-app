@@ -223,4 +223,64 @@ class DtoSerializationTest {
             encoded.contains("\"model_id\":\"qwen-turbo\"")
         )
     }
+
+    @Test
+    fun booksResponse_decodesCatalog() {
+        val payload = """
+            {
+              "books":[
+                {"id":"nce1","display_name":"新概念英语 第一册","description":"入门","level":"beginner","lesson_count":1},
+                {"id":"nce2","display_name":"新概念英语 第二册","description":"进阶","level":"intermediate","lesson_count":2}
+              ],
+              "default_book":"nce1"
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(BooksResponseDto.serializer(), payload)
+        assertEquals(2, dto.books.size)
+        assertEquals("新概念英语 第一册", dto.books[0].displayName)
+        assertEquals("nce1", dto.defaultBook)
+    }
+
+    @Test
+    fun dialogueScenesResponse_decodesCatalog() {
+        val payload = """
+            {
+              "scenes":[
+                {"id":"daily_conversation","title":"日常寒暄","description":"聊聊今天"},
+                {"id":"ordering_coffee","title":"点咖啡","description":"咖啡店"}
+              ],
+              "default_scene":"daily_conversation"
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(DialogueScenesResponseDto.serializer(), payload)
+        assertEquals(2, dto.scenes.size)
+        assertEquals("日常寒暄", dto.scenes[0].title)
+        assertEquals("daily_conversation", dto.defaultScene)
+    }
+
+    @Test
+    fun statsResponse_decodesAggregates() {
+        val payload = """
+            {
+              "total_sessions":12,
+              "avg_total":82.5,
+              "avg_pronunciation":85.0,
+              "avg_fluency":80.0,
+              "avg_completeness":83.0,
+              "best_total":95.0,
+              "recent_sessions":5,
+              "streak_days":3,
+              "daily":[
+                {"date":"2026-07-15","avg_total":75.0,"avg_pronunciation":78.0,"avg_fluency":72.0,"avg_completeness":77.0,"sessions":2}
+              ],
+              "lessons_attempted":[1,2,3]
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(StatsResponseDto.serializer(), payload)
+        assertEquals(12, dto.totalSessions)
+        assertEquals(82.5, dto.avgTotal, 0.0)
+        assertEquals(3, dto.streakDays)
+        assertEquals(1, dto.daily.size)
+        assertEquals(listOf(1, 2, 3), dto.lessonsAttempted)
+    }
 }

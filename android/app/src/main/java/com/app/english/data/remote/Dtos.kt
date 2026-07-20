@@ -159,3 +159,51 @@ data class HistoryItemDto(
     @SerialName("score_completeness") val scoreCompleteness: Double,
     @SerialName("created_at") val createdAt: String
 )
+
+@Serializable
+data class BookDto(
+    val id: String,
+    @SerialName("display_name") val displayName: String,
+    val description: String,
+    val level: String,
+    @SerialName("lesson_count") val lessonCount: Int
+)
+
+@Serializable
+data class BooksResponseDto(
+    val books: List<BookDto>,
+    @SerialName("default_book") val defaultBook: String
+)
+
+@Serializable
+data class DialogueSceneDto(val id: String, val title: String, val description: String)
+
+@Serializable
+data class DialogueScenesResponseDto(
+    val scenes: List<DialogueSceneDto>,
+    @SerialName("default_scene") val defaultScene: String
+)
+
+@Serializable
+data class DailyScoreDto(
+    val date: String,
+    @SerialName("avg_total") val avgTotal: Double,
+    @SerialName("avg_pronunciation") val avgPronunciation: Double,
+    @SerialName("avg_fluency") val avgFluency: Double,
+    @SerialName("avg_completeness") val avgCompleteness: Double,
+    val sessions: Int
+)
+
+@Serializable
+data class StatsResponseDto(
+    @SerialName("total_sessions") val totalSessions: Int,
+    @SerialName("avg_total") val avgTotal: Double,
+    @SerialName("avg_pronunciation") val avgPronunciation: Double,
+    @SerialName("avg_fluency") val avgFluency: Double,
+    @SerialName("avg_completeness") val avgCompleteness: Double,
+    @SerialName("best_total") val bestTotal: Double,
+    @SerialName("recent_sessions") val recentSessions: Int,
+    @SerialName("streak_days") val streakDays: Int,
+    val daily: List<DailyScoreDto>,
+    @SerialName("lessons_attempted") val lessonsAttempted: List<Int>
+)

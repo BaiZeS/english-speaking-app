@@ -24,6 +24,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -85,6 +88,15 @@ fun FreeDialogueScreen(
                         Text(
                             "自由对话 · 已完成 ${state.scores.size} 轮",
                             style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                },
+                actions = {
+                    if (state.scenes.size > 1) {
+                        ScenePicker(
+                            scenes = state.scenes,
+                            selectedId = state.selectedSceneId,
+                            onSelect = viewModel::selectScene
                         )
                     }
                 },
@@ -282,6 +294,53 @@ private fun FreeScoreCard(score: ScoreResult) {
             )
             score.suggestion?.takeIf { it.isNotBlank() }?.let {
                 Text("建议：$it", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScenePicker(
+    scenes: List<com.app.english.domain.model.DialogueScene>,
+    selectedId: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    val selected = scenes.firstOrNull { it.id == selectedId } ?: scenes.firstOrNull()
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Text(
+                text = selected?.title ?: "切换场景",
+                style = MaterialTheme.typography.labelLarge
+            )
+            Icon(
+                Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            scenes.forEach { scene ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(scene.title, style = MaterialTheme.typography.bodyLarge)
+                            if (scene.description.isNotBlank()) {
+                                Text(
+                                    text = scene.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    onClick = {
+                        onSelect(scene.id)
+                        expanded = false
+                    }
+                )
             }
         }
     }

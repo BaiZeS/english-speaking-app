@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from app.api.v1 import dialogue, health, history, lessons, llm, score, tts, version
+from app.api.v1 import books, dialogue, health, history, lessons, llm, score, tts, version
 from app.config import settings
 from app.core.errors import install_error_handler
 from app.core.logging import configure_logging
@@ -35,6 +35,7 @@ app = FastAPI(
 )
 
 install_error_handler(app)
+app.include_router(books.router, prefix="/api/v1")
 app.include_router(dialogue.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(version.router, prefix="/api/v1")

@@ -80,3 +80,37 @@ data class AppVersion(
     val releaseNotes: String,
     val forceUpdate: Boolean
 )
+
+data class Book(
+    val id: String,
+    val displayName: String,
+    val description: String,
+    val level: String,
+    val lessonCount: Int
+)
+
+data class DialogueScene(val id: String, val title: String, val description: String)
+
+data class DailyScore(
+    val date: String,
+    val avgTotal: Double,
+    val avgPronunciation: Double,
+    val avgFluency: Double,
+    val avgCompleteness: Double,
+    val sessions: Int
+)
+
+data class PracticeStats(
+    val totalSessions: Int,
+    val avgTotal: Double,
+    val avgPronunciation: Double,
+    val avgFluency: Double,
+    val avgCompleteness: Double,
+    val bestTotal: Double,
+    val recentSessions: Int,
+    val streakDays: Int,
+    val daily: List<DailyScore>,
+    val lessonsAttempted: List<Int>
+) {
+    val hasData: Boolean get() = totalSessions > 0
+}

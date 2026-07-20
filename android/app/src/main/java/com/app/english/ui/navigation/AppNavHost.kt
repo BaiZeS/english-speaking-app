@@ -3,6 +3,7 @@ package com.app.english.ui.navigation
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -32,6 +33,7 @@ import com.app.english.ui.settings.SettingsScreen
 private data class TopDestination(val route: String, val label: String, val icon: ImageVector)
 
 private val topDestinations = listOf(
+    TopDestination(Route.Dashboard.route, "概览", Icons.Filled.Insights),
     TopDestination(Route.Lessons.route, "课文", Icons.Filled.MenuBook),
     TopDestination(Route.History.route, "历史", Icons.Filled.History),
     TopDestination(Route.Settings.route, "设置", Icons.Filled.Settings)
@@ -53,7 +55,7 @@ fun AppNavHost() {
                             selected = currentRoute == dest.route,
                             onClick = {
                                 navController.navigate(dest.route) {
-                                    popUpTo(Route.Lessons.route) { saveState = true }
+                                    popUpTo(Route.Dashboard.route) { saveState = true }
                                     launchSingleTop = true
                                     restoreState = true
                                 }
@@ -68,9 +70,20 @@ fun AppNavHost() {
     ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = Route.Lessons.route,
+            startDestination = Route.Dashboard.route,
             modifier = Modifier.padding(padding)
         ) {
+            composable(Route.Dashboard.route) {
+                DashboardScreen(
+                    onHistoryClick = {
+                        navController.navigate(Route.History.route) {
+                            popUpTo(Route.Dashboard.route) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                )
+            }
             composable(Route.Lessons.route) {
                 LessonListScreen(
                     onLessonClick = { id -> navController.navigate(Route.LessonDetail.create(id)) }
