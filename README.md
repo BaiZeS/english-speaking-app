@@ -12,6 +12,9 @@
 | 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；自由对话无 LLM 凭据时使用确定性 fallback |
 | LLM 自由对话 | ✅ 后端接入百炼 OpenAI 兼容端点 + `/llm/models` 目录端点；客户端设置页可选模型，未配置时自动降级 |
 | 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）|
+| 多本书籍 | ✅ `/books` 目录端点 + Android 首页下拉切换；`/dialogue/scenes` 暴露自由对话场景 |
+| Dashboard | ✅ `/stats` 汇总接口 + Android 概览页：总练习 / 平均分 / 最高分 / 连续天数 / 14 天趋势图 / 分项平均 |
+| 录音可视化 | ✅ AudioRecorder 暴露实时音量流 + 跟读页 LinearProgressIndicator 进度条 + 音量条 |
 
 ## 仓库结构
 

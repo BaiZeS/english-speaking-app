@@ -30,6 +30,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -53,6 +54,7 @@ import com.app.english.domain.model.Line
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
+import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -106,6 +108,16 @@ fun PlayerScreen(
                     }
                 }
             )
+        },
+        bottomBar = {
+            if (state.mode != PlayerMode.FREE_DIALOGUE && state.lines.isNotEmpty()) {
+                val progress =
+                    (state.currentIndex + 1).toFloat() / state.lines.size.coerceAtLeast(1)
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
@@ -198,6 +210,11 @@ private fun PlayerContent(
 
         if (!micGranted) PermissionHint(onRequestPermission = onRequestPermission)
 
+        RecordingLevelIndicator(
+            level = state.micLevel,
+            active = state.isRecording,
+            modifier = Modifier.fillMaxWidth()
+        )
         RecordButton(
             isRecording = state.isRecording,
             isSubmitting = state.isSubmitting,

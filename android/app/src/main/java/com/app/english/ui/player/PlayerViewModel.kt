@@ -48,6 +48,7 @@ data class PlayerUiState(
     val isPlayingReference: Boolean = false,
     val isRecording: Boolean = false,
     val isSubmitting: Boolean = false,
+    val micLevel: Float = 0f,
     val currentScore: ScoreResult? = null,
     val lineScores: List<ScoredLine> = emptyList(),
     val hasRetaken: Boolean = false,
@@ -90,6 +91,11 @@ class PlayerViewModel @Inject constructor(
 
     init {
         loadLesson()
+        viewModelScope.launch {
+            audioRecorder.levelFlow.collect { level ->
+                _state.update { it.copy(micLevel = level) }
+            }
+        }
     }
 
     fun reload() = loadLesson()
@@ -212,6 +218,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun startRecording() {
+        _state.update { it.copy(micLevel = 0f) }
         if (_state.value.isRecording || _state.value.isSubmitting) return
         viewModelScope.launch {
             try {

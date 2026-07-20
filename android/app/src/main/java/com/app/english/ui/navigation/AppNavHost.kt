@@ -159,7 +159,12 @@ fun AppNavHost() {
                 HistoryDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(Route.Settings.route) {
-                SettingsScreen()
+                SettingsScreen(
+                    onAboutClick = { navController.navigate(Route.About.route) }
+                )
+            }
+            composable(Route.About.route) {
+                AboutScreen(onBack = { navController.popBackStack() })
             }
         }
     }

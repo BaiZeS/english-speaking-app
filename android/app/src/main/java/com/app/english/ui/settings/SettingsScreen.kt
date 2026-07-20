@@ -42,7 +42,11 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onAboutClick: () -> Unit = {},
+    modifier: Modifier = Modifier,
+    viewModel: SettingsViewModel = hiltViewModel()
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -72,6 +76,12 @@ fun SettingsScreen(modifier: Modifier = Modifier, viewModel: SettingsViewModel =
             )
             DeviceIdCard(viewModel.deviceId)
 
+            OutlinedButton(
+                onClick = onAboutClick,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("关于本应用")
+            }
             Button(
                 onClick = {
                     viewModel.save()
