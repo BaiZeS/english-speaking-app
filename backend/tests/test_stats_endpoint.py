@@ -161,5 +161,5 @@ async def test_daily_buckets_skip_empty_days(db: AsyncSession, client: httpx.Asy
     assert (today - timedelta(days=5)).date().isoformat() in dates
     assert (today - timedelta(days=13)).date().isoformat() in dates
     assert (today - timedelta(days=20)).date().isoformat() not in dates
-    # Sessions within the past 7 days = today + day-5 = 2 (excluding day-13).
-    assert data["recent_sessions"] == 2
+    # Sessions within the past 7 days = POST + today + day-5 = 3.
+    assert data["recent_sessions"] == 3
