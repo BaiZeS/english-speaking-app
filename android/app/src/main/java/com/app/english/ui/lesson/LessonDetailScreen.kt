@@ -2,6 +2,7 @@ package com.app.english.ui.lesson
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,8 +10,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -20,20 +23,25 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.LessonDetail
+import com.app.english.domain.model.Line
+import com.app.english.domain.model.Role
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.player.PlayerMode
@@ -52,7 +60,7 @@ fun LessonDetailScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("练习模式") },
+                title = { Text("课程详情") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -68,7 +76,7 @@ fun LessonDetailScreen(
                 modifier = Modifier.padding(padding),
                 onRetry = viewModel::load
             )
-            is LessonDetailUiState.Success -> ModeList(
+            is LessonDetailUiState.Success -> LessonDetailBody(
                 lesson = current.lesson,
                 onStart = { mode -> onStartPractice(viewModel.lessonId, mode) },
                 onStartFreeDialogue = { onStartFreeDialogue(viewModel.lessonId) },
@@ -79,32 +87,36 @@ fun LessonDetailScreen(
 }
 
 @Composable
-private fun ModeList(
+private fun LessonDetailBody(
     lesson: LessonDetail,
     onStart: (PlayerMode) -> Unit,
     onStartFreeDialogue: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val totalLines = lesson.roles.sumOf { it.lines.size }
+    val totalRoles = lesson.roles.size
+    val totalWords = lesson.roles.sumOf { role ->
+        role.lines.sumOf { line -> countWords(line.text) }
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item { LessonHeader(lesson = lesson) }
         item {
-            Column {
-                Text(
-                    text = "Lesson ${lesson.lessonNo}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(text = lesson.title, style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    text = "选择一种方式开始练习",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
+            LessonStatsRow(
+                totalLines = totalLines,
+                totalRoles = totalRoles,
+                totalWords = totalWords
+            )
+        }
+        item { PreviewSection(lesson = lesson) }
+        item {
+            Text(
+                text = "选择练习方式",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
         item {
             ModeCard(
@@ -133,6 +145,190 @@ private fun ModeList(
                 meta = "AI 场景 · 每轮评分",
                 onClick = onStartFreeDialogue
             )
+        }
+    }
+}
+
+@Composable
+private fun LessonHeader(lesson: LessonDetail) {
+    Column {
+        Text(
+            text = "Lesson ${lesson.lessonNo}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(text = lesson.title, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            text = "先看看本课内容，再选择练习方式",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun LessonStatsRow(totalLines: Int, totalRoles: Int, totalWords: Int) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StatPill(value = "$totalLines", label = "句", modifier = Modifier.weight(1f))
+        StatPill(value = "$totalRoles", label = "角色", modifier = Modifier.weight(1f))
+        StatPill(value = "$totalWords", label = "词", modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun StatPill(value: String, label: String, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun PreviewSection(lesson: LessonDetail) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "课文预览",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "前几行 + 角色分布",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // Show up to 3 lines from the first non-empty role.
+            val firstRole = lesson.roles.firstOrNull { it.lines.isNotEmpty() }
+            val sampleLines = firstRole?.lines?.take(3).orEmpty()
+            sampleLines.forEachIndexed { index, line ->
+                PreviewLine(index = index, line = line)
+                if (index < sampleLines.lastIndex) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                }
+            }
+            if ((firstRole?.lines?.size ?: 0) > sampleLines.size) {
+                Text(
+                    text = "…还有 ${(firstRole?.lines?.size ?: 0) - sampleLines.size} 行",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (lesson.roles.size > 1) {
+                Spacer(Modifier.height(4.dp))
+                RoleDistribution(roles = lesson.roles)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewLine(index: Int, line: Line) {
+    Row(verticalAlignment = Alignment.Top) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = "${index + 1}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = line.text, style = MaterialTheme.typography.bodyLarge)
+            line.ipa?.takeIf { it.isNotBlank() }?.let { ipa ->
+                Text(
+                    text = "/$ipa/",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            line.translation?.takeIf { it.isNotBlank() }?.let { translation ->
+                Text(
+                    text = translation,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoleDistribution(roles: List<Role>) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "角色台词",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        roles.forEach { role ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = role.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.width(40.dp)
+                )
+                Surface(
+                    shape = RoundedCornerShape(3.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(6.dp)
+                ) {
+                    // Bar width encodes relative line count for the role.
+                    val maxLines = roles.maxOf { it.lines.size }.coerceAtLeast(1)
+                    val weight = role.lines.size.toFloat() / maxLines
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = weight)
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .padding(0.dp)
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.fillMaxSize()
+                        ) {}
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${role.lines.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -183,3 +379,5 @@ private fun ModeCard(
         }
     }
 }
+
+private fun countWords(text: String): Int = text.split(Regex("\\s+")).count { it.isNotBlank() }
