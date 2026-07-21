@@ -62,7 +62,7 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
-          echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${{ steps.tag.outputs.value }}" >> "$GITHUB_ENV"
 
       - name: Derive version (strip leading v)
         id: version
