@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -158,7 +157,7 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.width(0).weight(1f)) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Lesson ${item.lessonId} · ${item.lineId}",
                         style = MaterialTheme.typography.titleMedium
