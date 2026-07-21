@@ -7,6 +7,7 @@ import com.app.english.domain.model.HistoryItem
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.LessonSummary
 import com.app.english.domain.model.Line
+import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.Role
 import com.app.english.domain.model.ScoreResult
 import com.app.english.domain.model.WordScore
