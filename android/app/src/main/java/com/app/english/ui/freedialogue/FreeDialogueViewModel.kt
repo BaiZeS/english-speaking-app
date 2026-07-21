@@ -87,7 +87,7 @@ class FreeDialogueViewModel @Inject constructor(
             val scenes = try {
                 booksRepository.listDialogueScenes()
             } catch (e: Exception) {
-                Timber.w(e, 'Failed to load dialogue scenes')
+                Timber.w(e, "Failed to load dialogue scenes")
                 emptyList()
             }
             val storedSceneId = settingsStore.getSelectedSceneId()
