@@ -15,6 +15,9 @@
 | 多本书籍 | ✅ `/books` 目录端点 + Android 首页下拉切换；`/dialogue/scenes` 暴露自由对话场景 |
 | Dashboard | ✅ `/stats` 汇总接口 + Android 概览页：总练习 / 平均分 / 最高分 / 连续天数 / 14 天趋势图 / 分项平均 |
 | 录音可视化 | ✅ AudioRecorder 暴露实时音量流 + 跟读页 LinearProgressIndicator 进度条 + 音量条 |
+| 课前预览 + 错词高亮 | ✅ LessonDetail 加课文预览（首 3 句 + 角色分布柱）+ ScoreResult 每词按分数染色 chip |
+| History 筛选 | ✅ 全部 / 练过 / 85+ / 60 以下 四种 filter chip |
+| 模块化 PlayerScreen | ✅ 551 行单体拆为 Screen + Controls + ReadAlongView + DialogueView + ScorePanel 5 个文件 |
 
 ## 仓库结构
 

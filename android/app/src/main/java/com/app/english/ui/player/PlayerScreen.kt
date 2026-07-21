@@ -1,12 +1,8 @@
 package com.app.english.ui.player
 
 import android.Manifest
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,24 +11,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,24 +29,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.app.english.domain.ScoreColorMapper
-import com.app.english.domain.model.Line
-import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingLevelIndicator
-import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 
+/**
+ * Top-level entry point for the read-along / dialogue / free-dialogue
+ * practice flow. Holds the Scaffold + permissions, then delegates the
+ * mode-specific content to [PlayerContent]. Sub-composables live in
+ * [PlayerControls], [PlayerReadAlongView], [PlayerDialogueView], and
+ * [PlayerScorePanel].
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
 fun PlayerScreen(
@@ -113,7 +100,7 @@ fun PlayerScreen(
             if (state.mode != PlayerMode.FREE_DIALOGUE && state.lines.isNotEmpty()) {
                 val progress =
                     (state.currentIndex + 1).toFloat() / state.lines.size.coerceAtLeast(1)
-                androidx.compose.material3.LinearProgressIndicator(
+                LinearProgressIndicator(
                     progress = { progress.coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -226,7 +213,7 @@ private fun PlayerContent(
         )
 
         if (state.isSubmitting) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("评分中...", style = MaterialTheme.typography.bodyMedium)
@@ -241,311 +228,5 @@ private fun PlayerContent(
                 onNext = onNext
             )
         }
-    }
-}
-
-@Composable
-private fun RecentSentenceList(lines: List<Line>, currentLineId: String, completedCount: Int) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("最近五句", style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = if (completedCount == 0) "从第一句开始" else "已完成 $completedCount 句，继续保持",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            lines.forEachIndexed { index, sentence ->
-                val current = sentence.id == currentLineId
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (current) "▶" else "✓",
-                        color = if (current) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.tertiary
-                        },
-                        modifier = Modifier.width(28.dp)
-                    )
-                    Text(
-                        text = sentence.text,
-                        style = if (current) {
-                            MaterialTheme.typography.bodyLarge
-                        } else {
-                            MaterialTheme.typography.bodyMedium
-                        },
-                        fontWeight = if (current) FontWeight.Bold else FontWeight.Normal,
-                        color = if (current) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-                if (index != lines.lastIndex) {
-                    Spacer(Modifier.padding(top = 1.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DialogueTranscript(conversation: List<PracticeTurn>, currentLineId: String) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("完整对话", style = MaterialTheme.typography.titleMedium)
-            conversation.forEach { turn ->
-                val current = turn.line.id == currentLineId
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            if (current) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                Color.Transparent
-                            },
-                            MaterialTheme.shapes.small
-                        )
-                        .padding(10.dp)
-                ) {
-                    Text(
-                        text = "角色 ${turn.role}" + if (turn.isUserTurn) " · 你" else "",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (turn.isUserTurn) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                    Text(text = turn.line.text, style = MaterialTheme.typography.bodyLarge)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PromptCard(role: String, text: String, isPlaying: Boolean, onPlay: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Column(Modifier.padding(14.dp)) {
-            Text(role, style = MaterialTheme.typography.labelLarge)
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-            OutlinedButton(
-                onClick = onPlay,
-                enabled = !isPlaying,
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text(if (isPlaying) "播放中..." else "播放角色 A")
-            }
-        }
-    }
-}
-
-@Composable
-private fun LineHeader(title: String, text: String, ipa: String?, translation: String?) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(text = text, style = MaterialTheme.typography.headlineMedium)
-            ipa?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = "/$it/",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
-            translation?.takeIf { it.isNotBlank() }?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PermissionHint(onRequestPermission: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text("需要录音权限才能进行口语练习。", style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = onRequestPermission, modifier = Modifier.padding(top = 8.dp)) {
-                Text("授予权限")
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReferenceButton(isPlaying: Boolean, label: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        enabled = !isPlaying
-    ) {
-        Icon(Icons.Filled.PlayArrow, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text(if (isPlaying) "播放中..." else label)
-    }
-}
-
-@Composable
-private fun RecordButton(
-    isRecording: Boolean,
-    isSubmitting: Boolean,
-    hasScore: Boolean,
-    micGranted: Boolean,
-    onRequestPermission: () -> Unit,
-    onStartRecording: () -> Unit,
-    onStopAndSubmit: () -> Unit
-) {
-    when {
-        isSubmitting -> Button(
-            onClick = {},
-            modifier = Modifier.fillMaxWidth(),
-            enabled = false
-        ) { Text("评分中...") }
-        isRecording -> Button(
-            onClick = onStopAndSubmit,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("停止录音并评分")
-        }
-        else -> Button(
-            onClick = { if (micGranted) onStartRecording() else onRequestPermission() },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.Mic, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (hasScore) "重录" else "开始录音")
-        }
-    }
-}
-
-@Composable
-private fun AdvanceButton(canAdvance: Boolean, isLastLine: Boolean, onNext: () -> Unit) {
-    Button(onClick = onNext, modifier = Modifier.fillMaxWidth(), enabled = canAdvance) {
-        Text(if (isLastLine) "完成练习" else "下一句")
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ScorePanel(score: ScoreResult, needsRerecord: Boolean) {
-    val level = ScoreColorMapper.level(score.total)
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = score.total.toInt().toString(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = level.color(),
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(end = 12.dp)
-                )
-                Text(text = "总分", style = MaterialTheme.typography.titleMedium)
-            }
-            SubScoreRow(score.pronunciation, score.fluency, score.completeness)
-            if (needsRerecord) {
-                Text(
-                    text = "得分低于 60，请重录一次后再继续。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-            score.suggestion?.takeIf { it.isNotBlank() }?.let { suggestion ->
-                Text(
-                    text = "建议：$suggestion",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (score.wordDetails.isNotEmpty()) {
-                Text("单词得分", style = MaterialTheme.typography.titleMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    score.wordDetails.forEach { wordScore ->
-                        WordChip(
-                            word = wordScore.word,
-                            scoreColor = ScoreColorMapper.level(wordScore.score).color()
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SubScoreRow(pronunciation: Double, fluency: Double, completeness: Double) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        SubScorePill("发音", pronunciation, Modifier.weight(1f))
-        SubScorePill("流利度", fluency, Modifier.weight(1f))
-        SubScorePill("完整度", completeness, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun SubScorePill(label: String, value: Double, modifier: Modifier = Modifier) {
-    val color = ScoreColorMapper.level(value).color()
-    Column(modifier = modifier.padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value.toInt().toString(),
-            style = MaterialTheme.typography.titleLarge,
-            color = color,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun WordChip(word: String, scoreColor: Color) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-    ) {
-        Box(modifier = Modifier.size(10.dp).background(scoreColor, CircleShape))
-        Spacer(Modifier.width(6.dp))
-        Text(
-            word,
-            style = MaterialTheme.typography.bodyMedium,
-            color = scoreColor,
-            fontWeight = FontWeight.SemiBold
-        )
     }
 }
