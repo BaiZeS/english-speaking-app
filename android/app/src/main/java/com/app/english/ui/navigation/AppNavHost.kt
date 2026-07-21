@@ -21,6 +21,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.app.english.ui.about.AboutScreen
+import com.app.english.ui.dashboard.DashboardScreen
 import com.app.english.ui.freedialogue.FreeDialogueScreen
 import com.app.english.ui.history.HistoryDetailScreen
 import com.app.english.ui.history.HistoryListScreen
