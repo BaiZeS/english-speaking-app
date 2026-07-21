@@ -384,7 +384,7 @@ private fun ScoreProgress(value: Double) {
                 shape = RoundedCornerShape(6.dp),
                 color = color,
                 modifier = Modifier
-                    .fillMaxWidth(fraction = (value / 100f).coerceIn(0f, 1f))
+                    .fillMaxWidth(fraction = (value / 100.0).coerceIn(0.0, 1.0))
                     .fillMaxSize()
             ) {}
         }
