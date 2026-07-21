@@ -62,7 +62,15 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
-          echo "RELEASE_TAG=${{ steps.tag.outputs.value }}" >> "$GITHUB_ENV"
+
+      - name: Export release tag
+        # Done as its own step so the previous ``tag`` output is available
+        # via ${{ steps.tag.outputs.value }}; the env write inside the
+        # tag step's shell ended up empty because outputs aren't visible
+        # to the same step that emits them.
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+        run: echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
 
       - name: Derive version (strip leading v)
         id: version
