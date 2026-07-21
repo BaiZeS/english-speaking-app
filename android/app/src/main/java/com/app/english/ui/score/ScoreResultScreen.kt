@@ -42,7 +42,10 @@ import com.app.english.domain.model.WordScore
 import com.app.english.ui.components.formatScore
 import com.app.english.ui.theme.color
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
 @Composable
 fun ScoreResultScreen(
     onDone: () -> Unit,
@@ -204,6 +207,7 @@ private fun WordScoreRow(words: List<WordScore>) {
     FlowRowSimple(items = words)
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun FlowRowSimple(items: List<WordScore>) {
     // Use a regular Row with line wrapping via a custom layout alternative —
