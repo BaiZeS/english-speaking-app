@@ -5,22 +5,28 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.automirrored.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -28,18 +34,19 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.Book
+import com.app.english.domain.model.LessonProgress
 import com.app.english.domain.model.LessonSummary
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
+import com.app.english.ui.theme.color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,29 +79,183 @@ fun LessonListScreen(
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
+            SearchBar(
+                query = state.searchQuery,
+                onChange = viewModel::setSearchQuery,
+                enabled = state.lessons.isNotEmpty()
+            )
             state.selectedBook?.let { book ->
                 if (book.description.isNotBlank()) {
                     BookBanner(
                         book = book,
                         modifier = Modifier.fillMaxWidth().padding(
                             horizontal = 16.dp,
-                            vertical = 8.dp
+                            vertical = 4.dp
                         )
                     )
                 }
             }
-            if (state.isLoadingLessons && state.lessons.isEmpty()) {
-                LoadingState()
-            } else if (state.error != null && state.lessons.isEmpty()) {
-                ErrorState(
+            when {
+                state.isLoadingLessons && state.lessons.isEmpty() -> LoadingState()
+                state.error != null && state.lessons.isEmpty() -> ErrorState(
                     message = state.error ?: "加载失败",
                     onRetry = viewModel::retry
                 )
-            } else {
-                LessonList(
-                    lessons = state.lessons,
+                else -> LessonList(
+                    lessons = state.filteredLessons,
+                    progressById = state.progressById,
                     onLessonClick = onLessonClick
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchBar(query: String, onChange: (String) -> Unit, enabled: Boolean) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        enabled = enabled,
+        singleLine = true,
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "搜索") },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onChange("") }) {
+                    Icon(Icons.Filled.Clear, contentDescription = "清空搜索")
+                }
+            }
+        },
+        placeholder = { Text("搜索课文标题") },
+        singleLine = true
+    )
+}
+
+@Composable
+private fun LessonList(
+    lessons: List<LessonSummary>,
+    progressById: Map<Int, LessonProgress>,
+    onLessonClick: (Int) -> Unit
+) {
+    if (lessons.isEmpty()) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "没有匹配的课文",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(lessons, key = { it.id }) { lesson ->
+            LessonRow(
+                lesson = lesson,
+                progress = progressById[lesson.id],
+                onClick = { onLessonClick(lesson.id) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun LessonRow(lesson: LessonSummary, progress: LessonProgress?, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "${lesson.lessonNo}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Lesson ${lesson.lessonNo} · ${lesson.title}",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "${lesson.roleCount} 个角色",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "约 ${lesson.durationS.toInt()} 秒",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                ProgressBadge(progress = progress)
+            }
+        }
+    }
+}
+
+/** Compact pill showing "new", "N 次 · 最高 X" depending on the user's history. */
+@Composable
+private fun ProgressBadge(progress: LessonProgress?) {
+    when {
+        progress == null || progress.attemptCount == 0 -> {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.padding(0.dp)
+            ) {
+                Text(
+                    text = "未练",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+        else -> {
+            val color = ScoreColorMapper.level(progress.bestScore).color()
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = color.copy(alpha = 0.18f),
+                modifier = Modifier.padding(0.dp)
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = progress.bestScore.toInt().toString(),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = color,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${progress.attemptCount} 次",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = color
+                    )
+                }
             }
         }
     }
@@ -143,8 +304,10 @@ private fun BookBanner(book: Book, modifier: Modifier = Modifier) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BookSelector(books: List<Book>, selectedId: String, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    val selected = books.firstOrNull { it.id == selectedId }
+    var expanded by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(false)
+    }
+    val selected = books.firstOrNull { it.id == selectedId } ?: books.firstOrNull()
     Box {
         TextButton(onClick = { expanded = true }) {
             Text(
@@ -153,7 +316,7 @@ private fun BookSelector(books: List<Book>, selectedId: String, onSelect: (Strin
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Icon(
-                Icons.Filled.ArrowDropDown,
+                Icons.AutoMirrored.Filled.ArrowDropDown,
                 contentDescription = "切换课本",
                 modifier = Modifier.size(18.dp)
             )
@@ -178,61 +341,6 @@ private fun BookSelector(books: List<Book>, selectedId: String, onSelect: (Strin
                         onSelect(book.id)
                         expanded = false
                     }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun LessonList(lessons: List<LessonSummary>, onLessonClick: (Int) -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        items(lessons, key = { it.id }) { lesson ->
-            LessonRow(lesson = lesson, onClick = { onLessonClick(lesson.id) })
-        }
-        if (lessons.isEmpty()) {
-            item {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "这本教材还没有课文，敬请期待。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LessonRow(lesson: LessonSummary, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "Lesson ${lesson.lessonNo} · ${lesson.title}",
-                style = MaterialTheme.typography.titleMedium
-            )
-            Row(
-                modifier = Modifier.padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "${lesson.roleCount} 个角色",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "约 ${lesson.durationS.toInt()} 秒",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

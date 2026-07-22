@@ -48,6 +48,12 @@ interface EnglishApi {
     @GET("dialogue/scenes")
     suspend fun listDialogueScenes(): DialogueScenesResponseDto
 
+    @GET("lessons/{lessonId}/progress")
+    suspend fun getLessonProgress(
+        @Path("lessonId") lessonId: Int,
+        @Query("device_id") deviceId: String
+    ): LessonProgressDto
+
     @GET("stats")
     suspend fun getStats(@Query("device_id") deviceId: String): StatsResponseDto
 

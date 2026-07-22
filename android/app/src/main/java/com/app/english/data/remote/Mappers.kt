@@ -139,3 +139,12 @@ fun StatsResponseDto.toDomain(): PracticeStats = PracticeStats(
     daily = daily.map { it.toDomain() },
     lessonsAttempted = lessonsAttempted
 )
+
+fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
+    com.app.english.domain.model.LessonProgress(
+        lessonId = lessonId,
+        attemptCount = attemptCount,
+        bestScore = bestScore,
+        lastScore = lastScore,
+        lastPracticedAt = lastPracticedAt
+    )

@@ -114,3 +114,13 @@ data class PracticeStats(
 ) {
     val hasData: Boolean get() = totalSessions > 0
 }
+
+data class LessonProgress(
+    val lessonId: Int,
+    val attemptCount: Int,
+    val bestScore: Double,
+    val lastScore: Double,
+    val lastPracticedAt: String? = null
+) {
+    val isPracticed: Boolean get() = attemptCount > 0
+}

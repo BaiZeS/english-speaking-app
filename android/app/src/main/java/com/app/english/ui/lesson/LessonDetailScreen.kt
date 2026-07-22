@@ -39,12 +39,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.LessonDetail
+import com.app.english.domain.model.LessonProgress
 import com.app.english.domain.model.Line
 import com.app.english.domain.model.Role
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.player.PlayerMode
+import com.app.english.ui.theme.color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +112,9 @@ private fun LessonDetailBody(
                 totalRoles = totalRoles,
                 totalWords = totalWords
             )
+        }
+        state.progress?.takeIf { it.isPracticed }?.let { progress ->
+            item { ProgressCard(progress = progress) }
         }
         item { PreviewSection(lesson = lesson) }
         item {
@@ -381,3 +387,60 @@ private fun ModeCard(
 }
 
 private fun countWords(text: String): Int = text.split(Regex("\\s+")).count { it.isNotBlank() }
+
+@Composable
+private fun ProgressCard(progress: LessonProgress) {
+    val color = ScoreColorMapper.level(progress.bestScore).color()
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.width(96.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = progress.bestScore.toInt().toString(),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = color,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "最高分",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "本课战绩",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    text =
+                    "已练习 " + progress.attemptCount + " 次 · 上次 " + progress.lastScore.toInt() +
+                        " 分",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                progress.lastPracticedAt?.let { ts ->
+                    Text(
+                        text = "最近：" + formatRelativeTime(ts),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatRelativeTime(iso: String): String = iso.take(10)

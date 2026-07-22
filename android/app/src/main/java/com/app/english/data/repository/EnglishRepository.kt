@@ -50,10 +50,15 @@ interface EnglishRepository {
         error("Dialogue scenes catalog is not supported by this repository")
     suspend fun getStats(deviceId: String): PracticeStats =
         error("Stats lookup is not supported by this repository")
+    suspend fun getLessonProgress(lessonId: Int): com.app.english.domain.model.LessonProgress =
+        error("Lesson progress lookup is not supported by this repository")
 }
 
 @Singleton
-class EnglishRepositoryImpl @Inject constructor(private val api: EnglishApi) : EnglishRepository {
+class EnglishRepositoryImpl @Inject constructor(
+    private val api: EnglishApi,
+    private val settingsStore: com.app.english.data.local.SettingsStore
+) : EnglishRepository {
     override suspend fun listLessons(book: String): List<LessonSummary> =
         api.listLessons(book).map { it.toDomain() }
 
@@ -114,4 +119,9 @@ class EnglishRepositoryImpl @Inject constructor(private val api: EnglishApi) : E
 
     override suspend fun getStats(deviceId: String): PracticeStats =
         api.getStats(deviceId).toDomain()
+
+    override suspend fun getLessonProgress(
+        lessonId: Int
+    ): com.app.english.domain.model.LessonProgress =
+        api.getLessonProgress(lessonId, settingsStore.deviceId).toDomain()
 }

@@ -207,3 +207,12 @@ data class StatsResponseDto(
     val daily: List<DailyScoreDto>,
     @SerialName("lessons_attempted") val lessonsAttempted: List<Int>
 )
+
+@Serializable
+data class LessonProgressDto(
+    @SerialName("lesson_id") val lessonId: Int,
+    @SerialName("attempt_count") val attemptCount: Int,
+    @SerialName("best_score") val bestScore: Double,
+    @SerialName("last_score") val lastScore: Double,
+    @SerialName("last_practiced_at") val lastPracticedAt: String? = null
+)

@@ -106,4 +106,39 @@ class BooksDtoMappingTest {
         assertEquals(3, dto.daily[1].sessions)
         assertEquals(listOf(1, 2, 3), dto.lessonsAttempted)
     }
+
+    @Test
+    fun lessonProgressDto_decodesAllFields() {
+        val payload = """
+            {
+              "lesson_id": 1,
+              "attempt_count": 4,
+              "best_score": 92.0,
+              "last_score": 78.0,
+              "last_practiced_at": "2026-07-21T03:14:00+00:00"
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(LessonProgressDto.serializer(), payload)
+        assertEquals(1, dto.lessonId)
+        assertEquals(4, dto.attemptCount)
+        assertEquals(92.0, dto.bestScore, 0.001)
+        assertEquals(78.0, dto.lastScore, 0.001)
+        assertEquals("2026-07-21T03:14:00+00:00", dto.lastPracticedAt)
+    }
+
+    @Test
+    fun lessonProgressDto_handlesNullTimestamp() {
+        val payload = """
+            {
+              "lesson_id": 2,
+              "attempt_count": 0,
+              "best_score": 0.0,
+              "last_score": 0.0,
+              "last_practiced_at": null
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(LessonProgressDto.serializer(), payload)
+        assertEquals(0, dto.attemptCount)
+        assertEquals(null, dto.lastPracticedAt)
+    }
 }
