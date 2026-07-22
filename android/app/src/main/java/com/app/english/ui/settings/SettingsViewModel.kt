@@ -20,6 +20,7 @@ data class SettingsUiState(
     val availableVoices: List<String> = emptyList(),
     val llmModels: List<LlmModel> = emptyList(),
     val selectedModelId: String? = null,
+    val themeMode: String = SettingsStore.THEME_SYSTEM,
     val isLoadingModels: Boolean = false,
     val llmLoadError: String? = null
 )
@@ -33,13 +34,12 @@ class SettingsViewModel @Inject constructor(
         SettingsUiState(
             baseUrl = settingsStore.getBaseUrl(),
             voice = settingsStore.getVoice(),
-            selectedModelId = settingsStore.getSelectedModelId()
+            selectedModelId = settingsStore.getSelectedModelId(),
+            themeMode = settingsStore.getThemeMode()
         )
     )
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
-    // Xunfei Spark super-natural TTS voices (US English).
-    // Grant: mature female; Lila: younger female.
     val deviceId: String = settingsStore.deviceId
 
     private val voices: List<String> = listOf("x5_EnUs_Grant_flow", "x5_EnUs_Lila_flow")
@@ -55,7 +55,6 @@ class SettingsViewModel @Inject constructor(
             try {
                 val models = repository.listLlmModels()
                 val currentSelection = _state.value.selectedModelId
-                // Drop stored selection if the backend stopped advertising it.
                 val filtered = if (currentSelection != null &&
                     models.none { it.id == currentSelection }
                 ) {
@@ -95,10 +94,15 @@ class SettingsViewModel @Inject constructor(
         _state.update { it.copy(selectedModelId = modelId) }
     }
 
+    fun setThemeMode(mode: String) {
+        _state.update { it.copy(themeMode = mode) }
+    }
+
     fun save() {
         val current = _state.value
         settingsStore.setBaseUrl(current.baseUrl)
         settingsStore.setVoice(current.voice)
         settingsStore.setSelectedModelId(current.selectedModelId)
+        settingsStore.setThemeMode(current.themeMode)
     }
 }

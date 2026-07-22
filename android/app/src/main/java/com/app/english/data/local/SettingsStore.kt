@@ -75,6 +75,13 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         }
     }
 
+    /** Selected theme override; null = follow system. */
+    fun getThemeMode(): String = prefs.getString(KEY_THEME_MODE, null) ?: THEME_SYSTEM
+
+    fun setThemeMode(mode: String) {
+        prefs.edit { putString(KEY_THEME_MODE, mode) }
+    }
+
     /** Last version string the user acknowledged (dismissed) the update prompt for. */
     fun getDismissedUpdateVersion(): String? =
         prefs.getString(KEY_DISMISSED_UPDATE_VERSION, null)?.takeIf { it.isNotBlank() }
@@ -101,6 +108,11 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         private const val KEY_BOOK_ID = "book_id"
         private const val KEY_SCENE_ID = "scene_id"
         private const val KEY_DISMISSED_UPDATE_VERSION = "dismissed_update_version"
+        private const val KEY_THEME_MODE = "theme_mode"
+
+        const val THEME_SYSTEM = "system"
+        const val THEME_LIGHT = "light"
+        const val THEME_DARK = "dark"
 
         // Xunfei Spark super-natural TTS, US English female (x5_EnUs_Grant_flow).
         private const val DEFAULT_VOICE = "x5_EnUs_Grant_flow"

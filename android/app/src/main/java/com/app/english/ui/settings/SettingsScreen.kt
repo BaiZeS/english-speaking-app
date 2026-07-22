@@ -66,6 +66,10 @@ fun SettingsScreen(
         ) {
             BackendUrlCard(state.baseUrl, viewModel::updateBaseUrl)
             VoiceCard(state.voice, state.availableVoices, viewModel::updateVoice)
+            ThemeModeCard(
+                selected = state.themeMode,
+                onSelect = viewModel::setThemeMode
+            )
             LlmModelCard(
                 models = state.llmModels,
                 selectedId = state.selectedModelId,
@@ -252,4 +256,44 @@ private fun DeviceIdCard(deviceId: String) {
             )
         }
     }
+}
+
+@Composable
+private fun ThemeModeCard(selected: String, onSelect: (String) -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("主题", style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = "跟随系统、强制浅色或强制深色。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeChip(
+                    label = "跟随系统",
+                    active = selected == com.app.english.data.local.SettingsStore.THEME_SYSTEM,
+                    onClick = { onSelect(com.app.english.data.local.SettingsStore.THEME_SYSTEM) }
+                )
+                ThemeChip(
+                    label = "浅色",
+                    active = selected == com.app.english.data.local.SettingsStore.THEME_LIGHT,
+                    onClick = { onSelect(com.app.english.data.local.SettingsStore.THEME_LIGHT) }
+                )
+                ThemeChip(
+                    label = "深色",
+                    active = selected == com.app.english.data.local.SettingsStore.THEME_DARK,
+                    onClick = { onSelect(com.app.english.data.local.SettingsStore.THEME_DARK) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeChip(label: String, active: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.FilterChip(
+        selected = active,
+        onClick = onClick,
+        label = { Text(label) }
+    )
 }

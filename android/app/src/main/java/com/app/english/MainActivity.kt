@@ -4,11 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.app.english.data.local.SettingsStore
 import com.app.english.ui.navigation.AppNavHost
 import com.app.english.ui.theme.EnglishAssistantTheme
 import com.app.english.update.ApkInstaller
@@ -23,27 +25,30 @@ import timber.log.Timber
 class MainActivity : ComponentActivity() {
     @Inject lateinit var apkInstaller: ApkInstaller
 
+    @Inject lateinit var settingsStore: SettingsStore
+
     private val updateViewModel: AppUpdateViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            EnglishAssistantTheme {
+            val themeMode = settingsStore.getThemeMode()
+            val systemDark = isSystemInDarkTheme()
+            val useDark = when (themeMode) {
+                SettingsStore.THEME_LIGHT -> false
+                SettingsStore.THEME_DARK -> true
+                else -> systemDark
+            }
+            EnglishAssistantTheme(darkTheme = useDark) {
                 AppNavHost()
                 UpdateHost(updateViewModel, apkInstaller)
             }
         }
-        // Kick off the update check on cold start. Network failure is silently
-        // swallowed by AppUpdateManager; the dialog only appears when there is
-        // genuinely a newer version to offer.
         updateViewModel.check()
     }
 
     override fun onResume() {
         super.onResume()
-        // If the user just granted REQUEST_INSTALL_PACKAGES from settings and
-        // came back, the system will have already cleared Downloaded. We just
-        // re-check in case there's a new release behind the previous gate.
         updateViewModel.check()
     }
 }
@@ -54,8 +59,6 @@ private fun UpdateHost(viewModel: AppUpdateViewModel, installer: ApkInstaller) {
     val downloadState by viewModel.downloadState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // Reset transient download state when the user backgrounds the dialog so
-    // a new check isn't immediately overridden by a stale progress bar.
     LaunchedEffect(checkState) {
         if (checkState !is UpdateCheckState.UpdateAvailable) {
             viewModel.resetDownloadState()
