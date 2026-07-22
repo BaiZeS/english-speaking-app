@@ -102,6 +102,16 @@ class DailyScore(BaseModel):
     sessions: int
 
 
+class WeakestLesson(BaseModel):
+    """A lesson the user has practised but where the average score is low.
+    Used by the dashboard "推荐复习" block to surface weak spots."""
+
+    lesson_id: int
+    best_score: float
+    avg_score: float
+    attempts: int
+
+
 class StatsResponse(BaseModel):
     total_sessions: int
     avg_total: float
@@ -187,6 +197,11 @@ async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
 
     lessons_attempted = sorted({r.lesson_id for r in rows})
 
+    # Pick the three lessons where the user is weakest — i.e. practised at
+    # least twice (one attempt can be a fluke) and has the lowest best_score.
+    # Used by the Dashboard "推荐复习" card.
+    weakest = _weakest_lessons(rows, limit=3)
+
     return StatsResponse(
         total_sessions=n,
         avg_total=avg_total,
@@ -198,7 +213,31 @@ async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
         streak_days=streak,
         daily=daily,
         lessons_attempted=lessons_attempted,
+        weakest_lessons=weakest,
     )
+
+
+def _weakest_lessons(rows: list[History], limit: int = 3) -> list[WeakestLesson]:
+    """Group rows by lesson, drop single-attempt flukes, pick lowest best_score."""
+    by_lesson: dict[int, list[History]] = {}
+    for r in rows:
+        by_lesson.setdefault(r.lesson_id, []).append(r)
+    scored: list[WeakestLesson] = []
+    for lesson_id, items in by_lesson.items():
+        if len(items) < 2:
+            continue
+        best = max(r.score_total for r in items)
+        avg = sum(r.score_total for r in items) / len(items)
+        scored.append(
+            WeakestLesson(
+                lesson_id=lesson_id,
+                best_score=best,
+                avg_score=avg,
+                attempts=len(items),
+            )
+        )
+    scored.sort(key=lambda w: (w.best_score, -w.attempts))
+    return scored[:limit]
 
 
 @router.get("/stats", response_model=StatsResponse)

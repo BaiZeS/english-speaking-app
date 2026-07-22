@@ -137,7 +137,8 @@ fun StatsResponseDto.toDomain(): PracticeStats = PracticeStats(
     recentSessions = recentSessions,
     streakDays = streakDays,
     daily = daily.map { it.toDomain() },
-    lessonsAttempted = lessonsAttempted
+    lessonsAttempted = lessonsAttempted,
+    weakestLessons = weakestLessons.map { it.toDomain() }
 )
 
 fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
@@ -147,4 +148,12 @@ fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
         bestScore = bestScore,
         lastScore = lastScore,
         lastPracticedAt = lastPracticedAt
+    )
+
+fun WeakestLessonDto.toDomain(): com.app.english.domain.model.WeakestLesson =
+    com.app.english.domain.model.WeakestLesson(
+        lessonId = lessonId,
+        bestScore = bestScore,
+        avgScore = avgScore,
+        attempts = attempts
     )

@@ -141,4 +141,54 @@ class BooksDtoMappingTest {
         assertEquals(0, dto.attemptCount)
         assertEquals(null, dto.lastPracticedAt)
     }
+
+    @Test
+    fun statsResponse_decodesWeakestLessons() {
+        val payload = """
+            {
+              "total_sessions": 4,
+              "avg_total": 70.0,
+              "avg_pronunciation": 72.0,
+              "avg_fluency": 68.0,
+              "avg_completeness": 70.0,
+              "best_total": 80.0,
+              "recent_sessions": 4,
+              "streak_days": 2,
+              "daily":[],
+              "lessons_attempted":[1,2,3,4],
+              "weakest_lessons":[
+                {"lesson_id":1,"best_score":55.0,"avg_score":50.0,"attempts":3},
+                {"lesson_id":3,"best_score":75.0,"avg_score":70.0,"attempts":2}
+              ]
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(StatsResponseDto.serializer(), payload)
+        assertEquals(2, dto.weakestLessons.size)
+        assertEquals(1, dto.weakestLessons[0].lessonId)
+        assertEquals(55.0, dto.weakestLessons[0].bestScore, 0.001)
+        assertEquals(50.0, dto.weakestLessons[0].avgScore, 0.001)
+        assertEquals(3, dto.weakestLessons[0].attempts)
+        assertEquals(3, dto.weakestLessons[1].lessonId)
+    }
+
+    @Test
+    fun statsResponse_weakestLessonsDefaultsToEmpty() {
+        // Older backend without the field should not crash; default to empty list.
+        val payload = """
+            {
+              "total_sessions":0,
+              "avg_total":0.0,
+              "avg_pronunciation":0.0,
+              "avg_fluency":0.0,
+              "avg_completeness":0.0,
+              "best_total":0.0,
+              "recent_sessions":0,
+              "streak_days":0,
+              "daily":[],
+              "lessons_attempted":[]
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(StatsResponseDto.serializer(), payload)
+        assertEquals(emptyList<Any>(), dto.weakestLessons)
+    }
 }

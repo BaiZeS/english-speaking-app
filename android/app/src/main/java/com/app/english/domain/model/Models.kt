@@ -110,7 +110,8 @@ data class PracticeStats(
     val recentSessions: Int,
     val streakDays: Int,
     val daily: List<DailyScore>,
-    val lessonsAttempted: List<Int>
+    val lessonsAttempted: List<Int>,
+    val weakestLessons: List<WeakestLesson> = emptyList()
 ) {
     val hasData: Boolean get() = totalSessions > 0
 }
@@ -124,3 +125,10 @@ data class LessonProgress(
 ) {
     val isPracticed: Boolean get() = attemptCount > 0
 }
+
+data class WeakestLesson(
+    val lessonId: Int,
+    val bestScore: Double,
+    val avgScore: Double,
+    val attempts: Int
+)

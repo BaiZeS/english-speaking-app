@@ -205,7 +205,8 @@ data class StatsResponseDto(
     @SerialName("recent_sessions") val recentSessions: Int,
     @SerialName("streak_days") val streakDays: Int,
     val daily: List<DailyScoreDto>,
-    @SerialName("lessons_attempted") val lessonsAttempted: List<Int>
+    @SerialName("lessons_attempted") val lessonsAttempted: List<Int>,
+    @SerialName("weakest_lessons") val weakestLessons: List<WeakestLessonDto> = emptyList()
 )
 
 @Serializable
@@ -215,4 +216,12 @@ data class LessonProgressDto(
     @SerialName("best_score") val bestScore: Double,
     @SerialName("last_score") val lastScore: Double,
     @SerialName("last_practiced_at") val lastPracticedAt: String? = null
+)
+
+@Serializable
+data class WeakestLessonDto(
+    @SerialName("lesson_id") val lessonId: Int,
+    @SerialName("best_score") val bestScore: Double,
+    @SerialName("avg_score") val avgScore: Double,
+    val attempts: Int
 )

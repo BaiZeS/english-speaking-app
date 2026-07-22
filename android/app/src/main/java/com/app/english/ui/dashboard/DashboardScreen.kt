@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.DailyScore
 import com.app.english.domain.model.PracticeStats
+import com.app.english.domain.model.WeakestLesson
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.theme.color
@@ -102,6 +103,12 @@ private fun DashboardBody(
         }
         TopStatsRow(stats = stats)
         StreakCard(streakDays = stats.streakDays, recentSessions = stats.recentSessions)
+        if (stats.weakestLessons.isNotEmpty()) {
+            ReviewSuggestionsCard(
+                items = stats.weakestLessons,
+                onClick = onHistoryClick
+            )
+        }
         TrendCard(daily = stats.daily)
         SubjectBreakdownCard(stats = stats)
         Card(
@@ -415,5 +422,57 @@ private fun EmptyDashboard() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp)
         )
+    }
+}
+
+@Composable
+private fun ReviewSuggestionsCard(items: List<WeakestLesson>, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "推荐复习",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                text = "这些课练习过但分数较低，建议重练巩固。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            items.forEach { item ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Lesson " + item.lessonId.toString(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text =
+                            "平均 " + item.avgScore.toInt().toString() + " · 最高 " +
+                                item.bestScore.toInt().toString(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = ScoreColorMapper.level(item.bestScore).color()
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = item.attempts.toString() + " 次",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        }
     }
 }
