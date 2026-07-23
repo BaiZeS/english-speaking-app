@@ -12,6 +12,19 @@ from app.api.v1.deps import get_db
 from app.models.db import History, User
 from app.models.schema import HistoryItem, HistoryWriteRequest
 
+
+def _as_utc(dt: datetime) -> datetime:
+    """Coerce a datetime to aware UTC.
+
+    Production (postgres) may return aware datetimes; tests (sqlite) return naive
+    ones because the SQLite driver strips tzinfo. Treat naive values as already-UTC
+    so we never compare/astimezone across naive vs aware.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 router = APIRouter(tags=["history"])
 
 
@@ -57,7 +70,7 @@ async def write_history(
         score_pronunciation=h.score_pronunciation,
         score_fluency=h.score_fluency,
         score_completeness=h.score_completeness,
-        created_at=h.created_at.isoformat(),
+        created_at=_as_utc(h.created_at).isoformat(),
     )
 
 
@@ -87,7 +100,7 @@ async def list_history(
             score_pronunciation=h.score_pronunciation,
             score_fluency=h.score_fluency,
             score_completeness=h.score_completeness,
-            created_at=h.created_at.isoformat(),
+            created_at=_as_utc(h.created_at).isoformat(),
         )
         for h in rows
     ]
@@ -123,6 +136,7 @@ class StatsResponse(BaseModel):
     streak_days: int
     daily: list[DailyScore]
     lessons_attempted: list[int]
+    weakest_lessons: list[WeakestLesson] = []  # surface low-scoring lessons for review
 
 
 async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
@@ -159,14 +173,14 @@ async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
     best = max(r.score_total for r in rows)
 
     seven_days_ago = datetime.now(UTC) - timedelta(days=7)
-    recent = [r for r in rows if r.created_at >= seven_days_ago]
+    recent = [r for r in rows if _as_utc(r.created_at) >= seven_days_ago]
 
     # Build daily buckets for the last 14 days so the dashboard has a visible
     # trend even for low-frequency users. Older days are dropped to keep the
     # payload tiny.
     by_day: dict[str, list[History]] = {}
     for r in rows:
-        d = r.created_at.astimezone(UTC).date().isoformat()
+        d = _as_utc(r.created_at).date().isoformat()
         by_day.setdefault(d, []).append(r)
     today = datetime.now(UTC).date()
     daily: list[DailyScore] = []

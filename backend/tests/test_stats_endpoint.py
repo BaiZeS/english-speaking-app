@@ -162,7 +162,11 @@ async def test_daily_buckets_skip_empty_days(db: AsyncSession, client: httpx.Asy
     assert (today - timedelta(days=5)).date().isoformat() in dates
     assert (today - timedelta(days=13)).date().isoformat() in dates
     assert (today - timedelta(days=20)).date().isoformat() not in dates
-    assert data["recent_sessions"] == 2
+    # recent_sessions counts all rows in the last 7 days for this device. The
+    # earlier POST /api/v1/history call (L131-143) inserts one today row, and
+    # _seed_history adds two more within 7 days (today + 5 days ago). The
+    # 13d and 20d rows fall outside the 7-day window.
+    assert data["recent_sessions"] == 3
 
 
 @pytest.mark.asyncio
