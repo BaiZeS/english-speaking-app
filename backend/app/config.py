@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # 当一个 release 带多个 .apk asset 时, 按这个 glob 优先匹配.
     app_github_asset_glob: str = Field(default="EnglishAssistant-*.apk")
 
+    # ====== TTS v2 兜底开关 ======
+    # 当 Spark 凭据未配置时, 是否允许回退到 v2 老接口 (XunfeiTTSProvider).
+    # 默认关闭: 生产部署应配齐 Spark 凭据. 仅作为部署期/降级期的 opt-in 逃生口,
+    # 不允许 Spark 失败时静默降级到 v2 (那是 bug 而非部署期降级).
+    tts_allow_v2_legacy: bool = Field(default=False)
+
     # ====== TTS 缓存 ======
     tts_cache_ttl: int = Field(default=86400)
 

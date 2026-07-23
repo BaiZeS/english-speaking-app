@@ -200,6 +200,7 @@ async def test_synthesize_sends_x_api_key_header(monkeypatch: pytest.MonkeyPatch
     assert result.audio_bytes == b"\x00" * 10
     assert result.duration_ms > 0
     assert result.audio_url.startswith("/static/tts/")
+    assert result.source == "spark", "successful spark call must mark source=spark"
 
 
 @pytest.mark.asyncio
@@ -224,17 +225,24 @@ async def test_synthesize_accumulates_streaming_frames(
         result = await SparkTtsProvider().synthesize("Hi", "x5_EnUs_Grant_flow")
 
     assert result.audio_bytes == chunk_a + chunk_b + chunk_c
+    assert result.source == "spark"
 
 
 @pytest.mark.asyncio
 async def test_synthesize_raises_on_error_code(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    """header.code != 0 必须抛 RuntimeError, 让 SparkTtsProvider 自动 fallback 到 v2."""
+    """header.code != 0 必须抛 RuntimeError (不静默降级到 v2 / stub).
+
+    DEV-2026-07-22-TTS-A1: 旧契约 ('异常 → fallback stub') 把真实错误藏了起来,
+    前端误把假音频当自然语音. 新契约: 凭据齐全时 Spark 错误直接冒泡,
+    让 endpoint 映射为 503 + TTS_UNAVAILABLE.
+    """
     monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
     monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
     monkeypatch.setattr(spark_tts.settings, "tts_audio_dir", str(tmp_path))
-    # 同时清空 v2 凭据, 让 fallback 链最终走到 stub (避免真调网络)
+    # 故意不连真实 v2: 即便 v2 凭据被配上, 也不允许静默降级走它.
     monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "")
     monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "")
+    monkeypatch.setattr(spark_tts.settings, "tts_allow_v2_legacy", False)
 
     err_frame = json.dumps(
         {
@@ -244,22 +252,24 @@ async def test_synthesize_raises_on_error_code(monkeypatch: pytest.MonkeyPatch, 
     )
     with _capture_ws_call() as cap:
         cap["received"] = [err_frame]
-        # 不应抛异常 — fallback 链兜住
-        result = await SparkTtsProvider().synthesize("Hello", "x5_EnUs_Grant_flow")
-
-    # fallback 到 stub: 产物是 STUB_TTS:: 前缀的 fake bytes
-    assert result.audio_bytes.startswith(b"STUB_TTS::")
-    assert result.audio_url.endswith(".m4a")
+        # 现在必须抛错, 不能 fallback.
+        with pytest.raises(RuntimeError, match="spark"):
+            await SparkTtsProvider().synthesize("Hello", "x5_EnUs_Grant_flow")
 
 
 @pytest.mark.asyncio
 async def test_synthesize_falls_back_when_creds_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """没配 XUNFEI_SPARK_TTS_PASSWORD 直接跳过 spark, 走 v2 老接口 (这里也清空 -> stub)."""
+    """完全无凭据 + legacy opt-in 关闭时直接走 stub (开发期占位).
+
+    DEV-2026-07-22-TTS-A1: 即使没有凭据, 也会在结果上标记 source='stub',
+    让前端能识别这是占位音频而非真实语音.
+    """
     monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "")
     monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "")
     monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "")
+    monkeypatch.setattr(spark_tts.settings, "tts_allow_v2_legacy", False)
 
     # 不应调用 websockets.connect
     import app.services.spark_tts as mod
@@ -275,6 +285,7 @@ async def test_synthesize_falls_back_when_creds_missing(
     result = await SparkTtsProvider().synthesize("Hi", "x5_EnUs_Grant_flow")
     assert called["n"] == 0
     assert result.audio_bytes.startswith(b"STUB_TTS::")
+    assert result.source == "stub", "no-creds fallback must be tagged as stub"
 
 
 @pytest.mark.asyncio
@@ -304,6 +315,7 @@ async def test_synthesize_uses_disk_cache(monkeypatch: pytest.MonkeyPatch, tmp_p
     r2 = await SparkTtsProvider().synthesize("Cache test", "x5_EnUs_Grant_flow")
     assert r2.audio_bytes == b"hello"
     assert r2.audio_url == r1.audio_url
+    assert r1.source == "spark" and r2.source == "spark"
 
 
 @pytest.mark.asyncio
@@ -316,6 +328,142 @@ async def test_unknown_voice_does_not_call_spark(
     monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "")
 
     # "k12_female" 不在 _KNOWN_VCNS, 但因为 spark 凭据空直接走 stub,
-    # 实际不会调 wss. 这里只断言没抛错且产物合理.
+    # 实际不会调 wss. 这里只断言没抛错且产物合理 (source 标记可识别).
     result = await SparkTtsProvider().synthesize("Hi", "k12_female")
     assert result.audio_bytes.startswith(b"STUB_TTS::")
+    assert result.source == "stub"
+
+
+# ====== 静默降级修复 (DEV-2026-07-22-TTS-A1) ======
+# 新契约: 配齐 Spark 凭据时调用失败不应静默降级到 v2 / stub — 应抛可见错误让上层 (endpoint) 处理.
+
+
+@pytest.mark.asyncio
+async def test_synthesize_raises_on_error_code_with_creds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """配齐 Spark 凭据时 header.code != 0 必须抛 RuntimeError (不静默降级到 stub).
+
+    旧实现会把 Spark 错误吞掉, 走 v2 老接口再降级 stub, 前端无感知. 新实现直接抛出,
+    endpoint 映射为 503 + TTS_UNAVAILABLE.
+    """
+    monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
+    monkeypatch.setattr(spark_tts.settings, "tts_audio_dir", str(tmp_path))
+    # 即便 v2 凭据齐全, 也不允许静默降级 (Spark 配齐就是强制走 Spark)
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "v2_key")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "v2_secret")
+
+    err_frame = json.dumps(
+        {
+            "header": {"code": 11200, "message": "功能未授权", "sid": "x", "status": 2},
+            "payload": {},
+        }
+    )
+    with _capture_ws_call() as cap:
+        cap["received"] = [err_frame]
+        with pytest.raises(RuntimeError, match="spark"):
+            await SparkTtsProvider().synthesize("Hello", "x5_EnUs_Grant_flow")
+
+
+@pytest.mark.asyncio
+async def test_synthesize_raises_when_spark_returns_no_audio_with_creds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """配齐 Spark 凭据, 服务正常返回但 payload 中无音频块 — 必须抛错, 不静默降级."""
+    monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
+    monkeypatch.setattr(spark_tts.settings, "tts_audio_dir", str(tmp_path))
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "v2_key")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "v2_secret")
+
+    # status=2 完成但 audio 字段为空
+    no_audio_frame = json.dumps(
+        {
+            "header": {"code": 0, "message": "success", "sid": "x", "status": 2},
+            "payload": {"audio": {"encoding": "lame", "sample_rate": 24000, "status": 2}},
+        }
+    )
+    with _capture_ws_call() as cap:
+        cap["received"] = [no_audio_frame]
+        with pytest.raises(RuntimeError):
+            await SparkTtsProvider().synthesize("Hello", "x5_EnUs_Grant_flow")
+
+
+@pytest.mark.asyncio
+async def test_spark_failure_with_creds_does_not_invoke_v2_or_stub(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """'配齐凭据时失败不静默降级'契约断言: Spark 抛错时, 既不调 v2 也不调 stub.
+
+    把 v2 / stub 的 synthesize 替换成会爆炸的探针, 间接验证 fallback 链被切断.
+    即便 v2 凭据齐全 + legacy opt-in 开启, Spark 失败必须抛错, 不允许静默降级.
+    """
+    monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
+    monkeypatch.setattr(spark_tts.settings, "tts_audio_dir", str(tmp_path))
+    # 即便 v2 凭据齐全 + legacy opt-in 开启, 也不允许静默降级.
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "v2_key")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "v2_secret")
+    monkeypatch.setattr(spark_tts.settings, "tts_allow_v2_legacy", True)
+
+    err_frame = json.dumps(
+        {
+            "header": {"code": 11200, "message": "err", "sid": "x", "status": 2},
+            "payload": {},
+        }
+    )
+
+    provider = SparkTtsProvider()
+    v2_called = {"n": 0}
+    stub_called = {"n": 0}
+
+    async def _fake_v2_synthesize(_t: str, _v: str) -> Any:
+        v2_called["n"] += 1
+        raise AssertionError("v2 fallback should not be invoked when spark creds present")
+
+    async def _fake_stub_synthesize(_t: str, _v: str) -> Any:
+        stub_called["n"] += 1
+        raise AssertionError("stub fallback should not be invoked when spark creds present")
+
+    monkeypatch.setattr(provider._legacy, "synthesize", _fake_v2_synthesize)
+    monkeypatch.setattr(provider._stub, "synthesize", _fake_stub_synthesize)
+
+    with _capture_ws_call() as cap:
+        cap["received"] = [err_frame]
+        with pytest.raises(RuntimeError):
+            await provider.synthesize("Hello", "x5_EnUs_Grant_flow")
+
+    assert v2_called["n"] == 0, "v2 fallback was invoked despite spark creds present"
+    assert stub_called["n"] == 0, "stub fallback was invoked despite spark creds present"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_marks_source_spark_on_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """成功路径在 TtsResult 上标记 source='spark', 让 endpoint 透传给前端可辨识音源."""
+    monkeypatch.setattr(spark_tts.settings, "xunfei_app_id", "test_app_id")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "ak-test-123")
+    monkeypatch.setattr(spark_tts.settings, "tts_audio_dir", str(tmp_path))
+
+    with _capture_ws_call() as cap:
+        cap["received"] = [_audio_frame(b"\x11" * 16, status=2)]
+        r = await SparkTtsProvider().synthesize("Hi", "x5_EnUs_Grant_flow")
+    assert r.source == "spark"
+    assert r.audio_bytes == b"\x11" * 16
+
+
+@pytest.mark.asyncio
+async def test_synthesize_marks_source_stub_when_no_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完全无凭据时走 stub: 结果要可识别 (source='stub' + STUB_TTS:: 前缀), 前端能区分 fake 音频."""
+    monkeypatch.setattr(spark_tts.settings, "xunfei_spark_tts_password", "")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_key", "")
+    monkeypatch.setattr(spark_tts.settings, "xunfei_api_secret", "")
+    monkeypatch.setattr(spark_tts.settings, "tts_allow_v2_legacy", False)
+
+    r = await SparkTtsProvider().synthesize("Hi", "x5_EnUs_Grant_flow")
+    assert r.source == "stub"
+    assert r.audio_bytes.startswith(b"STUB_TTS::")
