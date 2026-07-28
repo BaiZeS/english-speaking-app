@@ -16,6 +16,7 @@ class StubTTSProvider:
             audio_bytes=f"STUB_TTS::{h}".encode(),
             duration_ms=duration_ms,
             audio_url=f"/static/tts/{h}.m4a",
+            source="stub",  # 明确标记假音频, 前端可据此跳过/告警 (DEBUG-2026-07-22-TTS-A1)
         )
 
 

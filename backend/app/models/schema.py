@@ -40,6 +40,10 @@ class LessonDetail(BaseModel):
 class TtsResponse(BaseModel):
     audio_url: str
     duration_ms: int
+    # 音源标记: "spark"=讯飞超拟人, "v2"=讯飞在线合成 v2 老接口, "stub"=本地占位假音频.
+    # 前端可据此判断是否真实语音 (避免 stub 音频被当成自然语音播放).
+    # 旧客户端不读此字段也兼容 (向后兼容新增字段).
+    source: str = "stub"
 
 
 # ====== Score ======

@@ -60,13 +60,20 @@ def _audio_cache_path(text: str, voice: str) -> tuple[str, str]:
 
 
 class XunfeiTTSProvider:
-    """讯飞在线语音合成 v2 provider. 缺凭证时 fallback 到 stub."""
+    """讯飞在线语音合成 v2 provider (仅作 Spark 缺凭据时的 opt-in legacy).
+
+    行为契约:
+    - 凭据齐全: 直接调讯飞 v2. 失败/空音频一律抛 RuntimeError, 不静默降级 stub
+      (避免前端误把假音频当自然语音播放).
+    - 凭据缺失: fallback 到 stub (开发期占位, 也用于此模块被直调的兼容场景).
+    """
 
     def __init__(self) -> None:
         self._stub = StubTTSProvider()
 
     async def synthesize(self, text: str, voice: str) -> TtsResult:
         if not (settings.xunfei_app_id and settings.xunfei_api_key and settings.xunfei_api_secret):
+            # 凭据缺失: 退化到 stub (仅开发期占位; 生产应配齐凭据或显式 opt-in).
             return await self._stub.synthesize(text, voice)
 
         # 命中磁盘缓存则直接返回 (同 text+voice 复用)
@@ -75,7 +82,12 @@ class XunfeiTTSProvider:
             duration_ms = max(200, len(text) * 80)
             with open(disk_path, "rb") as f:
                 audio_bytes = f.read()
-            return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
+            return TtsResult(
+                audio_bytes=audio_bytes,
+                duration_ms=duration_ms,
+                audio_url=url_path,
+                source="v2",
+            )
 
         vcn = voice or settings.xunfei_tts_default_vcn
         auth_url = _build_auth_url()
@@ -114,16 +126,23 @@ class XunfeiTTSProvider:
                     if data.get("status") == 2:
                         break
         except Exception as e:
-            logger.error("xunfei tts call failed, falling back to stub: {}", e)
-            return await self._stub.synthesize(text, voice)
+            # 凭据齐全却调不通 — 不允许静默降级 stub (会让前端误播假音频).
+            # 让上层 endpoint 收到 RuntimeError 后映射为 503 + TTS_UNAVAILABLE.
+            logger.error("xunfei tts v2 call failed: {}", e)
+            raise
 
         if not audio_chunks:
-            logger.warning("xunfei tts returned no audio, falling back to stub")
-            return await self._stub.synthesize(text, voice)
+            logger.error("xunfei tts v2 returned no audio payload")
+            raise RuntimeError("xunfei tts v2 returned no audio")
 
         audio_bytes = b"".join(audio_chunks)
         with open(disk_path, "wb") as f:
             f.write(audio_bytes)
         duration_ms = max(200, len(text) * 80)
         logger.info("xunfei tts ok vcn={} bytes={} -> {}", vcn, len(audio_bytes), url_path)
-        return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
+        return TtsResult(
+            audio_bytes=audio_bytes,
+            duration_ms=duration_ms,
+            audio_url=url_path,
+            source="v2",
+        )

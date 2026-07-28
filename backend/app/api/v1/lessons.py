@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -17,6 +19,18 @@ from app.models.schema import (
 from app.services import corpus_loader
 
 router = APIRouter(tags=["lessons"])
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Coerce a datetime to aware UTC.
+
+    Production (postgres) may return aware datetimes; tests (sqlite) return naive
+    ones because the SQLite driver strips tzinfo. Treat naive values as already-UTC
+    so the API surface always returns timezone-aware ISO8601 timestamps.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 @router.get("/lessons", response_model=list[LessonSummary])
@@ -124,5 +138,5 @@ async def get_lesson_progress(
         attempt_count=len(rows),
         best_score=best,
         last_score=most_recent.score_total,
-        last_practiced_at=most_recent.created_at.isoformat(),
+        last_practiced_at=_as_utc(most_recent.created_at).isoformat(),
     )

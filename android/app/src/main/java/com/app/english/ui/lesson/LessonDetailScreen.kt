@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -81,6 +82,7 @@ fun LessonDetailScreen(
             )
             is LessonDetailUiState.Success -> LessonDetailBody(
                 lesson = current.lesson,
+                progress = current.progress,
                 onStart = { mode -> onStartPractice(viewModel.lessonId, mode) },
                 onStartFreeDialogue = { onStartFreeDialogue(viewModel.lessonId) },
                 modifier = Modifier.padding(padding)
@@ -92,6 +94,7 @@ fun LessonDetailScreen(
 @Composable
 private fun LessonDetailBody(
     lesson: LessonDetail,
+    progress: LessonProgress?,
     onStart: (PlayerMode) -> Unit,
     onStartFreeDialogue: () -> Unit,
     modifier: Modifier = Modifier
@@ -113,8 +116,8 @@ private fun LessonDetailBody(
                 totalWords = totalWords
             )
         }
-        state.progress?.takeIf { it.isPracticed }?.let { progress ->
-            item { ProgressCard(progress = progress) }
+        progress?.takeIf { it.isPracticed }?.let { practiced ->
+            item { ProgressCard(progress = practiced) }
         }
         item { PreviewSection(lesson = lesson) }
         item {

@@ -16,10 +16,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -130,8 +132,7 @@ private fun SearchBar(query: String, onChange: (String) -> Unit, enabled: Boolea
                 }
             }
         },
-        placeholder = { Text("搜索课文标题") },
-        singleLine = true
+        placeholder = { Text("搜索课文标题") }
     )
 }
 
@@ -316,7 +317,7 @@ private fun BookSelector(books: List<Book>, selectedId: String, onSelect: (Strin
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Icon(
-                Icons.AutoMirrored.Filled.ArrowDropDown,
+                Icons.Filled.ArrowDropDown,
                 contentDescription = "切换课本",
                 modifier = Modifier.size(18.dp)
             )

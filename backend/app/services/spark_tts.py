@@ -115,8 +115,15 @@ def _build_request_frame(app_id: str, voice: str, text_b64: str) -> dict[str, ob
 class SparkTtsProvider:
     """讯飞 Spark 超拟人合成 provider.
 
-    缺 APIPassword / app_id 时 fallback 到 v2 老接口 (XunfeiTTSProvider),
-    再降级到 stub. 这样部署期/降级期不影响本地开发跑通.
+    行为契约 (DEV-2026-07-22-TTS-A1 修复后):
+    - 凭据齐全 (password + app_id): **强制走 Spark**. 失败/空音频一律抛 RuntimeError,
+      不再静默降级到 v2 或 stub — 让上层 endpoint 映射为 503 + TTS_UNAVAILABLE.
+    - 凭据缺失 + tts_allow_v2_legacy=True + v2 凭据齐全: 走 v2 老接口 (opt-in legacy).
+      v2 失败同样抛错.
+    - 凭据缺失 (或 legacy 未开启): 退化到 stub (开发期占位, 响应可识别).
+
+    之前的设计把 Spark 失败静默降级到 v2 -> stub, 用户的"超拟人"配置听成普通 TTS
+    或假音频, 排查困难. 详见 backlog DEV-2026-07-22-TTS-A1.
     """
 
     def __init__(self) -> None:
@@ -125,11 +132,25 @@ class SparkTtsProvider:
 
     async def synthesize(self, text: str, voice: str) -> TtsResult:
         voice_norm = _normalize_voice(voice)
+        spark_creds_ok = bool(settings.xunfei_spark_tts_password and settings.xunfei_app_id)
 
-        # 无 Spark 凭据 → 退到 v2 老接口 (兼容未升级控制台的环境)
-        if not (settings.xunfei_spark_tts_password and settings.xunfei_app_id):
-            logger.debug("spark tts creds missing, fallback to v2: {!r}", text[:30])
-            return await self._legacy.synthesize(text, voice_norm)
+        if not spark_creds_ok:
+            # 无 Spark 凭据: 按 tts_allow_v2_legacy 配置决定走 v2 (opt-in) 还是 stub.
+            # 注意: 即便 opt-in 开启, v2 失败仍会抛错 (见 xunfei_tts.py 新契约),
+            # 不会再次降级 — 这避免了 'spark 配不齐就用 v2, v2 失败再播假音频' 的双层静默坑.
+            if settings.tts_allow_v2_legacy:
+                logger.debug(
+                    "spark tts creds missing, legacy opt-in enabled, using v2: {!r}",
+                    text[:30],
+                )
+                return await self._legacy.synthesize(text, voice_norm)
+            logger.debug(
+                "spark tts creds missing and legacy disabled, fallback to stub: {!r}",
+                text[:30],
+            )
+            return await self._stub.synthesize(text, voice_norm)
+
+        # ---- Spark 凭据齐全: 强制走 Spark, 不允许静默降级 ----
 
         # 命中磁盘缓存
         disk_path, url_path = _audio_cache_path(text, voice_norm)
@@ -137,23 +158,35 @@ class SparkTtsProvider:
             with open(disk_path, "rb") as f:
                 audio_bytes = f.read()
             duration_ms = max(200, len(audio_bytes) // 48)  # mp3@24k 约 48B/ms
-            return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
+            return TtsResult(
+                audio_bytes=audio_bytes,
+                duration_ms=duration_ms,
+                audio_url=url_path,
+                source="spark",
+            )
 
         try:
             audio_bytes = await self._synthesize(text, voice_norm)
         except Exception as e:
-            logger.error("spark tts call failed, fallback to v2: {}", e)
-            return await self._legacy.synthesize(text, voice_norm)
+            # Spark 凭据齐全却调不通 — 必须把错误冒泡, 让 endpoint 返 503.
+            # 严禁 fallback 到 v2 / stub (那是最初的设计 bug).
+            logger.error("spark tts call failed (no silent fallback): {}", e)
+            raise
 
         if not audio_bytes:
-            logger.warning("spark tts returned no audio, fallback to v2")
-            return await self._legacy.synthesize(text, voice_norm)
+            logger.error("spark tts returned no audio payload (no silent fallback)")
+            raise RuntimeError("spark tts returned no audio")
 
         with open(disk_path, "wb") as f:
             f.write(audio_bytes)
         duration_ms = max(200, len(audio_bytes) // 48)
         logger.info("spark tts ok vcn={} bytes={} -> {}", voice_norm, len(audio_bytes), url_path)
-        return TtsResult(audio_bytes=audio_bytes, duration_ms=duration_ms, audio_url=url_path)
+        return TtsResult(
+            audio_bytes=audio_bytes,
+            duration_ms=duration_ms,
+            audio_url=url_path,
+            source="spark",
+        )
 
     async def _synthesize(self, text: str, voice_norm: str) -> bytes:
         """连接 wss, 一次性发送 status=2 请求, 累积流式返回的音频块."""
