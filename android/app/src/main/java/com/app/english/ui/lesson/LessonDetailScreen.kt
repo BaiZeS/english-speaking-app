@@ -82,6 +82,7 @@ fun LessonDetailScreen(
             )
             is LessonDetailUiState.Success -> LessonDetailBody(
                 lesson = current.lesson,
+                progress = current.progress,
                 onStart = { mode -> onStartPractice(viewModel.lessonId, mode) },
                 onStartFreeDialogue = { onStartFreeDialogue(viewModel.lessonId) },
                 modifier = Modifier.padding(padding)
@@ -93,6 +94,7 @@ fun LessonDetailScreen(
 @Composable
 private fun LessonDetailBody(
     lesson: LessonDetail,
+    progress: LessonProgress?,
     onStart: (PlayerMode) -> Unit,
     onStartFreeDialogue: () -> Unit,
     modifier: Modifier = Modifier
@@ -114,8 +116,8 @@ private fun LessonDetailBody(
                 totalWords = totalWords
             )
         }
-        state.progress?.takeIf { it.isPracticed }?.let { progress ->
-            item { ProgressCard(progress = progress) }
+        progress?.takeIf { it.isPracticed }?.let { practiced ->
+            item { ProgressCard(progress = practiced) }
         }
         item { PreviewSection(lesson = lesson) }
         item {
