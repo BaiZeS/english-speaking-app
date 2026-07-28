@@ -131,9 +131,7 @@ async def test_tts_returns_503_on_websockets_transport_error(
     # 且该基类覆盖 InvalidStatus / InvalidURI / ConnectionClosed 等子类,
     # 也间接覆盖更底层的 transport 错误 (握手失败/TLS/超时 等).
     async def _boom(self, _t: str, _v: str) -> bytes:
-        raise websockets.exceptions.WebSocketException(
-            "simulated websockets.connect failure"
-        )
+        raise websockets.exceptions.WebSocketException("simulated websockets.connect failure")
 
     from app.services import spark_tts as spark_mod
 

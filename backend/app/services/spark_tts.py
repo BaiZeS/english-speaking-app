@@ -132,9 +132,7 @@ class SparkTtsProvider:
 
     async def synthesize(self, text: str, voice: str) -> TtsResult:
         voice_norm = _normalize_voice(voice)
-        spark_creds_ok = bool(
-            settings.xunfei_spark_tts_password and settings.xunfei_app_id
-        )
+        spark_creds_ok = bool(settings.xunfei_spark_tts_password and settings.xunfei_app_id)
 
         if not spark_creds_ok:
             # 无 Spark 凭据: 按 tts_allow_v2_legacy 配置决定走 v2 (opt-in) 还是 stub.
