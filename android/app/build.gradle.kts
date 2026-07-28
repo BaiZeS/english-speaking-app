@@ -24,23 +24,33 @@ android {
             useSupportLibrary = true
         }
 
-        // Backend base URL. Emulator maps host loopback via 10.0.2.2.
-        buildConfigField(
-            "String",
-            "BACKEND_BASE_URL",
-            "\"http://10.0.2.2:8000/api/v1/\"",
-        )
+        // Backend base URL is set per build type below (debug = emulator
+        // loopback via 10.0.2.2; release = public server).
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
+            // Emulator maps the host loopback to 10.0.2.2, so a debug build on
+            // an emulator reaches the backend running on the dev machine.
+            buildConfigField(
+                "String",
+                "BACKEND_BASE_URL",
+                "\"http://10.0.2.2:8000/api/v1/\"",
+            )
         }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
+            )
+            // Production builds point at the public backend host (HTTP for now;
+            // cleartext is permitted via AndroidManifest usesCleartextTraffic).
+            buildConfigField(
+                "String",
+                "BACKEND_BASE_URL",
+                "\"http://118.89.58.84:8000/api/v1/\"",
             )
         }
     }
