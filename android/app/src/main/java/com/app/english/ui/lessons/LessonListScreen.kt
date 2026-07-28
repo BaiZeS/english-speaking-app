@@ -131,7 +131,7 @@ private fun SearchBar(query: String, onChange: (String) -> Unit, enabled: Boolea
                 }
             }
         },
-        placeholder = { Text("搜索课文标题") },
+        placeholder = { Text("搜索课文标题") }
     )
 }
 
