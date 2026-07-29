@@ -27,28 +27,19 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0")
 
-    # ====== 讯飞 (主) ======
+    # ====== 讯飞 ISE (语音评测, 保留) ======
     xunfei_app_id: str = Field(default="")
     xunfei_api_key: str = Field(default="")
     xunfei_api_secret: str = Field(default="")
 
-    # ====== 讯飞 TTS ======
-    # 默认 vcn 走超拟人 Spark TTS (美式英文女声). 切换到 v2 老音色 (xiaoyan 等)
-    # 只需把 default 改回去并配 XUNFEI_API_KEY/SECRET, 不需改代码.
-    xunfei_tts_default_vcn: str = Field(default="x5_EnUs_Grant_flow")
-    # 逗号分隔的发音人列表, app 设置页可切换. 必须是 Spark TTS 控制台已开通的 vcn.
-    xunfei_tts_voices: str = Field(default="x5_EnUs_Grant_flow,x5_EnUs_Lila_flow")
+    # ====== MiMo TTS ======
+    mimo_api_key: str = Field(default="")
+    mimo_tts_base_url: str = Field(default="https://api.xiaomimimo.com/v1")
+    mimo_tts_model: str = Field(default="mimo-v2.5-tts")
+    mimo_tts_default_voice: str = Field(default="Mia")
+    mimo_tts_voices: str = Field(default="Mia,Chloe,Milo,Dean")
     # 合成音频文件的存放目录, 挂载到 /static
     tts_audio_dir: str = Field(default="static/tts")
-
-    # ====== 讯飞 超拟人 TTS (主用) ======
-    # Spark 超拟人合成 API (https://www.xfyun.cn/doc/spark/super%20smart-tts.html)
-    # 鉴权用 APIPassword + x-api-key 请求头, 比 v2 的 hmac-sha256 URL 鉴权简单.
-    # 端点固定, 控制台开通后即用. 未配置则自动 fallback 到 v2 老接口, 再降级到 stub.
-    xunfei_spark_tts_password: str = Field(default="")
-    xunfei_spark_tts_url: str = Field(
-        default="wss://cbm01.cn-huabei-1.xf-yun.com/v1/private/mcd9m97e6"
-    )
 
     # ====== OpenAI / 阿里 (备选) ======
     openai_api_key: str = Field(default="")
@@ -85,12 +76,6 @@ class Settings(BaseSettings):
     app_github_asset_name: str = Field(default="app-debug.apk")
     # 当一个 release 带多个 .apk asset 时, 按这个 glob 优先匹配.
     app_github_asset_glob: str = Field(default="EnglishAssistant-*.apk")
-
-    # ====== TTS v2 兜底开关 ======
-    # 当 Spark 凭据未配置时, 是否允许回退到 v2 老接口 (XunfeiTTSProvider).
-    # 默认关闭: 生产部署应配齐 Spark 凭据. 仅作为部署期/降级期的 opt-in 逃生口,
-    # 不允许 Spark 失败时静默降级到 v2 (那是 bug 而非部署期降级).
-    tts_allow_v2_legacy: bool = Field(default=False)
 
     # ====== TTS 缓存 ======
     tts_cache_ttl: int = Field(default=86400)

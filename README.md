@@ -33,7 +33,7 @@
 
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16 + Redis 7
-- **AI 服务**：讯飞（主，TTS 在线合成 + ISE 语音评测，逐词音素评分）+ OpenAI/阿里（备选 LLM）
+- **AI 服务**：MiMo TTS（语音合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ OpenAI/阿里（备选 LLM）
 - **CI**：GitHub Actions（零环境开发，本机不装 Android SDK）
 
 ## 快速开始
@@ -54,7 +54,7 @@ uv run alembic upgrade head            # 跑数据库迁移
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 > `--host 0.0.0.0` 必须加，模拟器（`10.0.2.2`）/ 真机（局域网 IP）才能连上。
-> 讯飞 TTS/ISE 已接入：配 `.env` 凭据后走真实合成 + 逐词评分；未配则自动 fallback 到 stub，仍可跑通跟读闭环。
+> MiMo TTS + 讯飞 ISE 已接入：配 `.env` 凭据后走真实合成 + 逐词评分；未配则自动 fallback 到 stub，仍可跑通跟读闭环。
 
 ### 3. Android 客户端
 APK 由 GitHub Actions 自动构建（最新绿色 run 见 Actions 页），下载路径：
