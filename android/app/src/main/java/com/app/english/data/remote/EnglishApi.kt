@@ -19,7 +19,7 @@ interface EnglishApi {
     @GET("tts")
     suspend fun getTts(
         @Query("text") text: String,
-        @Query("voice") voice: String = "x5_EnUs_Grant_flow"
+        @Query("voice") voice: String = "Mia"
     ): TtsResponseDto
 
     @POST("dialogue/generate")

@@ -114,7 +114,7 @@ class SettingsStore @Inject constructor(@ApplicationContext private val context:
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
 
-        // Xunfei Spark super-natural TTS, US English female (x5_EnUs_Grant_flow).
-        private const val DEFAULT_VOICE = "x5_EnUs_Grant_flow"
+        // MiMo TTS, English female (Mia).
+        private const val DEFAULT_VOICE = "Mia"
     }
 }

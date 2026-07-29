@@ -4,7 +4,7 @@ FastAPI 后端，提供语料、TTS、ISE 语音评测、历史等 API。
 
 ## 快速开始
 
-> 讯飞 TTS（在线合成）与 ISE（语音评测，逐词音素评分）已接入。配 `.env` 凭据即走真实服务；
+> MiMo TTS（语音合成）与讯飞 ISE（语音评测，逐词音素评分）已接入。配 `.env` 凭据即走真实服务；
 > 未配凭据时自动 fallback 到 stub，课程列表 / 录音评分 / 历史的完整闭环仍可跑通。
 
 ### 1. 起依赖（Postgres + Redis）
@@ -51,22 +51,23 @@ curl http://localhost:8000/api/v1/health
 | 模拟器 | `http://10.0.2.2:8000/api/v1/`（APK 默认值，无需改） |
 | 真机 | `http://<电脑局域网IP>:8000/api/v1/`（在 app「设置」页改，手机与电脑同 WiFi） |
 
-### 讯飞凭据（可选，配了走真实服务）
+### MiMo TTS + 讯飞 ISE（可选，配了走真实服务）
 
 不配也能跑（fallback 到 stub）。要真实 TTS 发音 + ISE 逐词评分，在 `backend/.env` 填：
 
 ```
+# MiMo TTS (语音合成)
+MIMO_API_KEY=...                                    # MiMo 平台 API Key
+MIMO_TTS_DEFAULT_VOICE=Mia                          # 默认发音人 (Mia/Chloe/Milo/Dean)
+MIMO_TTS_VOICES=Mia,Chloe,Milo,Dean                 # App「设置」页可选发音人列表
+
+# 讯飞 ISE (语音评测)
 XUNFEI_APP_ID=...
 XUNFEI_API_KEY=...
 XUNFEI_API_SECRET=...
-# 可选（覆盖默认值）
-XUNFEI_TTS_DEFAULT_VCN=x5_EnUs_Grant_flow      # 默认发音人 (美式英文女, 超拟人)
-XUNFEI_TTS_VOICES=x5_EnUs_Grant_flow,x5_EnUs_Lila_flow  # App「设置」页可选发音人列表
-XUNFEI_SPARK_TTS_PASSWORD=ak-xxx                   # 超拟人控制台拿 APIPassword
 ```
 
-- **超拟人 TTS (主)**：Spark 大模型合成, 24kHz mp3, 自动句末 [p300] 停顿, 按 (text, voice) 落盘缓存 (`static/tts/`, 同文本复用, 省配额).
-- **v2 老接口 (fallback)**：仅在 Spark 凭据缺失或调用失败时启用, 音色机械不推荐.
+- **MiMo TTS**：OpenAI 兼容接口, 24kHz WAV, 流式 PCM16 合成, 按 (text, voice) 落盘缓存 (`static/tts/`, 同文本复用, 省配额). [文档](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5)
 - **ISE 评分**：提交 PCM（16kHz L16 mono）后走语音评测，返回 0-100 的 total/pronunciation/fluency/completeness + 每词 `word_details`（含 `score` 与 `ipa` 音素）。原始评分 1-5 → 映射到 0-100。
 
 ### 备选：Docker Compose 一键起全部
@@ -124,7 +125,7 @@ git push --tags
 backend/
 ├── app/
 │   ├── api/v1/           # 路由
-│   ├── services/         # 讯飞 / LLM / 评分
+│   ├── services/         # MiMo TTS / 讯飞 ISE / LLM / 评分
 │   ├── models/           # Pydantic schema
 │   ├── db/               # SQLAlchemy + Alembic
 │   ├── config.py

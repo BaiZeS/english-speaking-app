@@ -117,7 +117,7 @@ private fun TechStackCard() {
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = "AI：讯飞 ISE / TTS · 阿里云百炼 OpenAI 兼容接口",
+                text = "AI：讯飞 ISE · MiMo TTS · 阿里云百炼 OpenAI 兼容接口",
                 style = MaterialTheme.typography.bodyMedium
             )
         }

@@ -42,7 +42,7 @@ class SettingsViewModel @Inject constructor(
 
     val deviceId: String = settingsStore.deviceId
 
-    private val voices: List<String> = listOf("x5_EnUs_Grant_flow", "x5_EnUs_Lila_flow")
+    private val voices: List<String> = listOf("Mia", "Chloe", "Milo", "Dean")
 
     init {
         _state.update { it.copy(availableVoices = voices) }

@@ -9,7 +9,7 @@ class TtsResult:
     audio_bytes: bytes
     duration_ms: int
     audio_url: str
-    # 来源标记: "spark"=讯飞 Spark 超拟人, "v2"=讯飞在线合成 v2 老接口, "stub"=本地假音频.
+    # 来源标记: "mimo"=MiMo TTS, "stub"=本地假音频.
     # 让 endpoint 透传给前端, 便于区分真实合成 vs 占位音频.
     source: str = "stub"
 
