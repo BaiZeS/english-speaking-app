@@ -6,14 +6,32 @@ from collections.abc import AsyncIterator
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
+from app.config import settings
 from app.db.base import Base
 from app.db.session import get_engine, get_sessionmaker
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """强制 stub 路径: 开发机 shell 可能带真实凭据 (如 ~/.bashrc 的 MIMO_API_KEY),
+    测试不得依赖也不得触达外部服务. 需要凭据的用例在测试内自行 monkeypatch 覆盖."""
+    for field in (
+        "mimo_api_key",
+        "xunfei_app_id",
+        "xunfei_api_key",
+        "xunfei_api_secret",
+        "llm_api_key",
+        "openai_api_key",
+        "aliyun_dashscope_key",
+    ):
+        monkeypatch.setattr(settings, field, "", raising=False)
 
 
 @pytest_asyncio.fixture(autouse=True)

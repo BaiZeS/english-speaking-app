@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 3,
+  "title": "Business Negotiation（商务谈判）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L3-A1", "text": "Thanks for coming. Let's talk about the pricing for the new contract.", "translation": "感谢各位前来。我们来谈谈新合同的报价。"},
+        {"id": "biz-L3-A2", "text": "Honestly, your unit price is about ten percent above our target.", "translation": "说实话，你们的单价比我们的目标高出约一成。"},
+        {"id": "biz-L3-A3", "text": "We were hoping for forty-five dollars per unit, on a two-year term.", "translation": "我们希望单价四十五美元，签两年期合同。"},
+        {"id": "biz-L3-A4", "text": "What do you mean? We really do need a better number.", "translation": "你指的是什么？我们确实需要一个更好的价格。"},
+        {"id": "biz-L3-A5", "text": "Interesting. What about payment terms? Sixty days would help our cash flow.", "translation": "有意思。付款条件呢？六十天账期对我们的现金流有帮助。"},
+        {"id": "biz-L3-A6", "text": "Deal — if you can also include free training for our team.", "translation": "成交——前提是你们还能为我们的团队提供免费培训。"},
+        {"id": "biz-L3-A7", "text": "Then I think we have a deal. Please send over the updated contract.", "translation": "那我想我们谈成了。请把更新后的合同发过来。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L3-B1", "text": "Our pleasure. We believe our offer reflects the value we deliver.", "translation": "这是我们应该做的。我们相信报价体现了我们创造的价值。"},
+        {"id": "biz-L3-B2", "text": "I understand. May I ask what target you're working with?", "translation": "我理解。方便透露一下你们的目标价位吗？"},
+        {"id": "biz-L3-B3", "text": "I'm afraid that's below our cost floor. Could we explore other levers?", "translation": "恐怕这低于我们的成本底线。我们能不能在其他条件上找找空间？"},
+        {"id": "biz-L3-B4", "text": "If you double the order volume, we can drop to fifty dollars.", "translation": "如果订单量翻倍，我们可以降到五十美元。"},
+        {"id": "biz-L3-B5", "text": "Sixty days is tough for us. Let's meet in the middle at forty-five days.", "translation": "六十天对我们来说有困难。各退一步，定四十五天吧。"},
+        {"id": "biz-L3-B6", "text": "We'll include two training sessions at no extra cost.", "translation": "我们会免费提供两场培训。"},
+        {"id": "biz-L3-B7", "text": "Wonderful. I'll have the revised contract to you by tomorrow.", "translation": "太好了。明天之前我会把修订版合同发给您。"}
+      ]
+    }
+  ]
+}

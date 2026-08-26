@@ -10,6 +10,7 @@ import javax.inject.Singleton
 
 interface HistoryRepository {
     suspend fun write(
+        book: String,
         lessonId: Int,
         lineId: String,
         audioPath: String,
@@ -28,6 +29,7 @@ class HistoryRepositoryImpl @Inject constructor(
     private val settingsStore: SettingsStore
 ) : HistoryRepository {
     override suspend fun write(
+        book: String,
         lessonId: Int,
         lineId: String,
         audioPath: String,
@@ -38,6 +40,7 @@ class HistoryRepositoryImpl @Inject constructor(
     ): HistoryItem {
         val request = HistoryWriteRequestDto(
             deviceId = settingsStore.deviceId,
+            book = book,
             lessonId = lessonId,
             lineId = lineId,
             audioPath = audioPath,

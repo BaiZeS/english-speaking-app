@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
 
 from app.services.interfaces import AsrResult
-from app.services.xunfei_asr import XunfeiASRProvider
+from app.services.xunfei_asr import XunfeiASRProvider, _build_ssb_frame
 
 # 精简的 ISE 结果 XML (hello + sil + world)
 _FAKE_XML = (
@@ -91,3 +92,40 @@ async def test_recognize_parses_real_xml(
     # 2.88 * 20 = 57.6
     assert res.word_scores[0].score == pytest.approx(57.6)
     assert res.word_scores[0].ipa == "hh ax"
+
+
+def test_ssb_frame_defaults_to_read_sentence() -> None:
+    frame = _build_ssb_frame("hello world", "read_sentence")
+    assert frame["business"]["category"] == "read_sentence"
+    assert frame["business"]["text"] == "hello world"
+
+
+def test_ssb_frame_supports_read_word() -> None:
+    """单词重练: ssb 帧 category 须为 read_word (ISE 按单词评测)."""
+    frame = _build_ssb_frame("schedule", "read_word")
+    assert frame["business"]["category"] == "read_word"
+
+
+@pytest.mark.asyncio
+async def test_recognize_forwards_category_to_ise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """recognize(category=...) 须透传到 ssb 建会话帧."""
+    sockets: list[_FakeWS] = []
+
+    @asynccontextmanager
+    async def capturing_connect(_url: str) -> AsyncIterator[_FakeWS]:
+        ws = _FakeWS()
+        sockets.append(ws)
+        yield ws
+
+    monkeypatch.setattr("app.services.xunfei_asr.websockets.connect", capturing_connect)
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_app_id", "f15f995b")
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_api_key", "fake_key")
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_api_secret", "fake_secret")
+
+    p = XunfeiASRProvider()
+    res = await p.recognize(audio=b"\x00" * 2560, ref_text="schedule", category="read_word")
+
+    assert res.source == "xunfei"
+    ssb = json.loads(sockets[0].sent[0])
+    assert ssb["business"]["cmd"] == "ssb"
+    assert ssb["business"]["category"] == "read_word"

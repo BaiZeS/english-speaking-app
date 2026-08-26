@@ -5,8 +5,9 @@ import base64
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.v1.score import _decode_audio
+from app.api.v1.score import _decode_audio, _estimate_speech_rate_wpm
 from app.main import app
+from app.services.interfaces import AsrResult, AsrWord
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +54,8 @@ async def test_score_returns_full_breakdown() -> None:
         assert 0 <= data[k] <= 100
     assert isinstance(data["word_details"], list)
     assert data["word_details"][0]["word"] == "Excuse"
+    # stub 路径下来源恒为 "stub" (前端据此提示非真实评测)
+    assert data["source"] == "stub"
 
 
 @pytest.mark.asyncio
@@ -68,3 +71,123 @@ async def test_score_rejects_empty_audio() -> None:
         r = await c.post("/api/v1/score", json=payload)
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_score_source_is_xunfei_when_provider_reports_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider 返回 source='xunfei' 时, 响应透传该来源 (P0 source 字段覆盖)."""
+
+    async def fake_recognize(
+        audio: bytes, ref_text: str, category: str = "read_sentence"
+    ) -> AsrResult:
+        return AsrResult(
+            recognized=ref_text,
+            word_scores=[AsrWord(word=w, score=90.0, ipa=None) for w in ref_text.split()],
+            source="xunfei",
+        )
+
+    monkeypatch.setattr("app.api.v1.score._asr.recognize", fake_recognize)
+    payload = {
+        "lesson_id": 1,
+        "line_id": "nce1-L1-A1",
+        "ref_text": "Excuse me",
+        "audio": base64.b64encode(b"\x00" * 640).decode(),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/v1/score", json=payload)
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "xunfei"
+
+
+@pytest.mark.asyncio
+async def test_score_forwards_read_word_category_to_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """category=read_word 被接受并原样转发给 ASR provider."""
+    captured: dict[str, object] = {}
+
+    async def fake_recognize(
+        audio: bytes, ref_text: str, category: str = "read_sentence"
+    ) -> AsrResult:
+        captured["ref_text"] = ref_text
+        captured["category"] = category
+        return AsrResult(
+            recognized=ref_text,
+            word_scores=[AsrWord(word=ref_text, score=90.0, ipa=None)],
+            source="stub",
+        )
+
+    monkeypatch.setattr("app.api.v1.score._asr.recognize", fake_recognize)
+    payload = {
+        "ref_text": "schedule",
+        "category": "read_word",
+        "audio": base64.b64encode(b"\x00" * 640).decode(),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/v1/score", json=payload)
+    assert r.status_code == 200, r.text
+    assert captured["category"] == "read_word"
+    assert captured["ref_text"] == "schedule"
+
+
+@pytest.mark.asyncio
+async def test_score_rejects_invalid_category() -> None:
+    payload = {
+        "lesson_id": 1,
+        "line_id": "L1",
+        "ref_text": "hi",
+        "category": "read_paragraph",
+        "audio": base64.b64encode(b"\x00" * 640).decode(),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/v1/score", json=payload)
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_score_accepts_word_drill_without_lesson_context() -> None:
+    """错词重练请求不带 lesson_id/line_id 也应合法 (P4 单词 drill 形状)."""
+    payload = {
+        "ref_text": "schedule",
+        "category": "read_word",
+        "audio": base64.b64encode(b"\x00" * 640).decode(),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/v1/score", json=payload)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["word_details"][0]["word"] == "schedule"
+    assert data["source"] == "stub"
+
+
+def test_estimate_speech_rate_uses_real_duration() -> None:
+    """32000B = 1s PCM (L16 16kHz mono) -> 1 词 = 60 wpm, 而非旧 4s 窗口的 15 wpm."""
+    assert _estimate_speech_rate_wpm(1, b"\x00" * 32000) == pytest.approx(60.0)
+    # 4 词 / 2s = 120 wpm
+    assert _estimate_speech_rate_wpm(4, b"\x00" * 64000) == pytest.approx(120.0)
+
+
+def test_estimate_speech_rate_falls_back_for_short_audio() -> None:
+    """<0.3s 的音频回退到旧 4s 预算窗口, 避免除零/极端语速."""
+    assert _estimate_speech_rate_wpm(1, b"") == pytest.approx(15.0)
+    assert _estimate_speech_rate_wpm(2, b"\x00" * 100) == pytest.approx(30.0)
+
+
+@pytest.mark.asyncio
+async def test_score_fluency_reflects_real_audio_duration() -> None:
+    """1s PCM + 1 词 (stub 全对): 语速 60wpm -> fluency 88; 旧 4s 公式会得 79."""
+    payload = {
+        "ref_text": "schedule",
+        "category": "read_word",
+        # 32000B = 1s of PCM L16 16kHz mono
+        "audio": base64.b64encode(b"\x00" * 32000).decode(),
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/v1/score", json=payload)
+    assert r.status_code == 200, r.text
+    # rate_score=100-|120-60|*0.5=70; pacing=70*0.4+100*0.6=88;
+    # fluency=min(88, pron=95, comp=100)=88. 旧固定 4s 窗口会得 79.
+    assert r.json()["fluency"] == pytest.approx(88.0)

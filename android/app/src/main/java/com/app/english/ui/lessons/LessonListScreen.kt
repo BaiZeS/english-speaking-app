@@ -53,7 +53,7 @@ import com.app.english.ui.theme.color
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LessonListScreen(
-    onLessonClick: (Int) -> Unit,
+    onLessonClick: (book: String, lessonId: Int) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LessonListViewModel = hiltViewModel()
 ) {
@@ -106,7 +106,7 @@ fun LessonListScreen(
                 else -> LessonList(
                     lessons = state.filteredLessons,
                     progressById = state.progressById,
-                    onLessonClick = onLessonClick
+                    onLessonClick = { lessonId -> onLessonClick(state.selectedBookId, lessonId) }
                 )
             }
         }

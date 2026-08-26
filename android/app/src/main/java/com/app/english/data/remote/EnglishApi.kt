@@ -51,6 +51,7 @@ interface EnglishApi {
     @GET("lessons/{lessonId}/progress")
     suspend fun getLessonProgress(
         @Path("lessonId") lessonId: Int,
+        @Query("book") book: String,
         @Query("device_id") deviceId: String
     ): LessonProgressDto
 

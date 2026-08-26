@@ -18,8 +18,12 @@ data class ScoreSession(
     val completeness: Double,
     val suggestion: String?,
     val lineCount: Int,
-    val lineResults: List<LineScoreResult>
-)
+    val lineResults: List<LineScoreResult>,
+    // "xunfei"=真实评测, 其它=占位假分. 成绩页据此显示警示.
+    val source: String = "stub"
+) {
+    val isStub: Boolean get() = source != "xunfei"
+}
 
 data class LineScoreResult(
     val lineId: String,

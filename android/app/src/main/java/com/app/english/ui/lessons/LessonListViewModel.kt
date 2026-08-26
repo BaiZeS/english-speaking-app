@@ -120,7 +120,7 @@ class LessonListViewModel @Inject constructor(
             try {
                 val lessons = englishRepository.listLessons(bookId)
                 _state.value = _state.value.copy(lessons = lessons, isLoadingLessons = false)
-                loadProgressFor(lessons)
+                loadProgressFor(bookId, lessons)
             } catch (e: Exception) {
                 _state.value = _state.value.copy(
                     isLoadingLessons = false,
@@ -130,7 +130,7 @@ class LessonListViewModel @Inject constructor(
         }
     }
 
-    private fun loadProgressFor(lessons: List<LessonSummary>) {
+    private fun loadProgressFor(bookId: String, lessons: List<LessonSummary>) {
         // Best-effort: fetch per-lesson progress in parallel. Failures on a
         // single lesson (e.g. older backend without the endpoint) just leave
         // that row empty; the list itself is already rendered.
@@ -138,7 +138,7 @@ class LessonListViewModel @Inject constructor(
             val pairs = lessons
                 .map { lesson ->
                     async {
-                        runCatching { englishRepository.getLessonProgress(lesson.id) }
+                        runCatching { englishRepository.getLessonProgress(bookId, lesson.id) }
                             .map { lesson.id to it }
                     }
                 }

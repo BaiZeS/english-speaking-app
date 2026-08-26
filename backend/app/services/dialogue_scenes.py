@@ -22,6 +22,34 @@ class DialogueScene:
 
 
 _DEFAULT_SCENES: tuple[DialogueScene, ...] = (
+    # 商务场景排在前面: 目标用户是职场人士, 选择器默认场景取第一个.
+    DialogueScene(
+        id="business_meeting",
+        title="商务会议",
+        description="开会时发表意见、回应同事的提议。",
+        opening="Let's get started. What is your opinion on the new plan?",
+        suggestion="From our perspective, the plan is workable, but we need more data.",
+        next_suggestion="I suggest we set up a small team to look into the risks.",
+        fallback_reply="Good point. Could you explain the main risk in more detail?",
+    ),
+    DialogueScene(
+        id="work_report",
+        title="工作汇报",
+        description="向上级或客户汇报项目进展。",
+        opening="Could you walk me through the progress of the project?",
+        suggestion="We have finished the first phase, and we are on schedule.",
+        next_suggestion="The next step is testing. We expect to finish it by Friday.",
+        fallback_reply="Sounds good. Are there any issues blocking the team?",
+    ),
+    DialogueScene(
+        id="negotiation",
+        title="商务谈判",
+        description="就价格与合作条款进行谈判。",
+        opening="Your price is a little higher than we expected. Can we talk about it?",
+        suggestion="We can offer a five percent discount if you sign a two-year contract.",
+        next_suggestion="Let's meet in the middle. We can also include free training.",
+        fallback_reply="That is a fair offer. What about the delivery schedule?",
+    ),
     DialogueScene(
         id="daily_conversation",
         title="日常寒暄",

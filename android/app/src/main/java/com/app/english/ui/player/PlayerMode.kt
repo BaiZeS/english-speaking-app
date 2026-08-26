@@ -1,9 +1,12 @@
 package com.app.english.ui.player
 
-/** The three practice modes exposed by the app. */
+/** The practice modes exposed by the app. */
 enum class PlayerMode(val wire: String) {
     /** Sentence-by-sentence practice with no role distinction. */
     READ_ALONG("read_along"),
+
+    /** Whole-lesson continuous shadowing: play everything, record everything. */
+    SHADOW("shadow"),
 
     /** A and B alternate; A is played and B is recorded and scored. */
     DIALOGUE("dialogue"),

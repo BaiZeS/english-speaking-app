@@ -6,6 +6,7 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "history_cache")
 data class HistoryCacheEntity(
     @PrimaryKey val id: String,
+    val book: String = "nce1",
     val lessonId: Int,
     val lineId: String,
     val scoreTotal: Double,

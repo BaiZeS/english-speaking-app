@@ -48,6 +48,8 @@ class History(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    # lesson_id 是书内课号, 跨书会重复, 聚合必须和 book 一起用.
+    book: Mapped[str] = mapped_column(String(32), default="nce1", index=True)
     lesson_id: Mapped[int] = mapped_column(Integer, index=True)
     line_id: Mapped[str] = mapped_column(String(64))
     audio_path: Mapped[str] = mapped_column(String(512))

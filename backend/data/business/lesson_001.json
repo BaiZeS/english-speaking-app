@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 1,
+  "title": "Business Meeting（商务会议）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L1-A1", "text": "Good morning, everyone. Thanks for being here. Let's get started.", "translation": "大家早上好，感谢各位到场。我们开始吧。"},
+        {"id": "biz-L1-A2", "text": "Great. From our perspective, we should focus on digital channels.", "translation": "很好。从我们的角度看，应该重点投入数字渠道。"},
+        {"id": "biz-L1-A3", "text": "That's a fair point. What split do you have in mind?", "translation": "有道理。你打算按什么比例来分？"},
+        {"id": "biz-L1-A4", "text": "Hmm, I'm not fully convinced. Offline might deserve a bit more.", "translation": "嗯，我还不完全认同。线下或许值得多分一些。"},
+        {"id": "biz-L1-A5", "text": "Agreed. Does anyone have a different view before we decide?", "translation": "同意。做决定之前，还有人有不同看法吗？"},
+        {"id": "biz-L1-A6", "text": "Works for me. I'll take notes and circulate them after the meeting.", "translation": "我没问题。我来做会议记录，会后发给大家。"},
+        {"id": "biz-L1-A7", "text": "Will do. Anything else before we wrap up?", "translation": "好的。结束之前还有别的事项吗？"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L1-B1", "text": "Thanks, David. The main topic today is our Q3 marketing budget.", "translation": "谢谢，David。今天的主要议题是第三季度的市场预算。"},
+        {"id": "biz-L1-B2", "text": "I see your point, but offline events still matter for key accounts.", "translation": "我理解你的想法，但对重点客户而言，线下活动依然重要。"},
+        {"id": "biz-L1-B3", "text": "I'd suggest seventy percent digital and thirty percent offline.", "translation": "我建议七成投数字渠道，三成投线下。"},
+        {"id": "biz-L1-B4", "text": "I hear you. Let's keep it flexible and review next quarter.", "translation": "我明白你的意思。我们先保持灵活，下季度再复盘。"},
+        {"id": "biz-L1-B5", "text": "If nobody objects, let's lock in this allocation today.", "translation": "如果没有异议，我们今天就敲定这个分配方案。"},
+        {"id": "biz-L1-B6", "text": "Perfect. Please assign an owner and a deadline to each task.", "translation": "很好。请为每项任务明确负责人和截止时间。"},
+        {"id": "biz-L1-B7", "text": "That's everything. Thanks for a productive discussion, everyone.", "translation": "就到这里。感谢大家卓有成效的讨论。"}
+      ]
+    }
+  ]
+}

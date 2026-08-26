@@ -51,6 +51,7 @@ async def write_history(
     user = await _get_or_create_user(db, req.device_id)
     h = History(
         user_id=user.id,
+        book=req.book,
         lesson_id=req.lesson_id,
         line_id=req.line_id,
         audio_path=req.audio_path,
@@ -62,16 +63,7 @@ async def write_history(
     db.add(h)
     await db.commit()
     await db.refresh(h)
-    return HistoryItem(
-        id=h.id,
-        lesson_id=h.lesson_id,
-        line_id=h.line_id,
-        score_total=h.score_total,
-        score_pronunciation=h.score_pronunciation,
-        score_fluency=h.score_fluency,
-        score_completeness=h.score_completeness,
-        created_at=_as_utc(h.created_at).isoformat(),
-    )
+    return _to_item(h)
 
 
 @router.get("/history", response_model=list[HistoryItem])
@@ -91,19 +83,21 @@ async def list_history(
         .limit(limit)
     )
     rows = res.scalars().all()
-    return [
-        HistoryItem(
-            id=h.id,
-            lesson_id=h.lesson_id,
-            line_id=h.line_id,
-            score_total=h.score_total,
-            score_pronunciation=h.score_pronunciation,
-            score_fluency=h.score_fluency,
-            score_completeness=h.score_completeness,
-            created_at=_as_utc(h.created_at).isoformat(),
-        )
-        for h in rows
-    ]
+    return [_to_item(h) for h in rows]
+
+
+def _to_item(h: History) -> HistoryItem:
+    return HistoryItem(
+        id=h.id,
+        book=h.book,
+        lesson_id=h.lesson_id,
+        line_id=h.line_id,
+        score_total=h.score_total,
+        score_pronunciation=h.score_pronunciation,
+        score_fluency=h.score_fluency,
+        score_completeness=h.score_completeness,
+        created_at=_as_utc(h.created_at).isoformat(),
+    )
 
 
 class DailyScore(BaseModel):
@@ -119,6 +113,7 @@ class WeakestLesson(BaseModel):
     """A lesson the user has practised but where the average score is low.
     Used by the dashboard "推荐复习" block to surface weak spots."""
 
+    book: str = "nce1"
     lesson_id: int
     best_score: float
     avg_score: float
@@ -232,18 +227,22 @@ async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
 
 
 def _weakest_lessons(rows: list[History], limit: int = 3) -> list[WeakestLesson]:
-    """Group rows by lesson, drop single-attempt flukes, pick lowest best_score."""
-    by_lesson: dict[int, list[History]] = {}
+    """Group rows by (book, lesson), drop single-attempt flukes, pick lowest best_score.
+
+    lesson_id 是书内课号, 跨书会重复, 必须和 book 一起分组.
+    """
+    by_lesson: dict[tuple[str, int], list[History]] = {}
     for r in rows:
-        by_lesson.setdefault(r.lesson_id, []).append(r)
+        by_lesson.setdefault((r.book, r.lesson_id), []).append(r)
     scored: list[WeakestLesson] = []
-    for lesson_id, items in by_lesson.items():
+    for (book, lesson_id), items in by_lesson.items():
         if len(items) < 2:
             continue
         best = max(r.score_total for r in items)
         avg = sum(r.score_total for r in items) / len(items)
         scored.append(
             WeakestLesson(
+                book=book,
                 lesson_id=lesson_id,
                 best_score=best,
                 avg_score=avg,

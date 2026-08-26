@@ -56,14 +56,17 @@ def _build_auth_url() -> str:
     return f"{_ISE_URL}?{params}"
 
 
-def _build_ssb_frame(ref_text: str) -> dict[str, object]:
-    """第一帧: 建会话 (cmd=ssb), 不含音频."""
+def _build_ssb_frame(ref_text: str, category: str) -> dict[str, object]:
+    """第一帧: 建会话 (cmd=ssb), 不含音频.
+
+    category: ISE 评测类型, "read_sentence" (句子) 或 "read_word" (单词).
+    """
     return {
         "common": {"app_id": settings.xunfei_app_id},
         "business": {
             "aue": "raw",
             "auf": "audio/L16;rate=16000",
-            "category": "read_sentence",
+            "category": category,
             "cmd": "ssb",
             "ent": "en",
             "sub": "ise",
@@ -85,17 +88,17 @@ class XunfeiASRProvider:
     def __init__(self) -> None:
         self._stub = StubASRProvider()
 
-    async def recognize(self, audio: bytes, ref_text: str) -> AsrResult:
+    async def recognize(self, audio: bytes, ref_text: str, category: str = "read_sentence") -> AsrResult:
         if not (settings.xunfei_app_id and settings.xunfei_api_key and settings.xunfei_api_secret):
-            return await self._stub.recognize(audio, ref_text)
+            return await self._stub.recognize(audio, ref_text, category=category)
         if not audio:
-            return await self._stub.recognize(audio, ref_text)
+            return await self._stub.recognize(audio, ref_text, category=category)
 
         try:
-            xml = await self._evaluate(audio, ref_text)
+            xml = await self._evaluate(audio, ref_text, category)
         except Exception as e:
             logger.error("xunfei ise call failed, falling back to stub: {}", e)
-            return await self._stub.recognize(audio, ref_text)
+            return await self._stub.recognize(audio, ref_text, category=category)
 
         recognized, word_scores = parse_ise_xml(xml)
         if not word_scores:
@@ -103,11 +106,11 @@ class XunfeiASRProvider:
                 "xunfei ise returned no word scores, falling back to stub | xml_len={}",
                 len(xml),
             )
-            return await self._stub.recognize(audio, ref_text)
+            return await self._stub.recognize(audio, ref_text, category=category)
         logger.info("xunfei ise ok words={} recognized={!r}", len(word_scores), recognized[:60])
-        return AsrResult(recognized=recognized, word_scores=word_scores)
+        return AsrResult(recognized=recognized, word_scores=word_scores, source="xunfei")
 
-    async def _evaluate(self, pcm: bytes, ref_text: str) -> str:
+    async def _evaluate(self, pcm: bytes, ref_text: str, category: str) -> str:
         """流式发送 PCM 到 ISE, 返回累加后的结果 XML 字符串."""
         frames = _audio_frames(pcm)
         if not frames:
@@ -145,7 +148,7 @@ class XunfeiASRProvider:
             recv_task = asyncio.create_task(receiver())
 
             # 1. ssb 建会话 (无音频)
-            await ws.send(json.dumps(_build_ssb_frame(ref_text)))
+            await ws.send(json.dumps(_build_ssb_frame(ref_text, category)))
             # 2. auw 音频帧: aus 1=首, 2=中, 4=末; data.status 1=中, 2=末
             for idx, chunk in enumerate(frames):
                 if idx == 0:

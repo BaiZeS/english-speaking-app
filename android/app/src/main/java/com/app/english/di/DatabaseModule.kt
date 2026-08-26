@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.app.english.data.local.AppDatabase
 import com.app.english.data.local.HistoryCacheDao
+import com.app.english.data.local.MistakeWordDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -25,4 +26,7 @@ object DatabaseModule {
 
     @Provides
     fun provideHistoryCacheDao(db: AppDatabase): HistoryCacheDao = db.historyCacheDao()
+
+    @Provides
+    fun provideMistakeWordDao(db: AppDatabase): MistakeWordDao = db.mistakeWordDao()
 }

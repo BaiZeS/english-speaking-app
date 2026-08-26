@@ -37,7 +37,8 @@ def _audio_cache_path(text: str, voice: str) -> tuple[str, str]:
     h = hashlib.sha256(f"mimo::{voice}::{text}".encode()).hexdigest()[:16]
     audio_dir = settings.tts_audio_dir
     os.makedirs(audio_dir, exist_ok=True)
-    return os.path.join(audio_dir, f"{h}.mp3"), f"/static/tts/{h}.mp3"
+    # MiMo 流式 PCM16 会包成 WAV 头 (_pcm16_to_wav), 扩展名用 .wav 与内容一致.
+    return os.path.join(audio_dir, f"{h}.wav"), f"/static/tts/{h}.wav"
 
 
 def _pcm16_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:

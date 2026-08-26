@@ -47,11 +47,20 @@ fun ScoreResponseDto.toDomain(): ScoreResult = ScoreResult(
     fluency = fluency,
     completeness = completeness,
     wordDetails = wordDetails.map { WordScore(it.word, it.score, it.ipa) },
-    suggestion = suggestion
+    suggestion = suggestion,
+    source = source
 )
+
+fun TtsResponseDto.toDomain(): com.app.english.domain.model.TtsAudio =
+    com.app.english.domain.model.TtsAudio(
+        audioUrl = audioUrl,
+        durationMs = durationMs,
+        source = source
+    )
 
 fun HistoryItemDto.toDomain(): HistoryItem = HistoryItem(
     id = id,
+    book = book,
     lessonId = lessonId,
     lineId = lineId,
     scoreTotal = scoreTotal,
@@ -143,6 +152,7 @@ fun StatsResponseDto.toDomain(): PracticeStats = PracticeStats(
 
 fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
     com.app.english.domain.model.LessonProgress(
+        book = book,
         lessonId = lessonId,
         attemptCount = attemptCount,
         bestScore = bestScore,
@@ -152,6 +162,7 @@ fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
 
 fun WeakestLessonDto.toDomain(): com.app.english.domain.model.WeakestLesson =
     com.app.english.domain.model.WeakestLesson(
+        book = book,
         lessonId = lessonId,
         bestScore = bestScore,
         avgScore = avgScore,

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,8 +55,8 @@ import com.app.english.ui.theme.color
 @Composable
 fun LessonDetailScreen(
     onBack: () -> Unit,
-    onStartPractice: (lessonId: Int, mode: PlayerMode) -> Unit,
-    onStartFreeDialogue: (lessonId: Int) -> Unit,
+    onStartPractice: (book: String, lessonId: Int, mode: PlayerMode) -> Unit,
+    onStartFreeDialogue: (book: String, lessonId: Int) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LessonDetailViewModel = hiltViewModel()
 ) {
@@ -83,8 +84,8 @@ fun LessonDetailScreen(
             is LessonDetailUiState.Success -> LessonDetailBody(
                 lesson = current.lesson,
                 progress = current.progress,
-                onStart = { mode -> onStartPractice(viewModel.lessonId, mode) },
-                onStartFreeDialogue = { onStartFreeDialogue(viewModel.lessonId) },
+                onStart = { mode -> onStartPractice(viewModel.book, viewModel.lessonId, mode) },
+                onStartFreeDialogue = { onStartFreeDialogue(viewModel.book, viewModel.lessonId) },
                 modifier = Modifier.padding(padding)
             )
         }
@@ -135,6 +136,15 @@ private fun LessonDetailBody(
                 meta = "$totalLines 句 · 标准音 + 发音评分",
                 onClick = { onStart(PlayerMode.READ_ALONG) },
                 highlighted = true
+            )
+        }
+        item {
+            ModeCard(
+                icon = Icons.Filled.RecordVoiceOver,
+                title = "影子跟读",
+                description = "整段连续播放标准音，你全程跟读；结束后自动按句切片评分。",
+                meta = "$totalLines 句 · 整段录音 · 建议佩戴耳机",
+                onClick = { onStart(PlayerMode.SHADOW) }
             )
         }
         item {

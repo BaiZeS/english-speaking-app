@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
@@ -35,6 +36,7 @@ class AudioRecorder(private val context: Context) {
     private var recorder: AudioRecord? = null
     private var outputFile: File? = null
     private var recordJob: Job? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
 
     private val _levelFlow = MutableSharedFlow<Float>(
         replay = 0,
@@ -42,7 +44,13 @@ class AudioRecorder(private val context: Context) {
     )
     val levelFlow: SharedFlow<Float> = _levelFlow.asSharedFlow()
 
-    fun start(): File {
+    /**
+     * Starts recording. With [echoCancel] the recorder uses the
+     * VOICE_COMMUNICATION source plus an [AcousticEchoCanceler] when the
+     * device supports it, so speaker playback (e.g. the shadowing reference
+     * audio) is suppressed before it reaches the microphone signal.
+     */
+    fun start(echoCancel: Boolean = false): File {
         val dir = File(context.cacheDir, "recordings")
         if (!dir.exists()) dir.mkdirs()
         val file = File(dir, "rec_${System.currentTimeMillis()}.pcm")
@@ -53,8 +61,9 @@ class AudioRecorder(private val context: Context) {
         )
         require(minBuf > 0) { "getMinBufferSize failed: $minBuf" }
         val bufSize = maxOf(minBuf, FRAME_BYTES * 2)
-        val rec = createRecorder(bufSize)
+        val rec = createRecorder(bufSize, echoCancel)
         rec.startRecording()
+        if (echoCancel) attachEchoCanceler(rec)
         recorder = rec
         outputFile = file
         recordJob = scope.launch {
@@ -83,6 +92,7 @@ class AudioRecorder(private val context: Context) {
      */
     suspend fun stop(): File? {
         val rec = recorder ?: return outputFile
+        releaseEchoCanceler()
         rec.stop()
         rec.release()
         recorder = null
@@ -93,6 +103,7 @@ class AudioRecorder(private val context: Context) {
     }
 
     fun cancel() {
+        releaseEchoCanceler()
         recorder?.run {
             try {
                 stop()
@@ -108,10 +119,15 @@ class AudioRecorder(private val context: Context) {
         outputFile = null
     }
 
-    private fun createRecorder(bufSize: Int): AudioRecord =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+    private fun createRecorder(bufSize: Int, echoCancel: Boolean): AudioRecord {
+        val source = if (echoCancel) {
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        } else {
+            MediaRecorder.AudioSource.MIC
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.MIC)
+                .setAudioSource(source)
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setSampleRate(SAMPLE_RATE)
@@ -124,13 +140,31 @@ class AudioRecorder(private val context: Context) {
         } else {
             @Suppress("DEPRECATION")
             AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                source,
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 bufSize
             )
         }
+    }
+
+    private fun attachEchoCanceler(rec: AudioRecord) {
+        if (!AcousticEchoCanceler.isAvailable()) return
+        val canceler = AcousticEchoCanceler.create(rec.audioSessionId) ?: return
+        try {
+            canceler.enabled = true
+            echoCanceler = canceler
+        } catch (e: IllegalStateException) {
+            Timber.w(e, "AcousticEchoCanceler unsupported; recording without AEC")
+            canceler.release()
+        }
+    }
+
+    private fun releaseEchoCanceler() {
+        echoCanceler?.release()
+        echoCanceler = null
+    }
 
     private fun toByteArray(buffer: ShortArray, length: Int): ByteArray {
         val out = ByteArray(length * 2)

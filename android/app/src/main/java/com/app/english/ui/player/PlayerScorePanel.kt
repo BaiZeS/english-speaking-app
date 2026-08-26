@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +38,14 @@ import com.app.english.ui.theme.color
 /** Top-level score card: big number, sub-skills, suggestion, word chips. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ScorePanel(score: ScoreResult, needsRerecord: Boolean, modifier: Modifier = Modifier) {
+fun ScorePanel(
+    score: ScoreResult,
+    needsRerecord: Boolean,
+    modifier: Modifier = Modifier,
+    hasRecording: Boolean = false,
+    onPlayMine: () -> Unit = {},
+    onCompare: () -> Unit = {}
+) {
     val level = ScoreColorMapper.level(score.total)
     Card(modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -52,6 +60,13 @@ fun ScorePanel(score: ScoreResult, needsRerecord: Boolean, modifier: Modifier = 
                 Text(text = "总分", style = MaterialTheme.typography.titleMedium)
             }
             SubScoreRow(score.pronunciation, score.fluency, score.completeness)
+            if (score.isStub) {
+                Text(
+                    text = "⚠ 评分引擎未配置，当前为占位假分",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             if (needsRerecord) {
                 Text(
                     text = "得分低于 60，请重录一次后再继续。",
@@ -80,7 +95,26 @@ fun ScorePanel(score: ScoreResult, needsRerecord: Boolean, modifier: Modifier = 
                     }
                 }
             }
+            if (hasRecording) {
+                RecordingReplayRow(onPlayMine = onPlayMine, onCompare = onCompare)
+            }
         }
+    }
+}
+
+/** Replay controls for the retained take of the current line. */
+@Composable
+private fun RecordingReplayRow(
+    onPlayMine: () -> Unit,
+    onCompare: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        TextButton(onClick = onPlayMine) { Text("听我的") }
+        TextButton(onClick = onCompare) { Text("对比听") }
     }
 }
 

@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 2,
+  "title": "Work Report（工作汇报）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L2-A1", "text": "Thanks for making time. Could you walk me through the project status?", "translation": "感谢你抽出时间。能带我过一遍项目进展吗？"},
+        {"id": "biz-L2-A2", "text": "Good to hear. Where are we on the mobile app launch?", "translation": "很高兴听到这个。移动应用的上线进展如何？"},
+        {"id": "biz-L2-A3", "text": "That's ahead of schedule. What about the budget?", "translation": "这比计划提前了。预算情况怎么样？"},
+        {"id": "biz-L2-A4", "text": "Reasonable. And headcount — do you need more engineers on the team?", "translation": "合理。人手方面呢，团队还需要更多工程师吗？"},
+        {"id": "biz-L2-A5", "text": "Sounds good. Now, what's the risk you mentioned earlier?", "translation": "不错。对了，你刚才提到的风险是什么？"},
+        {"id": "biz-L2-A6", "text": "That could hurt the launch. How do you plan to handle it?", "translation": "这可能会影响上线。你打算怎么处理？"},
+        {"id": "biz-L2-A7", "text": "Good thinking. Please keep me posted.", "translation": "考虑得很周全。有进展随时告诉我。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L2-B1", "text": "Of course. Overall we're on track, with one risk I'll flag later.", "translation": "当然可以。总体进展顺利，有一个风险我稍后向您提示。"},
+        {"id": "biz-L2-B2", "text": "Development is done. We're in final testing and go live next Friday.", "translation": "开发已经完成，正在做最终测试，下周五正式上线。"},
+        {"id": "biz-L2-B3", "text": "We've used about eighty percent, which matches our plan at this stage.", "translation": "预算已使用约八成，与当前阶段的计划相符。"},
+        {"id": "biz-L2-B4", "text": "Not right now. Two new hires join the team next month.", "translation": "暂时不需要。下个月会有两位新同事加入团队。"},
+        {"id": "biz-L2-B5", "text": "Our payment vendor may delay their API update by two weeks.", "translation": "我们的支付供应商可能把接口更新推迟两周。"},
+        {"id": "biz-L2-B6", "text": "We'll build a fallback interface, so the launch date stays safe.", "translation": "我们会准备一个备用接口，确保上线日期不受影响。"},
+        {"id": "biz-L2-B7", "text": "Absolutely. I'll send you a short written update every week.", "translation": "没问题。我每周会给您发一份简短的书面进展汇报。"}
+      ]
+    }
+  ]
+}

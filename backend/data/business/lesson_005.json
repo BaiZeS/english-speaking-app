@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 5,
+  "title": "Conference Call（电话会议）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L5-A1", "text": "Good, I can see the Beijing team joining now. Welcome!", "translation": "好，北京团队已经进来了。欢迎！"},
+        {"id": "biz-L5-A2", "text": "No problem. Can you hear us clearly?", "translation": "没关系。能听清我们说话吗？"},
+        {"id": "biz-L5-A3", "text": "Sure. I said the European pilot starts on June first.", "translation": "没问题。我说的是欧洲试点六月一日启动。"},
+        {"id": "biz-L5-A4", "text": "Great. Let's go around the table — each region gives a quick update.", "translation": "好。我们按顺序轮流发言——每个地区简要汇报一下。"},
+        {"id": "biz-L5-A5", "text": "Impressive. Please hold questions until the end, so we can finish on time.", "translation": "很出色。请大家把问题留到最后，保证按时结束。"},
+        {"id": "biz-L5-A6", "text": "Good call. We're almost out of time, so let's park the last topic.", "translation": "说得好。时间快到了，最后一个议题先放一放。"},
+        {"id": "biz-L5-A7", "text": "Appreciated. Thanks for staying on despite the tech issues. Talk soon.", "translation": "非常感谢。谢谢大家克服技术问题坚持开完会。回头再聊。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L5-B1", "text": "Hi everyone, sorry for joining late — we had trouble with the dial-in number.", "translation": "大家好，抱歉来晚了——我们刚才拨入号码时遇到了点问题。"},
+        {"id": "biz-L5-B2", "text": "You're a bit broken up. Could you repeat the last part?", "translation": "你们的声音有点断断续续。能把刚才那段重复一遍吗？"},
+        {"id": "biz-L5-B3", "text": "Got it, thanks. The connection seems much better now.", "translation": "明白了，谢谢。现在连接好像好多了。"},
+        {"id": "biz-L5-B4", "text": "Beijing first, then. Sales grew twelve percent last quarter, driven by new accounts.", "translation": "那北京先来。上季度销售额增长百分之十二，主要由新客户带动。"},
+        {"id": "biz-L5-B5", "text": "Understood. Could everyone please mute when not speaking? There's some background noise.", "translation": "明白。不发言的同事请静音，背景噪音有点大。"},
+        {"id": "biz-L5-B6", "text": "Fine with us. I'll follow up with an email summarizing our action items.", "translation": "我们没问题。会后我会发邮件汇总行动项。"},
+        {"id": "biz-L5-B7", "text": "Thanks for organizing. Have a great day, everyone.", "translation": "谢谢你的组织，祝大家愉快。"}
+      ]
+    }
+  ]
+}

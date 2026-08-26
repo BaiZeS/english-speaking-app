@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 4,
+  "title": "Client Reception & Business Dinner（客户接待与宴请）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L4-A1", "text": "Hi, great to finally meet you in person. Thanks for the warm welcome.", "translation": "你好，终于见面了。感谢你们的热情欢迎。"},
+        {"id": "biz-L4-A2", "text": "Long, but smooth. I managed to sleep most of the way.", "translation": "飞了很久，但很顺利。路上大部分时间我都在睡。"},
+        {"id": "biz-L4-A3", "text": "That's very kind. The city looks even more impressive than last time.", "translation": "太贴心了。这座城市比上次来更让人印象深刻了。"},
+        {"id": "biz-L4-A4", "text": "I'd like that. I've heard a lot about your new showroom.", "translation": "好啊，久闻你们新展厅的大名了。"},
+        {"id": "biz-L4-A5", "text": "Sounds great. I'm curious to try real Peking duck.", "translation": "太好了。我一直想尝尝正宗的北京烤鸭。"},
+        {"id": "biz-L4-A6", "text": "Thank you. Here's to a successful partnership!", "translation": "谢谢。为我们成功的合作干杯！"},
+        {"id": "biz-L4-A7", "text": "I appreciate the hospitality. This has been a lovely evening.", "translation": "感谢你们的盛情款待，今晚非常愉快。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L4-B1", "text": "Welcome to Beijing! How was your flight?", "translation": "欢迎来到北京！旅途还顺利吗？"},
+        {"id": "biz-L4-B2", "text": "Glad to hear it. We've arranged a car to take you to the hotel.", "translation": "那就好。我们已经安排了车送您去酒店。"},
+        {"id": "biz-L4-B3", "text": "It changes fast. Tomorrow we'd love to show you the new showroom first.", "translation": "这里变化很快。明天我们想先带您参观一下新展厅。"},
+        {"id": "biz-L4-B4", "text": "Now, shall we head to dinner? We've booked a private room nearby.", "translation": "那我们出发去吃晚饭好吗？已经在附近订好了包间。"},
+        {"id": "biz-L4-B5", "text": "You're in for a treat — it's the restaurant's specialty. Please, after you.", "translation": "您有口福了——烤鸭正是这家店的招牌。您先请。"},
+        {"id": "biz-L4-B6", "text": "Cheers! To our partnership, and to many more visits.", "translation": "干杯！愿我们合作长久，常来常往。"},
+        {"id": "biz-L4-B7", "text": "The pleasure is ours. Get some rest — tomorrow will be a full day.", "translation": "这是我们的荣幸。好好休息——明天行程很满。"}
+      ]
+    }
+  ]
+}

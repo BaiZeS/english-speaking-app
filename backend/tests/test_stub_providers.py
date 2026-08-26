@@ -33,3 +33,12 @@ async def test_stub_asr_recognizes_reference_exactly() -> None:
         AsrWord(word="Hello", score=95.0, ipa=None),
         AsrWord(word="world", score=95.0, ipa=None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_stub_asr_accepts_and_ignores_category_kwarg() -> None:
+    """签名兼容: 单词重练的 category 参数须被接受 (忽略), 与 XunfeiASRProvider 对齐."""
+    p = StubASRProvider()
+    res = await p.recognize(audio=b"\x00\x00", ref_text="schedule", category="read_word")
+    assert res.recognized == "schedule"
+    assert res.source == "stub"

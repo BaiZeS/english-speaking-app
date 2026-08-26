@@ -14,9 +14,9 @@ async def test_books_endpoint_returns_curated_catalog(client: httpx.AsyncClient)
     assert "books" in data
     assert "default_book" in data
     assert data["default_book"] == data["books"][0]["id"]
-    # Both shipped books (nce1 + nce2) must be present.
+    # All shipped books (business + nce1 + nce2) must be present.
     ids = {book["id"] for book in data["books"]}
-    assert {"nce1", "nce2"} <= ids
+    assert {"business", "nce1", "nce2"} <= ids
 
 
 @pytest.mark.asyncio
@@ -35,8 +35,9 @@ async def test_books_default_picks_first_alphabetically() -> None:
 
     books = list_books()
     assert books
-    # Falls back to the first entry when caller doesn't pick one.
-    assert books[0].id in {"nce1", "nce2"}
+    # Default book is the first directory in lexical order; "business" sorts
+    # before the nce books, which is intentional (primary audience is adult).
+    assert books[0].id in {"business", "nce1", "nce2"}
 
 
 def test_fallback_metadata_used_when_book_json_missing(

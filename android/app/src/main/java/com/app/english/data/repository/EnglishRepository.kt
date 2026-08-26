@@ -22,13 +22,14 @@ import javax.inject.Singleton
 interface EnglishRepository {
     suspend fun listLessons(book: String): List<LessonSummary>
     suspend fun getLessonRoles(lessonId: Int, book: String): LessonDetail
-    suspend fun getTtsAudioUrl(text: String, voice: String): String
+    suspend fun getTtsAudio(text: String, voice: String): com.app.english.domain.model.TtsAudio
     suspend fun score(
-        lessonId: Int,
-        lineId: String,
+        lessonId: Int? = null,
+        lineId: String? = null,
         refText: String,
         audioBase64: String,
-        mode: String = "k12"
+        mode: String = "k12",
+        category: String = "read_sentence"
     ): ScoreResult
     suspend fun generateDialogue(
         scene: String,
@@ -50,7 +51,10 @@ interface EnglishRepository {
         error("Dialogue scenes catalog is not supported by this repository")
     suspend fun getStats(deviceId: String): PracticeStats =
         error("Stats lookup is not supported by this repository")
-    suspend fun getLessonProgress(lessonId: Int): com.app.english.domain.model.LessonProgress =
+    suspend fun getLessonProgress(
+        book: String,
+        lessonId: Int
+    ): com.app.english.domain.model.LessonProgress =
         error("Lesson progress lookup is not supported by this repository")
 }
 
@@ -65,21 +69,25 @@ class EnglishRepositoryImpl @Inject constructor(
     override suspend fun getLessonRoles(lessonId: Int, book: String): LessonDetail =
         api.getLessonRoles(lessonId, book).toDomain()
 
-    override suspend fun getTtsAudioUrl(text: String, voice: String): String =
-        api.getTts(text, voice).audioUrl
+    override suspend fun getTtsAudio(
+        text: String,
+        voice: String
+    ): com.app.english.domain.model.TtsAudio = api.getTts(text, voice).toDomain()
 
     override suspend fun score(
-        lessonId: Int,
-        lineId: String,
+        lessonId: Int?,
+        lineId: String?,
         refText: String,
         audioBase64: String,
-        mode: String
+        mode: String,
+        category: String
     ): ScoreResult {
         val request = ScoreRequestDto(
             lessonId = lessonId,
             lineId = lineId,
             refText = refText,
             mode = mode,
+            category = category,
             audio = audioBase64
         )
         return api.score(request).toDomain()
@@ -121,7 +129,8 @@ class EnglishRepositoryImpl @Inject constructor(
         api.getStats(deviceId).toDomain()
 
     override suspend fun getLessonProgress(
+        book: String,
         lessonId: Int
     ): com.app.english.domain.model.LessonProgress =
-        api.getLessonProgress(lessonId, settingsStore.deviceId).toDomain()
+        api.getLessonProgress(lessonId, book, settingsStore.deviceId).toDomain()
 }

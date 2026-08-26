@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,6 +57,7 @@ import com.app.english.ui.theme.color
 @Composable
 fun DashboardScreen(
     onHistoryClick: () -> Unit,
+    onDrillClick: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
@@ -83,6 +85,7 @@ fun DashboardScreen(
             state.stats != null -> DashboardBody(
                 stats = state.stats!!,
                 onHistoryClick = onHistoryClick,
+                onDrillClick = onDrillClick,
                 modifier = Modifier.padding(padding)
             )
         }
@@ -93,12 +96,14 @@ fun DashboardScreen(
 private fun DashboardBody(
     stats: PracticeStats,
     onHistoryClick: () -> Unit,
+    onDrillClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        DrillEntryCard(onClick = onDrillClick)
         if (!stats.hasData) {
             EmptyDashboard()
             return@Column
@@ -223,6 +228,42 @@ private fun StreakCard(streakDays: Int, recentSessions: Int) {
                     text = "近 7 天完成 $recentSessions 次",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrillEntryCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.School,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(36.dp)
+            )
+            Box(Modifier.size(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "弱词训练",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "专项练习错词与弱词，逐个攻克",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
         }
@@ -431,7 +472,7 @@ private fun ReviewSuggestionsCard(items: List<WeakestLesson>, onClick: () -> Uni
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Lesson " + item.lessonId.toString(),
+                        text = item.book + " L" + item.lessonId.toString(),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )

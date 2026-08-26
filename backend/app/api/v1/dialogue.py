@@ -15,6 +15,8 @@ exposed via ``GET /dialogue/scenes`` so the Android picker can render it.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from typing import Any, cast
 
@@ -29,8 +31,14 @@ from app.services.llm_provider import (
     get_llm_provider,
     get_model_catalog,
 )
+from app.services.xunfei_iat import XunfeiIatProvider
 
 router = APIRouter(tags=["dialogue"])
+_iat = XunfeiIatProvider()
+
+# The Android client appends the user's current reply as this literal
+# placeholder until the backend returns a real transcription (recognized_text).
+_PLACEHOLDER_USER_TEXT = "（本轮自由回答）"  # noqa: RUF001 (intentional Chinese punctuation)
 
 
 # ====== Schemas ======
@@ -158,15 +166,22 @@ async def turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
     With LLM configured we send the conversation history and parse a JSON
     ``{reply, suggestion}`` payload back. With no credentials we fall back to
     a deterministic rotating catalog so the UI never breaks.
+
+    When the request carries the user's recorded reply (``user_audio_b64``)
+    we transcribe it via 讯飞 IAT and swap the client's placeholder user turn
+    for the recognized text, so the LLM responds to what was actually said.
+    Without IAT credentials (or on any failure) behavior is unchanged.
     """
     scene = get_scene(req.scene_id)
+    recognized_text = await _iat.transcribe(_decode_user_audio(req.user_audio_b64))
+    history = _apply_recognized_text(req.history, recognized_text)
     provider = get_llm_provider()
     if cast(bool, getattr(provider, "is_configured", False)):
         try:
             model = _resolve_model(req.model_id)
             messages = [
                 LlmMessage(role="system", content=_OPENING_SYSTEM),
-                LlmMessage(role="user", content=_scene_context(req.scene_id, req.history)),
+                LlmMessage(role="user", content=_scene_context(req.scene_id, history)),
             ]
             completion = await provider.chat(
                 model=model,
@@ -180,13 +195,13 @@ async def turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
                 status="ready",
                 reply_text=parsed["reply"],
                 suggested_reply=parsed["suggestion"] or scene.next_suggestion,
-                recognized_text=None,
+                recognized_text=recognized_text,
                 model_id=model,
             )
         except Exception as exc:
             logger.warning("LLM turn failed; using stub. scene={} err={}", req.scene_id, exc)
 
-    user_turns = sum(1 for item in req.history if item.get("role") == "user")
+    user_turns = sum(1 for item in history if item.get("role") == "user")
     if user_turns <= 1:
         reply_text = scene.fallback_reply
         suggested_reply = scene.next_suggestion
@@ -198,12 +213,47 @@ async def turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
         status="stub",
         reply_text=reply_text,
         suggested_reply=suggested_reply,
-        recognized_text=None,
+        recognized_text=recognized_text,
         model_id=None,
     )
 
 
 # ====== Shared helpers ======
+
+
+def _decode_user_audio(b64: str) -> bytes:
+    """Decode the client's base64 PCM payload.
+
+    Empty or invalid input yields ``b""`` so the caller simply skips
+    transcription instead of failing the whole turn.
+    """
+    if not b64:
+        return b""
+    try:
+        return base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        logger.debug("dialogue turn: invalid user_audio_b64, skipping transcription")
+        return b""
+
+
+def _apply_recognized_text(
+    history: list[dict[str, Any]], recognized_text: str | None
+) -> list[dict[str, Any]]:
+    """Swap the client's placeholder user turn for the real transcription.
+
+    The Android client sends the current user reply as the literal placeholder
+    stored in ``_PLACEHOLDER_USER_TEXT``. When IAT produced a transcription we
+    substitute it so the LLM context reflects what the learner actually said.
+    Without a transcription the history is returned unchanged (same object).
+    """
+    if not recognized_text:
+        return history
+    updated = [dict(item) for item in history]
+    for item in reversed(updated):
+        if item.get("role") == "user" and item.get("text") == _PLACEHOLDER_USER_TEXT:
+            item["text"] = recognized_text
+            break
+    return updated
 
 
 _OPENING_SYSTEM = (

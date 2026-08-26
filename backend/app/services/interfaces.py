@@ -25,6 +25,9 @@ class AsrWord:
 class AsrResult:
     recognized: str
     word_scores: list[AsrWord]
+    # 来源标记: "xunfei"=真实讯飞 ISE 评测, "stub"=本地占位假分.
+    # 让 endpoint 透传给前端, 避免 stub 恒 95 分被当成真实评测.
+    source: str = "stub"
 
 
 class TTSProvider(Protocol):
@@ -32,4 +35,6 @@ class TTSProvider(Protocol):
 
 
 class ASRProvider(Protocol):
-    async def recognize(self, audio: bytes, ref_text: str) -> AsrResult: ...
+    async def recognize(
+        self, audio: bytes, ref_text: str, category: str = "read_sentence"
+    ) -> AsrResult: ...

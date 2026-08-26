@@ -6,11 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.app.english.audio.AudioEncoder
 import com.app.english.audio.AudioPlayer
 import com.app.english.audio.AudioRecorder
+import com.app.english.audio.RecordingStore
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.remote.DialogueMessageDto
 import com.app.english.data.repository.BooksRepository
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.HistoryRepository
+import com.app.english.data.repository.MistakeWordRepository
 import com.app.english.domain.model.DialogueLine
 import com.app.english.domain.model.DialogueScene
 import com.app.english.domain.model.DialogueSession
@@ -20,6 +22,7 @@ import com.app.english.ui.score.LineScoreResult
 import com.app.english.ui.score.ScoreSession
 import com.app.english.ui.score.ScoreSessionHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,9 +60,11 @@ class FreeDialogueViewModel @Inject constructor(
     private val repository: EnglishRepository,
     private val booksRepository: BooksRepository,
     private val historyRepository: HistoryRepository,
+    private val mistakeWordRepository: MistakeWordRepository,
     private val audioRecorder: AudioRecorder,
     private val audioPlayer: AudioPlayer,
     private val audioEncoder: AudioEncoder,
+    private val recordingStore: RecordingStore,
     private val settingsStore: SettingsStore,
     private val scoreSessionHolder: ScoreSessionHolder,
     savedStateHandle: SavedStateHandle
@@ -67,6 +72,8 @@ class FreeDialogueViewModel @Inject constructor(
     private val lessonId: Int = requireNotNull(
         savedStateHandle.get<Int>(Route.FreeDialogue.ARG_LESSON_ID)
     ) { "lessonId argument required" }
+    private val book: String =
+        savedStateHandle.get<String>(Route.FreeDialogue.ARG_BOOK) ?: "nce1"
 
     private val _state = MutableStateFlow(FreeDialogueUiState())
     val state: StateFlow<FreeDialogueUiState> = _state.asStateFlow()
@@ -149,8 +156,17 @@ class FreeDialogueViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isPlayingReference = true, error = null) }
             try {
-                val url = repository.getTtsAudioUrl(message.text, settingsStore.getVoice())
-                audioPlayer.play(url) {
+                val tts = repository.getTtsAudio(message.text, settingsStore.getVoice())
+                if (tts.isStub) {
+                    _state.update {
+                        it.copy(
+                            isPlayingReference = false,
+                            error = "AI 语音未配置（后端缺 MIMO_API_KEY），当前无真实语音"
+                        )
+                    }
+                    return@launch
+                }
+                audioPlayer.play(tts.audioUrl) {
                     _state.update { current -> current.copy(isPlayingReference = false) }
                 }
             } catch (e: Exception) {
@@ -183,9 +199,11 @@ class FreeDialogueViewModel @Inject constructor(
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
                 return@launch
             }
+            val lineId = "free-${current.scores.size + 1}"
+            val saved = retainRecording(lineId, file)
             try {
                 val base64 = withContext(Dispatchers.IO) { audioEncoder.encode(file) }
-                val lineId = "free-${current.scores.size + 1}"
+                if (saved != null) file.delete()
                 val result = repository.score(
                     lessonId = lessonId,
                     lineId = lineId,
@@ -193,6 +211,7 @@ class FreeDialogueViewModel @Inject constructor(
                     audioBase64 = base64,
                     mode = "free_dialogue"
                 )
+                collectMistakeWords(lineId, result)
                 val history = current.messages.map {
                     DialogueMessageDto(
                         role = if (it.isUser) "user" else "assistant",
@@ -224,9 +243,30 @@ class FreeDialogueViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _state.update { it.copy(isSubmitting = false, error = "对话评分失败：${e.message}") }
-            } finally {
-                file.delete()
             }
+        }
+    }
+
+    /**
+     * Persists the raw take as a WAV via [RecordingStore] for later replay.
+     * Retention failure never blocks scoring; returns null in that case.
+     */
+    private suspend fun retainRecording(lineId: String, file: File): File? =
+        try {
+            withContext(Dispatchers.IO) {
+                recordingStore.saveRecording(book, lessonId, lineId, file)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to retain recording")
+            null
+        }
+
+    /** Feeds weak words from a successful score into the mistake-word ledger. */
+    private suspend fun collectMistakeWords(lineId: String, result: ScoreResult) {
+        try {
+            mistakeWordRepository.collectFromResult(book, lessonId, lineId, result)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to collect mistake words")
         }
     }
 
@@ -245,6 +285,7 @@ class FreeDialogueViewModel @Inject constructor(
             fluency = results.map { it.fluency }.average(),
             completeness = results.map { it.completeness }.average(),
             suggestion = results.mapNotNull { it.suggestion }.lastOrNull(),
+            source = if (results.any { it.isStub }) "stub" else "xunfei",
             lineCount = current.scores.size,
             lineResults = current.scores.mapIndexed { index, scored ->
                 LineScoreResult(
@@ -259,6 +300,7 @@ class FreeDialogueViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 historyRepository.write(
+                    book = book,
                     lessonId = lessonId,
                     lineId = "free-session",
                     audioPath = "free_session_${System.currentTimeMillis()}",

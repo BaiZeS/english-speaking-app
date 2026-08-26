@@ -56,10 +56,13 @@ class WordScore(BaseModel):
 
 
 class ScoreRequest(BaseModel):
-    lesson_id: int
-    line_id: str = Field(max_length=64)
+    # lesson_id/line_id 可选: 错词重练 (单词 drill) 没有课时上下文.
+    lesson_id: int | None = None
+    line_id: str | None = Field(default=None, max_length=64)
     ref_text: str = Field(max_length=2000)
     mode: str = "k12"
+    # ISE 评测类型: "read_sentence" (跟读句子) 或 "read_word" (单词重练).
+    category: str = Field(default="read_sentence", max_length=32)
     audio: bytes = Field(max_length=10_000_000)
 
 
@@ -70,6 +73,9 @@ class ScoreResponse(BaseModel):
     completeness: float = Field(ge=0, le=100)
     word_details: list[WordScore]
     suggestion: str | None = None
+    # 评分来源: "xunfei"=真实讯飞 ISE, "stub"=占位假分 (未配凭据/调用失败).
+    # 前端据此提示用户当前分数不是真实评测. 旧客户端不读此字段也兼容.
+    source: str = "stub"
 
 
 # ====== History ======
@@ -77,6 +83,8 @@ class ScoreResponse(BaseModel):
 
 class HistoryWriteRequest(BaseModel):
     device_id: str = Field(max_length=128)
+    # 旧客户端不传 book 时按新概念一册兜底 (历史上只有这一本书).
+    book: str = Field(default="nce1", max_length=32)
     lesson_id: int
     line_id: str = Field(max_length=64)
     audio_path: str = Field(max_length=512)
@@ -88,6 +96,7 @@ class HistoryWriteRequest(BaseModel):
 
 class HistoryItem(BaseModel):
     id: str
+    book: str = "nce1"
     lesson_id: int
     line_id: str
     score_total: float

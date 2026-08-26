@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -24,11 +25,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,11 +45,11 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 
 /**
- * Top-level entry point for the read-along / dialogue / free-dialogue
- * practice flow. Holds the Scaffold + permissions, then delegates the
- * mode-specific content to [PlayerContent]. Sub-composables live in
- * [PlayerControls], [PlayerReadAlongView], [PlayerDialogueView], and
- * [PlayerScorePanel].
+ * Top-level entry point for the read-along / shadow / dialogue /
+ * free-dialogue practice flow. Holds the Scaffold + permissions, then
+ * delegates the mode-specific content to [PlayerContent]. Sub-composables
+ * live in [PlayerControls], [PlayerReadAlongView], [PlayerShadowView],
+ * [PlayerDialogueView], and [PlayerScorePanel].
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -80,6 +84,8 @@ fun PlayerScreen(
                             text = when (state.mode) {
                                 PlayerMode.READ_ALONG ->
                                     "跟读模式 · 第 ${state.currentIndex + 1}/${state.lines.size} 句"
+                                PlayerMode.SHADOW ->
+                                    "影子跟读 · 整段连续 · ${state.lines.size} 句"
                                 PlayerMode.DIALOGUE ->
                                     "对话模式 · 角色 ${state.roleName} · 第 " +
                                         "${state.currentIndex + 1}/${state.lines.size} 句"
@@ -97,7 +103,8 @@ fun PlayerScreen(
             )
         },
         bottomBar = {
-            if (state.mode != PlayerMode.FREE_DIALOGUE && state.lines.isNotEmpty()) {
+            // Shadow mode renders its own progress inside PlayerShadowView.
+            if (state.showsLineProgress && state.lines.isNotEmpty()) {
                 val progress =
                     (state.currentIndex + 1).toFloat() / state.lines.size.coerceAtLeast(1)
                 LinearProgressIndicator(
@@ -123,6 +130,10 @@ fun PlayerScreen(
                 onStartRecording = viewModel::startRecording,
                 onStopAndSubmit = viewModel::stopAndSubmit,
                 onNext = viewModel::nextLine,
+                onStartShadow = viewModel::startShadow,
+                onStopShadow = viewModel::stopShadow,
+                onPlayMine = viewModel::playMyRecording,
+                onCompare = viewModel::playComparison,
                 modifier = Modifier.padding(padding)
             )
         }
@@ -138,9 +149,23 @@ private fun PlayerContent(
     onStartRecording: () -> Unit,
     onStopAndSubmit: () -> Unit,
     onNext: () -> Unit,
+    onStartShadow: () -> Unit,
+    onStopShadow: () -> Unit,
+    onPlayMine: () -> Unit,
+    onCompare: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val line = state.currentLine
+    var showHeadphoneHint by remember { mutableStateOf(false) }
+    if (showHeadphoneHint) {
+        HeadphoneHintDialog(
+            onConfirm = {
+                showHeadphoneHint = false
+                onStartShadow()
+            },
+            onDismiss = { showHeadphoneHint = false }
+        )
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -150,6 +175,17 @@ private fun PlayerContent(
     ) {
         if (line == null) {
             Text("没有可朗读的句子", style = MaterialTheme.typography.bodyLarge)
+            return@Column
+        }
+
+        if (state.mode == PlayerMode.SHADOW) {
+            PlayerShadowView(
+                state = state,
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
+                onStart = { showHeadphoneHint = true },
+                onStop = onStopShadow
+            )
             return@Column
         }
 
@@ -192,6 +228,8 @@ private fun PlayerContent(
                     translation = line.translation
                 )
             }
+            // Handled by the early return above; kept for exhaustiveness.
+            PlayerMode.SHADOW -> Unit
             PlayerMode.FREE_DIALOGUE -> Unit
         }
 
@@ -221,7 +259,13 @@ private fun PlayerContent(
         }
 
         state.currentScore?.let { score ->
-            ScorePanel(score = score, needsRerecord = !state.canAdvance)
+            ScorePanel(
+                score = score,
+                needsRerecord = !state.canAdvance,
+                hasRecording = state.lastRecordingPath != null,
+                onPlayMine = onPlayMine,
+                onCompare = onCompare
+            )
             AdvanceButton(
                 canAdvance = state.canAdvance,
                 isLastLine = state.isLastLine,
@@ -229,4 +273,23 @@ private fun PlayerContent(
             )
         }
     }
+}
+
+/**
+ * One-time warning before a shadowing run: speaker playback can leak into the
+ * microphone and inflate scores, so headphones are recommended.
+ */
+@Composable
+private fun HeadphoneHintDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("建议佩戴耳机") },
+        text = { Text("建议佩戴耳机：外放的标准音可能被麦克风录入，影响评分准确性") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("继续开始") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }

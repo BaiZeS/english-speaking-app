@@ -1,0 +1,31 @@
+{
+  "book": "business",
+  "lesson": 6,
+  "title": "Project Risk Communication（项目风险沟通）",
+  "roles": [
+    {
+      "name": "A",
+      "lines": [
+        {"id": "biz-L6-A1", "text": "Thanks for the urgent call. What's going on with the delivery date?", "translation": "谢谢你临时约这个电话。交付日期是怎么回事？"},
+        {"id": "biz-L6-A2", "text": "Three weeks? That's a problem. What caused the delay?", "translation": "三周？这可不行。是什么原因导致的延误？"},
+        {"id": "biz-L6-A3", "text": "I see. How sure are you about the new date?", "translation": "明白了。新的日期你们有多大把握？"},
+        {"id": "biz-L6-A4", "text": "Okay. But our marketing campaign is already booked. What does this cost us?", "translation": "好吧。但我们的推广活动已经排期了。这会让我们损失什么？"},
+        {"id": "biz-L6-A5", "text": "Hmm. What's your plan to make sure this doesn't happen again?", "translation": "嗯。你们有什么计划确保此类问题不再发生？"},
+        {"id": "biz-L6-A6", "text": "That makes sense. Thank you for telling me early instead of hiding it.", "translation": "这样就合理了。谢谢你们及早告知，而不是隐瞒。"},
+        {"id": "biz-L6-A7", "text": "Alright. Send me the updated timeline today, and let's touch base on Monday.", "translation": "好吧。今天把更新后的时间表发给我，我们周一再对一次。"}
+      ]
+    },
+    {
+      "name": "B",
+      "lines": [
+        {"id": "biz-L6-B1", "text": "I want to be upfront — the delivery will slip by about three weeks.", "translation": "我想开门见山地说——交付要推迟大约三周。"},
+        {"id": "biz-L6-B2", "text": "A key supplier failed the quality audit, so we're switching to a backup source.", "translation": "一家关键供应商没通过质量审核，我们正在切换到备用货源。"},
+        {"id": "biz-L6-B3", "text": "Quite sure. We've already tested the backup parts, and the results are encouraging.", "translation": "很有把握。备用部件我们已经测试过了，结果令人满意。"},
+        {"id": "biz-L6-B4", "text": "We'll absorb the extra shipping costs, and the campaign can shift by two weeks.", "translation": "额外运费由我们承担，推广活动可以顺延两周。"},
+        {"id": "biz-L6-B5", "text": "We're adding a second qualified supplier and weekly quality checks at the factory.", "translation": "我们会引入第二家合格供应商，并在工厂增加每周质检。"},
+        {"id": "biz-L6-B6", "text": "You'll always hear bad news from us quickly. No surprises — that's my promise.", "translation": "坏消息您一定会第一时间从我们这里得知。绝不让您意外——这是我的承诺。"},
+        {"id": "biz-L6-B7", "text": "You'll have it by noon. Thanks for your understanding and support.", "translation": "中午前一定发给您。感谢您的理解与支持。"}
+      ]
+    }
+  ]
+}

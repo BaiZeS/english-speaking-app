@@ -29,11 +29,25 @@ data class ScoreResult(
     val fluency: Double,
     val completeness: Double,
     val wordDetails: List<WordScore>,
-    val suggestion: String?
-)
+    val suggestion: String?,
+    // "xunfei"=真实评测, "stub"=占位假分. UI 据此提示用户.
+    val source: String = "stub"
+) {
+    val isStub: Boolean get() = source != "xunfei"
+}
+
+data class TtsAudio(
+    val audioUrl: String,
+    val durationMs: Int,
+    // "mimo"=真实合成, "stub"=占位假音频.
+    val source: String = "stub"
+) {
+    val isStub: Boolean get() = source != "mimo"
+}
 
 data class HistoryItem(
     val id: String,
+    val book: String = "nce1",
     val lessonId: Int,
     val lineId: String,
     val scoreTotal: Double,
@@ -117,6 +131,7 @@ data class PracticeStats(
 }
 
 data class LessonProgress(
+    val book: String = "nce1",
     val lessonId: Int,
     val attemptCount: Int,
     val bestScore: Double,
@@ -127,6 +142,7 @@ data class LessonProgress(
 }
 
 data class WeakestLesson(
+    val book: String = "nce1",
     val lessonId: Int,
     val bestScore: Double,
     val avgScore: Double,

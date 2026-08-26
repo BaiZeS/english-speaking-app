@@ -23,7 +23,9 @@ class StubTTSProvider:
 class StubASRProvider:
     """Recognizes the reference text perfectly when ref_text is provided."""
 
-    async def recognize(self, audio: bytes, ref_text: str) -> AsrResult:
+    async def recognize(self, audio: bytes, ref_text: str, category: str = "read_sentence") -> AsrResult:
+        # category (read_sentence/read_word) 对 stub 无意义, 仅为签名兼容而接受.
+        del category
         words = ref_text.split()
         return AsrResult(
             recognized=ref_text,

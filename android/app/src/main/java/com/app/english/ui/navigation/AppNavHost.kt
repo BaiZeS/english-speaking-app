@@ -23,6 +23,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.app.english.ui.about.AboutScreen
 import com.app.english.ui.dashboard.DashboardScreen
+import com.app.english.ui.drill.MistakeDrillScreen
 import com.app.english.ui.freedialogue.FreeDialogueScreen
 import com.app.english.ui.history.HistoryDetailScreen
 import com.app.english.ui.history.HistoryListScreen
@@ -83,17 +84,23 @@ fun AppNavHost() {
                             launchSingleTop = true
                             restoreState = true
                         }
+                    },
+                    onDrillClick = {
+                        navController.navigate(Route.MistakeDrill.route)
                     }
                 )
             }
             composable(Route.Lessons.route) {
                 LessonListScreen(
-                    onLessonClick = { id -> navController.navigate(Route.LessonDetail.create(id)) }
+                    onLessonClick = { book, id ->
+                        navController.navigate(Route.LessonDetail.create(book, id))
+                    }
                 )
             }
             composable(
                 route = Route.LessonDetail.route,
                 arguments = listOf(
+                    navArgument(Route.LessonDetail.ARG_BOOK) { type = NavType.StringType },
                     navArgument(Route.LessonDetail.ARG_LESSON_ID) {
                         type =
                             NavType.IntType
@@ -102,17 +109,18 @@ fun AppNavHost() {
             ) {
                 LessonDetailScreen(
                     onBack = { navController.popBackStack() },
-                    onStartPractice = { lessonId, mode ->
-                        navController.navigate(Route.Player.create(lessonId, mode))
+                    onStartPractice = { book, lessonId, mode ->
+                        navController.navigate(Route.Player.create(book, lessonId, mode))
                     },
-                    onStartFreeDialogue = { lessonId ->
-                        navController.navigate(Route.FreeDialogue.create(lessonId))
+                    onStartFreeDialogue = { book, lessonId ->
+                        navController.navigate(Route.FreeDialogue.create(book, lessonId))
                     }
                 )
             }
             composable(
                 route = Route.Player.route,
                 arguments = listOf(
+                    navArgument(Route.Player.ARG_BOOK) { type = NavType.StringType },
                     navArgument(Route.Player.ARG_LESSON_ID) { type = NavType.IntType },
                     navArgument(Route.Player.ARG_MODE) { type = NavType.StringType },
                     navArgument(Route.Player.ARG_ROLE_NAME) { type = NavType.StringType }
@@ -130,6 +138,7 @@ fun AppNavHost() {
             composable(
                 route = Route.FreeDialogue.route,
                 arguments = listOf(
+                    navArgument(Route.FreeDialogue.ARG_BOOK) { type = NavType.StringType },
                     navArgument(Route.FreeDialogue.ARG_LESSON_ID) { type = NavType.IntType }
                 )
             ) {
@@ -159,6 +168,9 @@ fun AppNavHost() {
             }
             composable(Route.HistoryDetail.route) {
                 HistoryDetailScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Route.MistakeDrill.route) {
+                MistakeDrillScreen(onBack = { navController.popBackStack() })
             }
             composable(Route.Settings.route) {
                 SettingsScreen(

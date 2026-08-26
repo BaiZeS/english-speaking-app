@@ -31,6 +31,8 @@ class LessonDetailViewModel @Inject constructor(
         requireNotNull(savedStateHandle.get<Int>(Route.LessonDetail.ARG_LESSON_ID)) {
             "lessonId argument required"
         }
+    val book: String =
+        savedStateHandle.get<String>(Route.LessonDetail.ARG_BOOK) ?: "nce1"
 
     private val _state = MutableStateFlow<LessonDetailUiState>(LessonDetailUiState.Loading)
     val state: StateFlow<LessonDetailUiState> = _state.asStateFlow()
@@ -43,7 +45,7 @@ class LessonDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = LessonDetailUiState.Loading
             try {
-                val lesson = repository.getLessonRoles(lessonId, BOOK)
+                val lesson = repository.getLessonRoles(lessonId, book)
                 _state.value = LessonDetailUiState.Success(lesson)
                 loadProgressInBackground()
             } catch (e: Exception) {
@@ -60,15 +62,11 @@ class LessonDetailViewModel @Inject constructor(
      */
     private fun loadProgressInBackground() {
         viewModelScope.async {
-            val progress = runCatching { repository.getLessonProgress(lessonId) }.getOrNull()
+            val progress = runCatching { repository.getLessonProgress(book, lessonId) }.getOrNull()
             val current = _state.value
             if (current is LessonDetailUiState.Success) {
                 _state.value = current.copy(progress = progress)
             }
         }
-    }
-
-    private companion object {
-        const val BOOK = "nce1"
     }
 }

@@ -18,6 +18,14 @@
 | 课前预览 + 错词高亮 | ✅ LessonDetail 加课文预览（首 3 句 + 角色分布柱）+ ScoreResult 每词按分数染色 chip |
 | History 筛选 | ✅ 全部 / 练过 / 85+ / 60 以下 四种 filter chip |
 | 模块化 PlayerScreen | ✅ 551 行单体拆为 Screen + Controls + ReadAlongView + DialogueView + ScorePanel 5 个文件 |
+| 商务英语语料 | ✅ `data/business/` 6 课（会议/汇报/谈判/接待宴请/电话会议/风险沟通），默认书籍 |
+| 多书隔离 | ✅ 路由/历史/进度按 (book, lesson) 隔离（history 表加 book 列，Alembic 迁移）；Android 全链路贯通 |
+| 商务自由对话场景 | ✅ 商务会议/工作汇报/商务谈判 3 个场景（共 9 个），选择器默认商务会议 |
+| 评分真假可辨 | ✅ /score 与 /tts 返回 `source` 字段；未配凭据时客户端显示"占位假分/假音频"警示 |
+| 影子跟读 | ✅ 整段连续影子跟读：全文音频连播 + 全程录音（AEC/VOICE_COMMUNICATION）+ 按句切片逐句评分聚合；录音保留可回放对比（听我的/对比听） |
+| 自由对话真实转写 | ✅ 讯飞 IAT 听写接入 `/dialogue/turn`：识别用户实际说的话，替换占位符并喂给 LLM（无凭据自动回退占位行为） |
+| 弱词专项训练 | ✅ 评分 <70 词自动入弱词本（Room），训练页：示范→跟读单词（ISE read_word）→≥85 毕业 |
+| 评分语速修复 | ✅ 语速按真实音频时长计算（原固定 4s 窗口）；/score 支持 category=read_word |
 
 ## 仓库结构
 

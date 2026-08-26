@@ -82,6 +82,7 @@ class LessonProgress(BaseModel):
     practised the lesson (Android renders those as a "new" pill).
     """
 
+    book: str = "nce1"
     lesson_id: int
     attempt_count: int
     best_score: float
@@ -108,21 +109,26 @@ async def _get_or_create_user(db: AsyncSession, device_id: str) -> User:
 async def get_lesson_progress(
     lesson_id: int,
     device_id: str = Query(..., min_length=1, max_length=128),
+    book: str = Query("nce1", min_length=1, max_length=32),
     db: AsyncSession = Depends(get_db),
 ) -> LessonProgress:
     """Return this device's practice stats for one lesson.
 
     Computed in a single query so we can return attempt_count, best, last,
     and last_practiced_at without N+1 round-trips. The lesson_id is the
-    lesson_no (NCE1 lesson 1 has id=1); the column on History is integer.
+    lesson_no within a book (NCE1 lesson 1 has id=1); different books repeat
+    lesson numbers, so progress must be scoped by (book, lesson_id).
     """
     user = await _get_or_create_user(db, device_id)
     res = await db.execute(
-        select(History).where(History.user_id == user.id, History.lesson_id == lesson_id)
+        select(History).where(
+            History.user_id == user.id, History.book == book, History.lesson_id == lesson_id
+        )
     )
     rows = list(res.scalars().all())
     if not rows:
         return LessonProgress(
+            book=book,
             lesson_id=lesson_id,
             attempt_count=0,
             best_score=0.0,
@@ -134,6 +140,7 @@ async def get_lesson_progress(
     # Sort by created_at desc to be safe in case of out-of-order inserts.
     most_recent = max(rows, key=lambda r: r.created_at)
     return LessonProgress(
+        book=book,
         lesson_id=lesson_id,
         attempt_count=len(rows),
         best_score=best,

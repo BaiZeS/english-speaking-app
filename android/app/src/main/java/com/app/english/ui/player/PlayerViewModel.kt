@@ -1,24 +1,30 @@
 package com.app.english.ui.player
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.app.english.audio.AudioEncoder
 import com.app.english.audio.AudioPlayer
 import com.app.english.audio.AudioRecorder
+import com.app.english.audio.RecordingStore
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.HistoryRepository
+import com.app.english.data.repository.MistakeWordRepository
 import com.app.english.domain.model.LessonDetail
 import com.app.english.domain.model.Line
 import com.app.english.domain.model.ScoreResult
+import com.app.english.domain.model.TtsAudio
 import com.app.english.ui.navigation.Route
 import com.app.english.ui.score.LineScoreResult
 import com.app.english.ui.score.ScoreSession
 import com.app.english.ui.score.ScoreSessionHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +35,34 @@ import timber.log.Timber
 
 private const val MIN_SCORE_TO_ADVANCE = 60.0
 private const val RECENT_SENTENCE_COUNT = 5
+
+// Shadow mode (整段连续影子跟读) timing. Reference lines play back to back
+// with SHADOW_GAP_MS silence between them; the recording is later sliced at
+// each line boundary with SHADOW_PRE/POST_GUARD_MS of context on both sides.
+private const val SHADOW_GAP_MS = 500L
+private const val SHADOW_TAIL_MS = 1000L
+private const val SHADOW_PRE_GUARD_MS = 300L
+private const val SHADOW_POST_GUARD_MS = 300L
+private const val SHADOW_MIN_SLICE_MS = 300L
+private const val COMPARE_GAP_MS = 500L
+private const val SHADOW_ROLE_LABEL = "影子跟读"
+private const val SHADOW_HISTORY_LINE_ID = "shadow-session"
+private const val SHADOW_STUB_TTS_ERROR =
+    "标准发音未配置（后端缺 MIMO_API_KEY），无法进行影子跟读"
+
+/** Raw PCM L16 16kHz mono = 32000 bytes/sec = 32 bytes/ms. */
+private const val PCM_BYTES_PER_MS = 32
+
+/** Score assigned to a shadow line whose slice is too short to evaluate. */
+private val ZERO_LINE_SCORE = ScoreResult(
+    total = 0.0,
+    pronunciation = 0.0,
+    fluency = 0.0,
+    completeness = 0.0,
+    wordDetails = emptyList(),
+    suggestion = null,
+    source = "xunfei"
+)
 
 data class PracticeTurn(val role: String, val line: Line, val isUserTurn: Boolean)
 data class ScoredLine(val line: Line, val result: ScoreResult)
@@ -53,13 +87,26 @@ data class PlayerUiState(
     val lineScores: List<ScoredLine> = emptyList(),
     val hasRetaken: Boolean = false,
     val error: String? = null,
-    val finished: Boolean = false
+    val finished: Boolean = false,
+    /** Shadow mode: prefetching the per-line reference TTS before playback. */
+    val isPreparingShadow: Boolean = false,
+    /** Shadow mode: index of the reference line currently playing (-1 = idle). */
+    val shadowCurrentIndex: Int = -1,
+    /** Shadow mode: per-line scoring progress after playback ends. */
+    val shadowScoredCount: Int = 0,
+    val shadowScoreTotal: Int = 0,
+    /** WAV path of the retained recording for the current line, if any. */
+    val lastRecordingPath: String? = null
 ) {
     val currentLine: Line? get() = lines.getOrNull(currentIndex)
     val currentPrompt: Line? get() = prompts.getOrNull(currentIndex)
     val isLastLine: Boolean get() = currentIndex >= lines.lastIndex
     val canAdvance: Boolean
         get() = currentScore != null && (currentScore.total >= MIN_SCORE_TO_ADVANCE || hasRetaken)
+
+    /** The line-by-line progress bar applies only to read-along and dialogue. */
+    val showsLineProgress: Boolean
+        get() = mode == PlayerMode.READ_ALONG || mode == PlayerMode.DIALOGUE
 
     /** The most recent five sentences, with the current sentence at the end. */
     val recentLines: List<Line>
@@ -74,9 +121,11 @@ data class PlayerUiState(
 class PlayerViewModel @Inject constructor(
     private val repository: EnglishRepository,
     private val historyRepository: HistoryRepository,
+    private val mistakeWordRepository: MistakeWordRepository,
     private val audioRecorder: AudioRecorder,
     private val audioPlayer: AudioPlayer,
     private val audioEncoder: AudioEncoder,
+    private val recordingStore: RecordingStore,
     private val settingsStore: SettingsStore,
     private val scoreSessionHolder: ScoreSessionHolder,
     savedStateHandle: SavedStateHandle
@@ -84,10 +133,17 @@ class PlayerViewModel @Inject constructor(
     val lessonId: Int = requireNotNull(savedStateHandle.get<Int>(Route.Player.ARG_LESSON_ID)) {
         "lessonId argument required"
     }
+    val book: String = savedStateHandle.get<String>(Route.Player.ARG_BOOK) ?: "nce1"
     private val mode = PlayerMode.fromWire(savedStateHandle.get<String>(Route.Player.ARG_MODE))
 
     private val _state = MutableStateFlow(PlayerUiState(mode = mode))
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
+
+    /** Shadow mode: playback start offset (ms) of each line within the run. */
+    private var shadowBoundaryMs = LongArray(0)
+
+    /** Shadow mode: reference duration (ms) of each line, parallel to lines. */
+    private var shadowDurationMs = emptyList<Long>()
 
     init {
         loadLesson()
@@ -104,7 +160,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             _state.value = try {
-                val lesson = repository.getLessonRoles(lessonId, BOOK)
+                val lesson = repository.getLessonRoles(lessonId, book)
                 val resolved = resolvePractice(lesson)
                 if (resolved.lines.isEmpty()) {
                     _state.value.copy(
@@ -174,6 +230,18 @@ class PlayerViewModel @Inject constructor(
                 conversation = transcript
             )
         }
+        PlayerMode.SHADOW -> {
+            // Shadow the entire lesson: every line of every role, in order,
+            // WITHOUT sentence-splitting so line ids and TTS durations map
+            // 1:1 onto the recording slices. The user reads every line.
+            val ordered = interleaveRoles(lesson)
+            ResolvedPractice(
+                responseRole = "",
+                lines = ordered,
+                prompts = List(ordered.size) { null },
+                conversation = ordered.map { PracticeTurn("", it, true) }
+            )
+        }
         // Free dialogue has its own screen and ViewModel.
         PlayerMode.FREE_DIALOGUE -> ResolvedPractice("", emptyList(), emptyList(), emptyList())
     }
@@ -205,13 +273,66 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isPlayingReference = true, error = null) }
             try {
-                val url = repository.getTtsAudioUrl(line.text, settingsStore.getVoice())
-                audioPlayer.play(url) {
+                val tts = repository.getTtsAudio(line.text, settingsStore.getVoice())
+                if (tts.isStub) {
+                    _state.update {
+                        it.copy(
+                            isPlayingReference = false,
+                            error = "标准发音未配置（后端缺 MIMO_API_KEY），当前无真实示范音频"
+                        )
+                    }
+                    return@launch
+                }
+                audioPlayer.play(tts.audioUrl) {
                     _state.update { current -> current.copy(isPlayingReference = false) }
                 }
             } catch (e: Exception) {
                 _state.update {
                     it.copy(isPlayingReference = false, error = "标准音播放失败：${e.message}")
+                }
+            }
+        }
+    }
+
+    /** Plays the retained recording of the current line ("听我的"). */
+    fun playMyRecording() {
+        val path = _state.value.lastRecordingPath ?: return
+        if (_state.value.isPlayingReference || _state.value.isRecording) return
+        _state.update { it.copy(isPlayingReference = true, error = null) }
+        audioPlayer.play(Uri.fromFile(File(path)).toString()) {
+            _state.update { current -> current.copy(isPlayingReference = false) }
+        }
+    }
+
+    /** Plays the reference TTS then the user's take back to back ("对比听"). */
+    fun playComparison() {
+        val current = _state.value
+        val path = current.lastRecordingPath ?: return
+        val line = current.currentLine ?: return
+        if (current.isPlayingReference || current.isRecording) return
+        viewModelScope.launch {
+            _state.update { it.copy(isPlayingReference = true, error = null) }
+            try {
+                val tts = repository.getTtsAudio(line.text, settingsStore.getVoice())
+                if (tts.isStub) {
+                    _state.update {
+                        it.copy(
+                            isPlayingReference = false,
+                            error = "标准发音未配置（后端缺 MIMO_API_KEY），当前无真实示范音频"
+                        )
+                    }
+                    return@launch
+                }
+                audioPlayer.playSequence(
+                    items = listOf(tts.audioUrl, Uri.fromFile(File(path)).toString()),
+                    gapMs = COMPARE_GAP_MS,
+                    onComplete = {
+                        _state.update { it.copy(isPlayingReference = false) }
+                    }
+                )
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(isPlayingReference = false, error = "对比播放失败：${e.message}")
                 }
             }
         }
@@ -247,8 +368,10 @@ class PlayerViewModel @Inject constructor(
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
                 return@launch
             }
+            val saved = retainRecording(line.id, file)
             try {
                 val base64 = withContext(Dispatchers.IO) { audioEncoder.encode(file) }
+                if (saved != null) file.delete()
                 val result = repository.score(
                     lessonId = lessonId,
                     lineId = line.id,
@@ -261,14 +384,37 @@ class PlayerViewModel @Inject constructor(
                     current.copy(
                         isSubmitting = false,
                         currentScore = result,
+                        lastRecordingPath = saved?.absolutePath,
                         lineScores = withoutCurrent + ScoredLine(line, result)
                     )
                 }
+                collectMistakeWords(line.id, result)
             } catch (e: Exception) {
                 _state.update { it.copy(isSubmitting = false, error = "评分失败：${e.message}") }
-            } finally {
-                file.delete()
             }
+        }
+    }
+
+    /**
+     * Persists the raw take as a WAV via [RecordingStore] for later replay.
+     * Retention failure never blocks scoring; returns null in that case.
+     */
+    private suspend fun retainRecording(lineId: String, file: File): File? =
+        try {
+            withContext(Dispatchers.IO) {
+                recordingStore.saveRecording(book, lessonId, lineId, file)
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to retain recording")
+            null
+        }
+
+    /** Feeds weak words from a successful score into the mistake-word ledger. */
+    private suspend fun collectMistakeWords(lineId: String, result: ScoreResult) {
+        try {
+            mistakeWordRepository.collectFromResult(book, lessonId, lineId, result)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to collect mistake words")
         }
     }
 
@@ -284,6 +430,8 @@ class PlayerViewModel @Inject constructor(
                     currentIndex = it.currentIndex + 1,
                     currentScore = null,
                     hasRetaken = false,
+                    lastRecordingPath = null,
+                    isPlayingReference = false,
                     error = null
                 )
             }
@@ -304,6 +452,8 @@ class PlayerViewModel @Inject constructor(
             fluency = scores.map { it.result.fluency }.average(),
             completeness = scores.map { it.result.completeness }.average(),
             suggestion = scores.mapNotNull { it.result.suggestion }.lastOrNull(),
+            // 任一句走了 stub 就整体标记为 stub, 成绩页显示警示.
+            source = if (scores.any { it.result.isStub }) "stub" else "xunfei",
             lineCount = scores.size,
             lineResults = scores.map { scored ->
                 LineScoreResult(
@@ -318,6 +468,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 historyRepository.write(
+                    book = book,
                     lessonId = lessonId,
                     lineId = state.currentLine?.id ?: "session",
                     audioPath = "session_${lessonId}_${System.currentTimeMillis()}",
@@ -333,6 +484,182 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Starts a whole-lesson shadowing run: prefetches the reference TTS of
+     * every line (aborts if any is a stub), then plays the lesson line by
+     * line while recording the user continuously. The UI should confirm the
+     * headphone hint before calling this.
+     */
+    fun startShadow() {
+        val current = _state.value
+        if (mode != PlayerMode.SHADOW) return
+        if (current.isPreparingShadow || current.isRecording || current.isSubmitting) return
+        if (current.lines.isEmpty()) return
+        viewModelScope.launch {
+            _state.update { it.copy(isPreparingShadow = true, error = null) }
+            val references = mutableListOf<TtsAudio>()
+            try {
+                current.lines.forEach { line ->
+                    val tts = repository.getTtsAudio(line.text, settingsStore.getVoice())
+                    if (tts.isStub) {
+                        _state.update {
+                            it.copy(isPreparingShadow = false, error = SHADOW_STUB_TTS_ERROR)
+                        }
+                        return@launch
+                    }
+                    references += tts
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(isPreparingShadow = false, error = "标准发音加载失败：${e.message}")
+                }
+                return@launch
+            }
+            beginShadowPlayback(references)
+        }
+    }
+
+    /** Stops a shadowing run early; whatever was recorded still gets scored. */
+    fun stopShadow() {
+        if (mode != PlayerMode.SHADOW || !_state.value.isRecording) return
+        audioPlayer.stop()
+        viewModelScope.launch { finishShadowRecording() }
+    }
+
+    private fun beginShadowPlayback(references: List<TtsAudio>) {
+        val lines = _state.value.lines
+        shadowDurationMs = references.map { it.durationMs.toLong() }
+        shadowBoundaryMs = shadowBoundaries(shadowDurationMs, SHADOW_GAP_MS)
+        try {
+            audioRecorder.start(echoCancel = true)
+        } catch (e: Exception) {
+            _state.update {
+                it.copy(isPreparingShadow = false, error = "录音启动失败：${e.message}")
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                isPreparingShadow = false,
+                isRecording = true,
+                shadowCurrentIndex = 0,
+                shadowScoredCount = 0,
+                shadowScoreTotal = lines.size,
+                currentScore = null,
+                lineScores = emptyList()
+            )
+        }
+        audioPlayer.playSequence(
+            items = references.map { it.audioUrl },
+            gapMs = SHADOW_GAP_MS,
+            onIndex = { index -> _state.update { it.copy(shadowCurrentIndex = index) } },
+            onComplete = {
+                // Keep recording briefly past the last line so the user's
+                // final word is not cut off.
+                viewModelScope.launch {
+                    delay(SHADOW_TAIL_MS)
+                    finishShadowRecording()
+                }
+            }
+        )
+    }
+
+    private suspend fun finishShadowRecording() {
+        if (!_state.value.isRecording) return
+        _state.update {
+            it.copy(isRecording = false, isSubmitting = true, shadowScoredCount = 0)
+        }
+        audioPlayer.stop()
+        val file = audioRecorder.stop()
+        if (file == null || !file.exists()) {
+            _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
+            return
+        }
+        val scored = scoreShadowSlices(file)
+        file.delete()
+        if (scored != null) finishShadowSession(scored)
+    }
+
+    /** Slices the shadow recording per line and scores each slice in order. */
+    private suspend fun scoreShadowSlices(file: File): List<ScoredLine>? {
+        val lines = _state.value.lines
+        val pcm = withContext(Dispatchers.IO) { file.readBytes() }
+        val minSliceBytes = SHADOW_MIN_SLICE_MS * PCM_BYTES_PER_MS
+        val scored = mutableListOf<ScoredLine>()
+        try {
+            lines.forEachIndexed { index, line ->
+                val slice = shadowSlice(pcm, shadowBoundaryMs, shadowDurationMs, index)
+                val result = if (slice.size < minSliceBytes) {
+                    // Nothing usable was recorded for this line: count it as
+                    // missed instead of asking the backend to score silence.
+                    ZERO_LINE_SCORE
+                } else {
+                    val base64 = withContext(Dispatchers.IO) { audioEncoder.encode(slice) }
+                    val sliceResult = repository.score(
+                        lessonId = lessonId,
+                        lineId = line.id,
+                        refText = line.text,
+                        audioBase64 = base64,
+                        mode = mode.wire
+                    )
+                    collectMistakeWords(line.id, sliceResult)
+                    sliceResult
+                }
+                scored += ScoredLine(line, result)
+                _state.update { it.copy(shadowScoredCount = index + 1) }
+            }
+        } catch (e: Exception) {
+            _state.update { it.copy(isSubmitting = false, error = "评分失败：${e.message}") }
+            return null
+        }
+        return scored
+    }
+
+    /** Aggregates the per-line shadow scores exactly like [finish] does. */
+    private fun finishShadowSession(scored: List<ScoredLine>) {
+        val current = _state.value
+        val session = ScoreSession(
+            lessonTitle = current.lessonTitle,
+            roleName = SHADOW_ROLE_LABEL,
+            totalScore = scored.map { it.result.total }.average(),
+            pronunciation = scored.map { it.result.pronunciation }.average(),
+            fluency = scored.map { it.result.fluency }.average(),
+            completeness = scored.map { it.result.completeness }.average(),
+            suggestion = scored.mapNotNull { it.result.suggestion }.lastOrNull(),
+            // 任一句走了 stub 就整体标记为 stub, 成绩页显示警示.
+            source = if (scored.any { it.result.isStub }) "stub" else "xunfei",
+            lineCount = scored.size,
+            lineResults = scored.map { item ->
+                LineScoreResult(
+                    lineId = item.line.id,
+                    text = item.line.text,
+                    total = item.result.total,
+                    wordScores = item.result.wordDetails
+                )
+            }
+        )
+        scoreSessionHolder.session = session
+        viewModelScope.launch {
+            try {
+                historyRepository.write(
+                    book = book,
+                    lessonId = lessonId,
+                    lineId = SHADOW_HISTORY_LINE_ID,
+                    audioPath = "shadow_${System.currentTimeMillis()}",
+                    scoreTotal = session.totalScore,
+                    scorePronunciation = session.pronunciation,
+                    scoreFluency = session.fluency,
+                    scoreCompleteness = session.completeness
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to write shadow history")
+            }
+            _state.update {
+                it.copy(isSubmitting = false, lineScores = scored, finished = true)
+            }
+        }
+    }
+
     fun dismissError() = _state.update { it.copy(error = null) }
 
     override fun onCleared() {
@@ -343,6 +670,38 @@ class PlayerViewModel @Inject constructor(
 
     private companion object {
         val SENTENCE_BOUNDARY = Regex("(?<=[.!?。！？])\\s+")
-        const val BOOK = "nce1"
     }
+}
+
+/** boundary[i] = start offset (ms) of line i = sum of earlier durations + gaps. */
+private fun shadowBoundaries(durationMs: List<Long>, gapMs: Long): LongArray {
+    val boundaries = LongArray(durationMs.size)
+    var cursor = 0L
+    durationMs.forEachIndexed { index, duration ->
+        boundaries[index] = cursor
+        cursor += duration + gapMs
+    }
+    return boundaries
+}
+
+/**
+ * Recording window of line [index]: from [SHADOW_PRE_GUARD_MS] before its
+ * playback start until [SHADOW_POST_GUARD_MS] past its end (the following
+ * [SHADOW_GAP_MS] gap is included so a slightly late speaker is covered),
+ * clamped to the bytes actually recorded.
+ */
+private fun shadowSlice(
+    pcm: ByteArray,
+    boundaryMs: LongArray,
+    durationMs: List<Long>,
+    index: Int
+): ByteArray {
+    val totalMs = pcm.size.toLong() / PCM_BYTES_PER_MS
+    val startMs = (boundaryMs[index] - SHADOW_PRE_GUARD_MS).coerceIn(0, totalMs)
+    val endMs =
+        (boundaryMs[index] + durationMs[index] + SHADOW_GAP_MS + SHADOW_POST_GUARD_MS)
+            .coerceIn(startMs, totalMs)
+    val from = (startMs * PCM_BYTES_PER_MS).toInt()
+    val to = (endMs * PCM_BYTES_PER_MS).toInt()
+    return pcm.copyOfRange(from, to)
 }

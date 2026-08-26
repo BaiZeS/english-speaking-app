@@ -117,6 +117,13 @@ private fun AggregateCard(session: ScoreSession) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (session.isStub) {
+                Text(
+                    text = "⚠ 评分引擎未配置：当前为占位假分，非真实评测（后端需配置讯飞 ISE 凭据）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly

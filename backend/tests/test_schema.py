@@ -28,6 +28,19 @@ def test_score_request_accepts_audio_bytes() -> None:
     assert req.audio[:2] == b"\x00\x01"
 
 
+def test_score_request_category_defaults_to_read_sentence() -> None:
+    req = ScoreRequest(lesson_id=1, line_id="L1", ref_text="hi", audio=b"\x00")
+    assert req.category == "read_sentence"
+
+
+def test_score_request_word_drill_without_lesson_context() -> None:
+    """错词重练无课时上下文: lesson_id/line_id 可省略, category 用 read_word."""
+    req = ScoreRequest(ref_text="schedule", category="read_word", audio=b"\x00\x01")
+    assert req.lesson_id is None
+    assert req.line_id is None
+    assert req.category == "read_word"
+
+
 def test_score_response_includes_word_details() -> None:
     r = ScoreResponse(
         total=80.0,

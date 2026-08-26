@@ -36,7 +36,9 @@ data class LessonDetailDto(
 @Serializable
 data class TtsResponseDto(
     @SerialName("audio_url") val audioUrl: String,
-    @SerialName("duration_ms") val durationMs: Int
+    @SerialName("duration_ms") val durationMs: Int,
+    // "mimo"=真实合成, "stub"=占位假音频 (未配 MIMO_API_KEY). 旧后端无此字段时取默认值.
+    val source: String = "stub"
 )
 
 @Serializable
@@ -46,13 +48,18 @@ data class WordScoreDto(val word: String, val score: Double, val ipa: String? = 
  * Score request. Backend declares `audio: bytes` which, in a JSON body,
  * Pydantic decodes from a base64-encoded string. We therefore send audio
  * as a base64 string (Base64.NO_WRAP), capped at 10MB decoded.
+ *
+ * `lessonId`/`lineId` are optional: the word drill submits a bare word with
+ * `category = "read_word"` and no lesson context, while line-based practice
+ * keeps the existing shape.
  */
 @Serializable
 data class ScoreRequestDto(
-    @SerialName("lesson_id") val lessonId: Int,
-    @SerialName("line_id") val lineId: String,
+    @SerialName("lesson_id") val lessonId: Int? = null,
+    @SerialName("line_id") val lineId: String? = null,
     @SerialName("ref_text") val refText: String,
     val mode: String = "k12",
+    val category: String = "read_sentence",
     val audio: String
 )
 
@@ -63,7 +70,9 @@ data class ScoreResponseDto(
     val fluency: Double,
     val completeness: Double,
     @SerialName("word_details") val wordDetails: List<WordScoreDto>,
-    val suggestion: String? = null
+    val suggestion: String? = null,
+    // "xunfei"=真实讯飞评测, "stub"=占位假分 (未配凭据/调用失败). 旧后端无此字段时取默认值.
+    val source: String = "stub"
 )
 
 @Serializable
@@ -116,6 +125,7 @@ data class DialogueTurnResponseDto(
 @Serializable
 data class HistoryWriteRequestDto(
     @SerialName("device_id") val deviceId: String,
+    @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
     @SerialName("line_id") val lineId: String,
     @SerialName("audio_path") val audioPath: String,
@@ -151,6 +161,7 @@ data class AppVersionResponseDto(
 @Serializable
 data class HistoryItemDto(
     val id: String,
+    @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
     @SerialName("line_id") val lineId: String,
     @SerialName("score_total") val scoreTotal: Double,
@@ -211,6 +222,7 @@ data class StatsResponseDto(
 
 @Serializable
 data class LessonProgressDto(
+    @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
     @SerialName("attempt_count") val attemptCount: Int,
     @SerialName("best_score") val bestScore: Double,
@@ -220,6 +232,7 @@ data class LessonProgressDto(
 
 @Serializable
 data class WeakestLessonDto(
+    @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
     @SerialName("best_score") val bestScore: Double,
     @SerialName("avg_score") val avgScore: Double,
