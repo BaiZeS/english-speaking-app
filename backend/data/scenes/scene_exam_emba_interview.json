@@ -160,9 +160,15 @@
       },
       {
         "a": "Can you give an example from your work?",
-        "b": "Let me give you an example. I led a small team to win a big client.",
+        "b": "Sure. I led a small team to win a big client.",
         "a_cn": "能举一个你工作中的例子吗？",
-        "b_cn": "我举个例子：我带一个小团队拿下过一个大客户。"
+        "b_cn": "可以。我带一个小团队拿下过一个大客户。"
+      },
+      {
+        "a": "How did that end?",
+        "b": "We signed it after four months.",
+        "a_cn": "后来怎么样了？",
+        "b_cn": "四个月后签下来了。"
       },
       {
         "a": "How long did that take?",

@@ -166,9 +166,9 @@
       },
       {
         "a": "Good. Keep me posted.",
-        "b": "Sure. I'll check with the client and send you the numbers on Friday.",
+        "b": "I'll check with the client and send you the numbers on Friday.",
         "a_cn": "行，随时同步。",
-        "b_cn": "好的，我跟客户核实后，周五把数据发给你。"
+        "b_cn": "我跟客户核实后，周五把数据发给你。"
       }
     ],
     "tasks": [
