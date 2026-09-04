@@ -37,8 +37,10 @@ class RadarGeometryTest {
     @Test
     fun axesGoClockwiseForFourDimensions() {
         val vectors = RadarGeometry.axisUnitVectors(4)
-        assertEquals(0.0, vectors[1].x.d(), EPS)
-        assertEquals(1.0, vectors[1].y.d(), EPS)
+        // 顺时针: 上(0,-1) -> 右(1,0) -> 下(0,1) -> 左(-1,0), 与
+        // `fullValuesLandOnCircle` 对 points[1].x == +radius 的口径一致。
+        assertEquals(1.0, vectors[1].x.d(), EPS)
+        assertEquals(0.0, vectors[1].y.d(), EPS)
         assertEquals(0.0, vectors[2].x.d(), EPS)
         assertEquals(1.0, vectors[2].y.d(), EPS)
         assertEquals(-1.0, vectors[3].x.d(), EPS)

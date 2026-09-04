@@ -67,12 +67,18 @@ object SceneFilter {
     }
 
     /**
-     * 按分类过滤课程摘要。`null` / 空白 / [CATEGORY_ALL_ID] / 未知分类 都返回全量 ——
-     * 未知值不让列表空掉(宁多勿少, 筛选值由后端解释)。
+     * 按分类过滤课程摘要。`null` / 空白 / [CATEGORY_ALL_ID] 都返回全量。
+     *
+     * 「未知分类」(拼错的 id, 或后端新增而本机兜底表没有的 id)同样返回全量 ——
+     * 宁多勿少: 筛选值由后端解释, 客户端不把列表误渲染成「暂无课程」。判定口径:
+     * 四个兜底分类或当前目录 [scenes] 里出现过的分类才算认识。
      */
     fun apply(categoryId: String?, scenes: List<SceneSummary>): List<SceneSummary> {
         val key = categoryId?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
         if (key == null || key == CATEGORY_ALL_ID) return scenes
+        val known = FALLBACK_LABELS_CN.containsKey(key) ||
+            scenes.any { it.category.lowercase() == key }
+        if (!known) return scenes
         return scenes.filter { it.category.lowercase() == key }
     }
 

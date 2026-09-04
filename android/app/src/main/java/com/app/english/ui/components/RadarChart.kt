@@ -126,7 +126,9 @@ private fun DrawScope.drawRadarSeries(
     val path = closedPath(points, Offset.Zero)
     drawPath(path = path, color = fillColor)
     drawPath(path = path, color = lineColor, style = Stroke(width = 3f))
-    points.forEach { point -> drawCircle(color = lineColor, radius = 5f, center = point) }
+    points.forEach { point ->
+        drawCircle(color = lineColor, radius = 5f, center = Offset(point.x, point.y))
+    }
 }
 
 private fun closedPath(points: List<RadarPoint>, origin: Offset): Path {

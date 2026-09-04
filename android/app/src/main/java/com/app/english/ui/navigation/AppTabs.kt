@@ -19,8 +19,8 @@ val appTabs: List<AppTab> = listOf(
     AppTab(Route.Me.route, "我的", TabIcon.ME)
 )
 
-/** 冷启动落点。 */
-const val START_ROUTE: String = Route.Home.route
+/** 冷启动落点。(Route.Home.route 是构造属性, 不是编译期常量, 不能标 const。) */
+val START_ROUTE: String = Route.Home.route
 
 /** 只有这 4 个目的地显示底部栏。 */
 val topLevelRoutes: Set<String> = appTabs.map { it.route }.toSet()

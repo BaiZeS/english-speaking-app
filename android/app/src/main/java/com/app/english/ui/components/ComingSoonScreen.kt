@@ -2,7 +2,6 @@ package com.app.english.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.VerticalArrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -64,7 +63,7 @@ fun ComingSoonScreen(
             modifier = Modifier.padding(padding).fillMaxSize().padding(Spacings.s4),
             verticalArrangement = Arrangement.spacedBy(
                 Spacings.s3,
-                VerticalArrangement.Alignment.CenterVertically
+                Alignment.CenterVertically
             ),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
