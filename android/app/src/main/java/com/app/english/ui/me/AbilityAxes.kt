@@ -25,6 +25,9 @@ data class AbilityAxes(
     /** 一次练习都没有(雷达应该整个隐藏, 换成引导文案)。 */
     val isEmpty: Boolean get() = values().all { it == null }
 
+    /** 至少有一维拿到证据: 雷达值得画出来, 否则只该显示引导。 */
+    val hasAnyEvidence: Boolean get() = !isEmpty && values().any { it != null }
+
     /**
      * 雷达图取值, 顺序与 [LABELS] 一致。
      *

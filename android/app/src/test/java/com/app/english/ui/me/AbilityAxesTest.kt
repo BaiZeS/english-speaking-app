@@ -45,8 +45,9 @@ class AbilityAxesTest {
     fun outOfRangeScoresClampInsideTheCircle() {
         val axes = AbilityAxes(pronunciation = 250.0, grammar = -20.0)
         val values = axes.radarValues()
-        assertEquals(1f, values.first(), 0f)
-        assertEquals(0f, values[1], 0f)
+        // JUnit4 只有 (double, double, double) 三元重载: 一律转 Double 再比
+        assertEquals(1.0, values.first().d(), 0.0)
+        assertEquals(0.0, values[1].d(), 0.0)
     }
 
     @Test
@@ -82,6 +83,8 @@ class AbilityAxesTest {
         assertFalse(axes.isEmpty)
         assertTrue(axes.missingLabels().isEmpty())
     }
+
+    private fun Float.d(): Double = toDouble()
 
     private fun round(value: Float): Float = Math.round(value * 10000f) / 10000f
 }
