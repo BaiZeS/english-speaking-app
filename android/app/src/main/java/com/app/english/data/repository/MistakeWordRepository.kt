@@ -12,12 +12,7 @@ import javax.inject.Singleton
  * destructive migrations are acceptable by design).
  */
 interface MistakeWordRepository {
-    suspend fun collectFromResult(
-        book: String,
-        lessonId: Int,
-        lineId: String,
-        result: ScoreResult
-    )
+    suspend fun collectFromResult(book: String, lessonId: Int, lineId: String, result: ScoreResult)
 
     suspend fun list(): List<MistakeWordEntity>
 
@@ -25,9 +20,8 @@ interface MistakeWordRepository {
 }
 
 @Singleton
-class MistakeWordRepositoryImpl @Inject constructor(
-    private val dao: MistakeWordDao
-) : MistakeWordRepository {
+class MistakeWordRepositoryImpl @Inject constructor(private val dao: MistakeWordDao) :
+    MistakeWordRepository {
     override suspend fun collectFromResult(
         book: String,
         lessonId: Int,

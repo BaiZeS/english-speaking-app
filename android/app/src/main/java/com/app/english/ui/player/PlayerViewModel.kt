@@ -399,15 +399,14 @@ class PlayerViewModel @Inject constructor(
      * Persists the raw take as a WAV via [RecordingStore] for later replay.
      * Retention failure never blocks scoring; returns null in that case.
      */
-    private suspend fun retainRecording(lineId: String, file: File): File? =
-        try {
-            withContext(Dispatchers.IO) {
-                recordingStore.saveRecording(book, lessonId, lineId, file)
-            }
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to retain recording")
-            null
+    private suspend fun retainRecording(lineId: String, file: File): File? = try {
+        withContext(Dispatchers.IO) {
+            recordingStore.saveRecording(book, lessonId, lineId, file)
         }
+    } catch (e: Exception) {
+        Timber.w(e, "Failed to retain recording")
+        null
+    }
 
     /** Feeds weak words from a successful score into the mistake-word ledger. */
     private suspend fun collectMistakeWords(lineId: String, result: ScoreResult) {
