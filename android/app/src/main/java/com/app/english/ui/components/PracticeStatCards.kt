@@ -1,4 +1,4 @@
-package com.app.english.ui.dashboard
+package com.app.english.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -12,28 +12,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -41,91 +32,62 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.DailyScore
 import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.WeakestLesson
-import com.app.english.ui.components.ErrorState
-import com.app.english.ui.components.LoadingState
+import com.app.english.ui.theme.Spacings
 import com.app.english.ui.theme.color
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DashboardScreen(
-    onHistoryClick: () -> Unit,
-    onDrillClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    viewModel: DashboardViewModel = hiltViewModel()
-) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = { Text("练习概览") },
-                actions = {
-                    IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        when {
-            state.isLoading && state.stats == null -> LoadingState(Modifier.padding(padding))
-            state.error != null && state.stats == null -> ErrorState(
-                message = state.error ?: "加载失败",
-                modifier = Modifier.padding(padding),
-                onRetry = viewModel::refresh
-            )
-            state.stats != null -> DashboardBody(
-                stats = state.stats!!,
-                onHistoryClick = onHistoryClick,
-                onDrillClick = onDrillClick,
-                modifier = Modifier.padding(padding)
-            )
-        }
-    }
-}
+/**
+ * 原 `DashboardScreen` 的统计积木(v2.0 拆解放进首页/我的 Tab, 计划 §6.3)。
+ * 逻辑与视觉都保持平移前的样子, 只把间距换成 [Spacings] 常量。
+ */
 
+/** 连续打卡条: 首页顶部用。 */
 @Composable
-private fun DashboardBody(
-    stats: PracticeStats,
-    onHistoryClick: () -> Unit,
-    onDrillClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+fun StreakCard(streakDays: Int, recentSessions: Int, modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        )
     ) {
-        DrillEntryCard(onClick = onDrillClick)
-        if (!stats.hasData) {
-            EmptyDashboard()
-            return@Column
-        }
-        TopStatsRow(stats = stats)
-        StreakCard(streakDays = stats.streakDays, recentSessions = stats.recentSessions)
-        if (stats.weakestLessons.isNotEmpty()) {
-            ReviewSuggestionsCard(
-                items = stats.weakestLessons,
-                onClick = onHistoryClick
+        Row(
+            modifier = Modifier.padding(Spacings.s3).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.LocalFireDepartment,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(36.dp)
             )
+            Spacer(Modifier.width(Spacings.s2))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (streakDays > 0) "已连续练习 $streakDays 天" else "今日还没练习",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Text(
+                    text = "近 7 天完成 $recentSessions 次",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
         }
-        TrendCard(daily = stats.daily)
-        SubjectBreakdownCard(stats = stats)
     }
 }
 
 @Composable
-private fun TopStatsRow(stats: PracticeStats) {
+fun TopStatsRow(stats: PracticeStats, modifier: Modifier = Modifier) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Spacings.s2)
     ) {
         StatTile(
             modifier = Modifier.weight(1f),
@@ -158,14 +120,14 @@ private fun StatTile(
     label: String,
     value: String,
     sub: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     modifier: Modifier = Modifier,
     valueColor: Color? = null
 ) {
     Card(modifier = modifier) {
         Column(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -174,7 +136,7 @@ private fun StatTile(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(16.dp)
                 )
-                Box(Modifier.size(4.dp))
+                Spacer(Modifier.width(4.dp))
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelMedium,
@@ -199,85 +161,15 @@ private fun StatTile(
     }
 }
 
+/** 近 14 天分数趋势(手写 Canvas, 与雷达图同一思路: 不加图表依赖)。 */
 @Composable
-private fun StreakCard(streakDays: Int, recentSessions: Int) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+fun TrendCard(daily: List<DailyScore>, modifier: Modifier = Modifier) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(Spacings.s3),
+            verticalArrangement = Arrangement.spacedBy(Spacings.s1)
         ) {
-            Icon(
-                imageVector = Icons.Filled.LocalFireDepartment,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
-            Box(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = if (streakDays > 0) "已连续练习 $streakDays 天" else "今日还没练习",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Text(
-                    text = "近 7 天完成 $recentSessions 次",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DrillEntryCard(onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Filled.School,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(36.dp)
-            )
-            Box(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = "弱词训练",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Text(
-                    text = "专项练习错词与弱词，逐个攻克",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TrendCard(daily: List<DailyScore>) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                text = "近 14 天分数趋势",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text(text = "近 14 天分数趋势", style = MaterialTheme.typography.titleMedium)
             if (daily.isEmpty()) {
                 Text(
                     text = "暂无近期数据",
@@ -314,64 +206,48 @@ private fun TrendChart(daily: List<DailyScore>) {
         modifier = Modifier
             .fillMaxWidth()
             .height(120.dp)
-            .padding(vertical = 4.dp)
+            .padding(vertical = Spacings.tiny)
     ) {
         if (daily.isEmpty()) return@Canvas
-        val maxScore = 100.0
-        val minScore = 0.0
         val stepX = size.width / (daily.size - 1).coerceAtLeast(1)
         val points = daily.mapIndexed { index, score ->
             Offset(
                 x = stepX * index,
-                y =
-                size.height -
-                    ((score.avgTotal - minScore) / (maxScore - minScore) * size.height).toFloat()
+                y = size.height - (score.avgTotal / 100.0 * size.height).toFloat()
             )
         }
-        // Grid lines
         for (i in 1..3) {
-            val y = size.height * i / 4f
             drawLine(
                 color = grid,
-                start = Offset(0f, y),
-                end = Offset(size.width, y),
+                start = Offset(0f, size.height * i / 4f),
+                end = Offset(size.width, size.height * i / 4f),
                 strokeWidth = 1f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
             )
         }
-        // Smooth path through points
         val path = Path().apply {
             moveTo(points.first().x, points.first().y)
             for (i in 1 until points.size) {
                 val prev = points[i - 1]
                 val cur = points[i]
                 val midX = (prev.x + cur.x) / 2f
-                cubicTo(
-                    midX,
-                    prev.y,
-                    midX,
-                    cur.y,
-                    cur.x,
-                    cur.y
-                )
+                cubicTo(midX, prev.y, midX, cur.y, cur.x, cur.y)
             }
         }
         drawPath(path = path, color = color, style = Stroke(width = 4f))
-        // Points
-        points.forEach { p ->
-            drawCircle(color = color, radius = 5f, center = p)
-        }
+        points.forEach { p -> drawCircle(color = color, radius = 5f, center = p) }
     }
 }
 
+/** 分项平均(发音/流利度/完整度)。 */
 @Composable
-private fun SubjectBreakdownCard(stats: PracticeStats) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                text = "分项平均",
-                style = MaterialTheme.typography.titleMedium
-            )
+fun SubjectBreakdownCard(stats: PracticeStats, modifier: Modifier = Modifier) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(Spacings.s3),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(text = "分项平均", style = MaterialTheme.typography.titleMedium)
             SubjectBar("发音", stats.avgPronunciation)
             SubjectBar("流利度", stats.avgFluency)
             SubjectBar("完整度", stats.avgCompleteness)
@@ -381,7 +257,7 @@ private fun SubjectBreakdownCard(stats: PracticeStats) {
 
 @Composable
 private fun SubjectBar(label: String, value: Double) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacings.tiny)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -418,43 +294,24 @@ private fun ScoreProgress(value: Double) {
     }
 }
 
+/** 「练过但分低」的复习建议卡(拆解放进我的 Tab)。 */
 @Composable
-private fun EmptyDashboard() {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = Icons.Filled.LocalFireDepartment,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(56.dp)
-        )
-        Text(
-            text = "还没有练习记录",
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(top = 16.dp)
-        )
-        Text(
-            text = "完成第一次跟读或自由对话后，这里会显示你的总练习次数、平均分、连续天数等数据。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp)
-        )
-    }
-}
-
-@Composable
-private fun ReviewSuggestionsCard(items: List<WeakestLesson>, onClick: () -> Unit) {
+fun ReviewSuggestionsCard(
+    items: List<WeakestLesson>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         onClick = onClick,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f)
         )
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier.padding(Spacings.s3),
+            verticalArrangement = Arrangement.spacedBy(Spacings.s1)
+        ) {
             Text(
                 text = "推荐复习",
                 style = MaterialTheme.typography.titleMedium,
@@ -478,13 +335,12 @@ private fun ReviewSuggestionsCard(items: List<WeakestLesson>, onClick: () -> Uni
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text =
-                            "平均 " + item.avgScore.toInt().toString() + " · 最高 " +
+                            text = "平均 " + item.avgScore.toInt().toString() + " · 最高 " +
                                 item.bestScore.toInt().toString(),
                             style = MaterialTheme.typography.bodyMedium,
                             color = ScoreColorMapper.level(item.bestScore).color()
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(Spacings.s1))
                         Text(
                             text = item.attempts.toString() + " 次",
                             style = MaterialTheme.typography.labelMedium,
@@ -495,4 +351,60 @@ private fun ReviewSuggestionsCard(items: List<WeakestLesson>, onClick: () -> Uni
             }
         }
     }
+}
+
+/** 导航入口卡(首页「生成专属课 / 去测评」、词汇 Tab「表达库 / 弱词训练」都用它)。 */
+@Composable
+fun ActionEntryCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.primaryContainer,
+    contentColor: Color = MaterialTheme.colorScheme.onPrimaryContainer,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = containerColor)
+    ) {
+        Row(
+            modifier = Modifier.padding(Spacings.s3).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(Spacings.s2))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = contentColor
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = contentColor
+                )
+            }
+            trailing?.invoke()
+        }
+    }
+}
+
+/** 卡片内的小号空状态说明文字。 */
+@Composable
+fun InlineEmptyState(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.fillMaxWidth().padding(Spacings.s1)
+    )
 }

@@ -63,4 +63,14 @@ interface EnglishApi {
         @Query("device_id") deviceId: String,
         @Query("limit") limit: Int = 50
     ): List<HistoryItemDto>
+
+    /**
+     * 情景课画廊(计划 §5.3)。`category` 为 null 时 Retrofit 会省略该 query,
+     * 后端返回全部四类的合并列表; `categories` 计数恒为全量, 不受筛选影响。
+     */
+    @GET("scenes")
+    suspend fun listScenes(
+        @Query("category") category: String? = null,
+        @Query("device_id") deviceId: String
+    ): ScenesResponseDto
 }

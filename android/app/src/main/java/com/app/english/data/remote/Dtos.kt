@@ -238,3 +238,47 @@ data class WeakestLessonDto(
     @SerialName("avg_score") val avgScore: Double,
     val attempts: Int
 )
+
+/**
+ * `GET /scenes` 载荷(计划 §5.3 目录与画廊)。后端契约:
+ * `backend/app/services/scene_store.py::ScenesPage`。
+ *
+ * 所有可选字段都带默认值 —— 存量后端没有 /scenes 时整段会 404(仓库层报错),
+ * 而后端后续加/减字段时客户端不该因此解码失败。
+ */
+@Serializable
+data class ScenesResponseDto(
+    val categories: List<SceneCategoryStatDto> = emptyList(),
+    val scenes: List<SceneSummaryDto> = emptyList(),
+    val total: Int = 0,
+    // 计划里提到 default_scene, 当前后端 ScenesPage 尚未返回该键 —— 保持可选。
+    @SerialName("default_scene") val defaultScene: String? = null
+)
+
+@Serializable
+data class SceneCategoryStatDto(
+    val id: String,
+    @SerialName("label_cn") val labelCn: String = "",
+    val count: Int = 0
+)
+
+@Serializable
+data class SceneSummaryDto(
+    val id: String,
+    val source: String = "curated",
+    val category: String = "",
+    val title: String = "",
+    @SerialName("subtitle_en") val subtitleEn: String = "",
+    val level: String = "",
+    @SerialName("est_minutes") val estMinutes: Int = 0,
+    @SerialName("brief_cn") val briefCn: String = "",
+    val skills: List<String> = emptyList(),
+    @SerialName("vocab_count") val vocabCount: Int = 0,
+    @SerialName("briefing_count") val briefingCount: Int = 0,
+    @SerialName("task_count") val taskCount: Int = 0,
+    @SerialName("required_task_count") val requiredTaskCount: Int = 0,
+    @SerialName("max_turns") val maxTurns: Int = 0,
+    val cleared: Boolean = false,
+    @SerialName("best_total") val bestTotal: Double = 0.0,
+    val attempts: Int = 0
+)

@@ -6,6 +6,11 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
+/**
+ * Chestnut/cream Material 3 scheme — values are the §6.2 token table verbatim.
+ * `surfaceContainer`/`inverse*` are derived tints in the same warm family; the
+ * eight specified tokens must not drift from the table.
+ */
 private val LightColors = lightColorScheme(
     primary = Primary,
     onPrimary = OnPrimary,
@@ -25,6 +30,7 @@ private val LightColors = lightColorScheme(
     onSurfaceVariant = OnSurfaceVariant,
     background = Background,
     onBackground = OnBackground,
+    surfaceContainer = SurfaceContainer,
     error = ErrorLight,
     onError = OnErrorLight,
     errorContainer = ErrorContainerLight,
@@ -52,6 +58,7 @@ private val DarkColors = darkColorScheme(
     onSurfaceVariant = OnSurfaceVariantDark,
     background = BackgroundDark,
     onBackground = OnBackgroundDark,
+    surfaceContainer = SurfaceContainerDark,
     error = ErrorDark,
     onError = OnErrorDark,
     errorContainer = ErrorContainerDark,
@@ -68,6 +75,7 @@ fun EnglishAssistantTheme(
     MaterialTheme(
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = AppTypography,
+        shapes = KeliShapes,
         content = content
     )
 }

@@ -148,3 +148,46 @@ data class WeakestLesson(
     val avgScore: Double,
     val attempts: Int
 )
+
+/**
+ * 情景课摘要 —— `GET /scenes` 画廊卡片用的轻量视图(计划 §5.3)。
+ *
+ * 词汇/剧本等大块内容只在 `GET /scenes/{id}` 详情里(P6 才消费), 所以这里
+ * 刻意不带它们, 画廊一次拉全也不会变重。
+ */
+data class SceneSummary(
+    val id: String,
+    // "curated" = 后端文件里的人工课; "generated" = 本人的 LLM 生成课。
+    val source: String = "curated",
+    // daily | workplace | exam | travel
+    val category: String = "",
+    val title: String = "",
+    val subtitleEn: String = "",
+    // CEFR 目标等级 A1..C2
+    val level: String = "",
+    val estMinutes: Int = 0,
+    val briefCn: String = "",
+    val skills: List<String> = emptyList(),
+    val vocabCount: Int = 0,
+    val briefingCount: Int = 0,
+    val taskCount: Int = 0,
+    val requiredTaskCount: Int = 0,
+    val maxTurns: Int = 0,
+    // 通关进度: P4 后端 course_progress 落地前恒为默认值, 所以 UI 必须 false-safe。
+    val cleared: Boolean = false,
+    val bestTotal: Double = 0.0,
+    val attempts: Int = 0
+) {
+    val isPracticed: Boolean get() = attempts > 0
+}
+
+/** 画廊顶部分类 chip: id + 中文名 + 该分类课程数(后端恒给全 4 类)。 */
+data class SceneCategoryStat(val id: String, val labelCn: String, val count: Int)
+
+/** `GET /scenes` 的整个载荷。 */
+data class SceneCatalog(
+    val categories: List<SceneCategoryStat>,
+    val scenes: List<SceneSummary>,
+    val total: Int,
+    val defaultSceneId: String? = null
+)

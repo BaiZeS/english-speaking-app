@@ -9,6 +9,9 @@ import com.app.english.domain.model.LessonSummary
 import com.app.english.domain.model.Line
 import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.Role
+import com.app.english.domain.model.SceneCatalog
+import com.app.english.domain.model.SceneCategoryStat
+import com.app.english.domain.model.SceneSummary
 import com.app.english.domain.model.ScoreResult
 import com.app.english.domain.model.WordScore
 
@@ -168,3 +171,33 @@ fun WeakestLessonDto.toDomain(): com.app.english.domain.model.WeakestLesson =
         avgScore = avgScore,
         attempts = attempts
     )
+
+fun SceneSummaryDto.toDomain(): SceneSummary = SceneSummary(
+    id = id,
+    source = source,
+    category = category,
+    title = title,
+    subtitleEn = subtitleEn,
+    level = level,
+    estMinutes = estMinutes,
+    briefCn = briefCn,
+    skills = skills,
+    vocabCount = vocabCount,
+    briefingCount = briefingCount,
+    taskCount = taskCount,
+    requiredTaskCount = requiredTaskCount,
+    maxTurns = maxTurns,
+    cleared = cleared,
+    bestTotal = bestTotal,
+    attempts = attempts
+)
+
+fun SceneCategoryStatDto.toDomain(): SceneCategoryStat =
+    SceneCategoryStat(id = id, labelCn = labelCn, count = count)
+
+fun ScenesResponseDto.toDomain(): SceneCatalog = SceneCatalog(
+    categories = categories.map { it.toDomain() },
+    scenes = scenes.map { it.toDomain() },
+    total = total,
+    defaultSceneId = defaultScene
+)

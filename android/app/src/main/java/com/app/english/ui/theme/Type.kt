@@ -5,11 +5,26 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/**
+ * Base type scale (plan §6.2: keep what we have, headline goes SemiBold).
+ * `headlineSmall/Medium/Large` are all SemiBold so section titles read like the
+ * chestnut reference instead of thin M3 defaults.
+ */
 val AppTypography = Typography(
+    headlineLarge = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 32.sp,
+        lineHeight = 40.sp
+    ),
     headlineMedium = TextStyle(
         fontWeight = FontWeight.SemiBold,
         fontSize = 28.sp,
         lineHeight = 36.sp
+    ),
+    headlineSmall = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp,
+        lineHeight = 32.sp
     ),
     titleLarge = TextStyle(
         fontWeight = FontWeight.SemiBold,

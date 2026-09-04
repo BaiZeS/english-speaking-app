@@ -8,6 +8,8 @@ import com.app.english.data.repository.HistoryRepository
 import com.app.english.data.repository.HistoryRepositoryImpl
 import com.app.english.data.repository.MistakeWordRepository
 import com.app.english.data.repository.MistakeWordRepositoryImpl
+import com.app.english.data.repository.SceneRepository
+import com.app.english.data.repository.SceneRepositoryImpl
 import com.app.english.data.repository.StatsRepository
 import com.app.english.data.repository.StatsRepositoryImpl
 import dagger.Binds
@@ -38,4 +40,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindStatsRepository(impl: StatsRepositoryImpl): StatsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSceneRepository(impl: SceneRepositoryImpl): SceneRepository
 }
