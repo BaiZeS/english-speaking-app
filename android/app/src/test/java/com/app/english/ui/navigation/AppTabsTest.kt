@@ -1,5 +1,6 @@
 package com.app.english.ui.navigation
 
+import com.app.english.ui.player.PlayerMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
