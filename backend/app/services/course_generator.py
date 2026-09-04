@@ -59,7 +59,10 @@ from app.services.llm_provider import LlmMessage
 
 #: 单段生成的超时与 token 预算 (~2000 token 的整课 JSON, 远大于判分的 20s/400).
 #: 段间用 ``progress``/``stage_text`` 推进 + 前端轮询消化等待, 所以单段可以放宽.
-GEN_TIMEOUT_S = 90.0
+#: 真机探针 (2026-09-05, qwen3.8-max): 骨架段单次尝试实测 ~200-240s (免费额度限速,
+#: ~3 token/s), provider 层 max_retries=2 会再补射 —— 90s 会在真链路上必然超时,
+#: 因此放宽到 240s/次调用 (测试 mock provider, 不受此值影响).
+GEN_TIMEOUT_S = 240.0
 SKELETON_MAX_TOKENS = 1600
 DETAIL_MAX_TOKENS = 2200
 
