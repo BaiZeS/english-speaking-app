@@ -5,8 +5,8 @@ import base64
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.v1.score import _decode_audio, _estimate_speech_rate_wpm
 from app.main import app
+from app.services.audio_input import decode_audio, estimate_speech_rate_wpm
 from app.services.interfaces import AsrResult, AsrWord
 
 
@@ -23,16 +23,16 @@ def _force_stub_asr(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_decode_audio_unwraps_base64() -> None:
-    """Pydantic v2 存的是 base64 文本的 bytes, _decode_audio 须还原成原始 PCM."""
+    """Pydantic v2 存的是 base64 文本的 bytes, decode_audio 须还原成原始 PCM."""
     pcm = b"\x00\x01\x02\x03" * 10
     b64_bytes = base64.b64encode(pcm).decode().encode()  # 模拟 req.audio
-    assert _decode_audio(b64_bytes) == pcm
+    assert decode_audio(b64_bytes) == pcm
 
 
 def test_decode_audio_passes_through_non_base64() -> None:
     """非 base64 字节 (含 0x00) 应原样返回, 不抛错."""
     raw = b"\x00\x01\x02raw\x00"
-    assert _decode_audio(raw) == raw
+    assert decode_audio(raw) == raw
 
 
 @pytest.mark.asyncio
@@ -165,15 +165,15 @@ async def test_score_accepts_word_drill_without_lesson_context() -> None:
 
 def test_estimate_speech_rate_uses_real_duration() -> None:
     """32000B = 1s PCM (L16 16kHz mono) -> 1 词 = 60 wpm, 而非旧 4s 窗口的 15 wpm."""
-    assert _estimate_speech_rate_wpm(1, b"\x00" * 32000) == pytest.approx(60.0)
+    assert estimate_speech_rate_wpm(1, b"\x00" * 32000) == pytest.approx(60.0)
     # 4 词 / 2s = 120 wpm
-    assert _estimate_speech_rate_wpm(4, b"\x00" * 64000) == pytest.approx(120.0)
+    assert estimate_speech_rate_wpm(4, b"\x00" * 64000) == pytest.approx(120.0)
 
 
 def test_estimate_speech_rate_falls_back_for_short_audio() -> None:
     """<0.3s 的音频回退到旧 4s 预算窗口, 避免除零/极端语速."""
-    assert _estimate_speech_rate_wpm(1, b"") == pytest.approx(15.0)
-    assert _estimate_speech_rate_wpm(2, b"\x00" * 100) == pytest.approx(30.0)
+    assert estimate_speech_rate_wpm(1, b"") == pytest.approx(15.0)
+    assert estimate_speech_rate_wpm(2, b"\x00" * 100) == pytest.approx(30.0)
 
 
 @pytest.mark.asyncio
