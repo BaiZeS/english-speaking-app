@@ -88,7 +88,9 @@ class XunfeiASRProvider:
     def __init__(self) -> None:
         self._stub = StubASRProvider()
 
-    async def recognize(self, audio: bytes, ref_text: str, category: str = "read_sentence") -> AsrResult:
+    async def recognize(
+        self, audio: bytes, ref_text: str, category: str = "read_sentence"
+    ) -> AsrResult:
         if not (settings.xunfei_app_id and settings.xunfei_api_key and settings.xunfei_api_secret):
             return await self._stub.recognize(audio, ref_text, category=category)
         if not audio:
