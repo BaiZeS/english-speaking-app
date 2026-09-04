@@ -387,6 +387,139 @@ class Expression(Base):
         super().__init__(**kwargs)
 
 
+class GenerationJob(Base):
+    """课程生成任务 (计划 §5.2 M3 / §5.3 ``POST /scenes/generate``).
+
+    生成走 ``asyncio.create_task`` 后台任务, 客户端轮询本表的 ``progress`` /
+    ``stage_text``; 两段式生成 (先骨架后细节, 见 ``app.services.course_generator``)
+    每推进一段就更新一次行 —— 所以 job 行的每次状态变化都**立即 commit**, 不和
+    别的写操作共享事务 (轮询读的是别的会话)。
+    """
+
+    __tablename__ = "generation_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: 学习目标原文 (用户输入的那句话, 4..200 字).
+    goal_text: Mapped[str] = mapped_column(Text)
+    #: 请求里的可选约束; 空串 = 交给 LLM 按目标自选.
+    category: Mapped[str] = mapped_column(String(16), default="")
+    level: Mapped[str] = mapped_column(String(8), default="")
+    #: running | ready | failed
+    status: Mapped[str] = mapped_column(String(16), default="running", index=True)
+    #: 0..1 (轮询进度条).
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    #: 当前阶段的中文文案 (生成中页面直接显示).
+    stage_text: Mapped[str] = mapped_column(String(256), default="")
+    #: 成功时 = 生成的课程 id (scene_courses.doc["id"]).
+    scene_id: Mapped[str] = mapped_column(String(64), default="")
+    #: 失败原因 (诚实给到客户端, 可重试).
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        # 「我的生成任务」按用户倒序扫.
+        Index("ix_generation_jobs_user_created", "user_id", "created_at"),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        super().__init__(**kwargs)
+
+
+class AssessmentAttempt(Base):
+    """一次 CEFR 测评 (计划 §5.2 M3): start 建行, complete 写 ``result``.
+
+    ``result`` 存 complete 的完整响应 JSON (含 source/llm_source 的诚实标注);
+    逐题作答在 ``assessment_answers``。重复 complete 幂等返回已存的 result。
+    """
+
+    __tablename__ = "assessment_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: running | completed
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    #: 已作答题数 (answer 端点维护, complete 时校验用).
+    answers_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: complete 的结果 JSON (stub 判级时也存, 带 source 标注); running 时为 NULL.
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("started_at", _utcnow())
+        super().__init__(**kwargs)
+
+
+class AssessmentAnswer(Base):
+    """测评单题作答 (计划 §5.2 M3). ``(attempt_id, question_no)`` 唯一: 重答覆盖.
+
+    ``ise_score`` 只存**真实 ISE** 的分数 (stub 恒 95 是占位, 存进去就和真证据无法
+    区分 —— 没配凭据时保持 NULL, 发音维度宁缺勿滥); ``transcript`` 存文本作答或
+    IAT 转写 (stub ISE 的回声不存)。
+    """
+
+    __tablename__ = "assessment_answers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    attempt_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("assessment_attempts.id"), index=True
+    )
+    question_no: Mapped[int] = mapped_column(Integer)
+    #: 文本作答原文 / IAT 转写; 真实 ISE 的识别结果.
+    transcript: Mapped[str] = mapped_column(Text, default="")
+    #: 真实 ISE 的发音分 (跟读题且讯飞已配置才有值).
+    ise_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speech_rate_wpm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        Index("ux_assessment_answers_attempt_question", "attempt_id", "question_no", unique=True),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        super().__init__(**kwargs)
+
+
+class CourseProgressRow(Base):
+    """通关进度物化 (计划 §5.2 M3): 一人一课一行, 画廊/今日推荐直读, 不做 GROUP BY.
+
+    名字带 ``Row`` 后缀: scene_store 的 pydantic ``CourseProgress`` 是它的读模型
+    (三字段: cleared/best_total/attempts), 两者刻意不同名。
+
+    **upsert 纪律**: 写侧 (``app.services.course_progress``) 用方言原生的
+    ``INSERT .. ON CONFLICT DO UPDATE`` 一条语句落库 —— ``best_total`` 取单调
+    GREATEST、``cleared`` 取或、``attempts`` 自增, 读写竞争时后到者不回退先到者。
+    """
+
+    __tablename__ = "course_progress"
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    scene_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    cleared: Mapped[bool] = mapped_column(Boolean, default=False)
+    best_total: Mapped[float] = mapped_column(Float, default=0.0)
+    #: 最近一场会话推进到的阶段 (briefing/mission/review; 「继续学习」副文案).
+    last_stage: Mapped[str] = mapped_column(String(16), default="")
+    last_session_id: Mapped[str] = mapped_column(String(36), default="")
+    #: 累计投入秒数 (实战阶段开始 -> 收工的时长求和).
+    estimated_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        super().__init__(**kwargs)
+
+
 class AnnotatedDiff(Base):
     """逐条润色对照流水 (计划 §5.2 M4 表, 由 P3/T4 随 M2 一并落地).
 

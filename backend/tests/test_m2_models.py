@@ -221,7 +221,7 @@ def test_m2_upgrade_then_downgrade_on_sqlite(
     before, _, _ = _inspect(url)
     assert set(M2_TABLES) & before == set()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, M2_REVISION)  # 升到 M2 为止 (M3 归 test_m3_models)
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) <= names
     assert _version(url) == M2_REVISION
@@ -236,7 +236,7 @@ def test_m2_upgrade_then_downgrade_on_sqlite(
     assert "ix_expressions_user_normalized" not in indexes_after
     assert _version(url) == M1_REVISION
 
-    command.upgrade(cfg, "head")  # 可重放
+    command.upgrade(cfg, M2_REVISION)  # 可重放
     assert set(M2_TABLES) <= _inspect(url)[0]
 
 
@@ -252,6 +252,8 @@ def test_m2_migration_matches_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def test_m2_is_the_only_head_and_chains_from_m1() -> None:
+    """链头断言随 M3 (T5) 续链更新: head 现在是 M3, M2 退居中间节点."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [M2_REVISION]
+    assert script.get_heads() == ["9d2e4c6a8f01"]  # M3
+    assert script.get_revision("9d2e4c6a8f01").down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == M1_REVISION

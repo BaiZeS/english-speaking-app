@@ -396,6 +396,8 @@ async def _judge(
     *,
     max_tokens: int = LLM_MAX_TOKENS,
     model: str | None = None,
+    timeout: float = LLM_TIMEOUT_S,
+    temperature: float = 0.2,
 ) -> _J:
     """一次 LLM 判分 + 容错解析; 输出不合规则**回喂校验错误重试 1 次**.
 
@@ -405,7 +407,9 @@ async def _judge(
     P3 起该模式被 mission/polish/dialogue 复用 (见 ``app.services.mission_engine``):
     ``max_tokens`` 给更大的综合 JSON 留预算; ``model`` **只允许纯文本用途**
     (润色) 传入覆盖 —— 判分/任务判定恒用服务端默认模型 (``_resolve_judge_model``),
-    调用方不许拿客户端选的模型污染分数。
+    调用方不许拿客户端选的模型污染分数。P4 起课程生成也走同一模式, 但生成的
+    JSON 大得多 (整课骨架/剧本 ~2000 token), ``timeout`` / ``temperature`` 给它
+    放宽 (默认值保持判分口径, 判分调用方一个字都不用改)。
     """
     provider = get_llm_provider()
     if not cast(bool, getattr(provider, "is_configured", False)):
@@ -416,9 +420,9 @@ async def _judge(
         completion = await provider.chat(
             model=resolved_model,
             messages=turns,
-            temperature=0.2,
+            temperature=temperature,
             max_tokens=max_tokens,
-            timeout=LLM_TIMEOUT_S,
+            timeout=timeout,
         )
         return completion.content
 

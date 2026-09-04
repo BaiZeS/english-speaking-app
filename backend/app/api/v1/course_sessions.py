@@ -56,7 +56,7 @@ from app.core.errors import AppError
 from app.models.course import FoundationStep, SceneCourse
 from app.models.db import History, PracticeSession, PracticeStep, User
 from app.models.schema import WordScore
-from app.services import ability_engine, mission_engine, scene_store
+from app.services import ability_engine, course_progress, mission_engine, scene_store
 from app.services.ability_engine import record_step_evidence
 from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
@@ -1195,7 +1195,44 @@ async def _finish_mission_state(
     doc["status"] = "completed"
     _push_event(doc, "mission_review" + ("_auto" if auto else ""), "", report.overall)
     _add_history_row(db, row, course, report)
+    # §5.2 M3: 通关进度物化 (画廊三字段变真), 与本事务同 commit/回滚.
+    await _record_course_progress(db, row, course, mission, report)
     return report
+
+
+async def _record_course_progress(
+    db: AsyncSession,
+    row: PracticeSession,
+    course: SceneCourse,
+    mission: dict[str, Any],
+    report: ReviewReport,
+) -> None:
+    """收工 -> ``course_progress`` upsert (§5.2 M3; 合并规则见 ``course_progress``).
+
+    ``estimated_seconds`` = 实战阶段开始 (``mission.started_at``) -> 收工的秒数
+    (开局没打过 mission 就没有 started_at, 按 0 记)。
+    """
+    started_raw = mission.get("started_at")
+    seconds = 0.0
+    if isinstance(started_raw, str) and started_raw:
+        try:
+            started = datetime.fromisoformat(started_raw)
+        except ValueError:
+            started = None
+        if started is not None:
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=UTC)
+            seconds = max(0.0, (_now() - started).total_seconds())
+    await course_progress.record_finished_session(
+        db,
+        user_id=row.user_id,
+        scene_id=course.id,
+        session_id=row.id,
+        cleared=report.cleared,
+        best_total=report.overall,
+        last_stage="review",
+        session_seconds=seconds,
+    )
 
 
 def _add_history_row(

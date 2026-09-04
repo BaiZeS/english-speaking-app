@@ -22,11 +22,13 @@ async def test_books_endpoint_returns_curated_catalog(client: httpx.AsyncClient)
 @pytest.mark.asyncio
 async def test_books_endpoint_includes_required_fields(client: httpx.AsyncClient) -> None:
     r = await client.get("/api/v1/books")
-    book = r.json()["books"][0]
+    books = r.json()["books"]
+    # 资产目录 (data/scenes, data/assessment) 也会出现在列表里但没有课时 ——
+    # 真正的书 (有 lesson_*.json) 才参与"每本书有课"的契约.
+    book = next(item for item in books if item["lesson_count"] >= 1)
     for field in ("id", "display_name", "description", "level", "lesson_count"):
         assert field in book, f"missing {field}"
     assert isinstance(book["lesson_count"], int)
-    assert book["lesson_count"] >= 1
 
 
 @pytest.mark.asyncio
@@ -35,9 +37,11 @@ async def test_books_default_picks_first_alphabetically() -> None:
 
     books = list_books()
     assert books
-    # Default book is the first directory in lexical order; "business" sorts
-    # before the nce books, which is intentional (primary audience is adult).
-    assert books[0].id in {"business", "nce1", "nce2"}
+    # 资产目录 (scenes/assessment, 无 lesson_*.json) 按目录名参与排序但不背书职责;
+    # 默认书 = 第一个有课时的目录: "business" 在 nce 之前 (成人学员优先).
+    with_lessons = [b for b in books if b.lesson_count > 0]
+    assert with_lessons
+    assert with_lessons[0].id in {"business", "nce1", "nce2"}
 
 
 def test_fallback_metadata_used_when_book_json_missing(

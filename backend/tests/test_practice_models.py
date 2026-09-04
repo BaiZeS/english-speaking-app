@@ -32,7 +32,11 @@ from app.models.db import (
     AbilityEvent,
     AbilityProfile,
     AnnotatedDiff,
+    AssessmentAnswer,
+    AssessmentAttempt,
+    CourseProgressRow,
     Expression,
+    GenerationJob,
     PracticeSession,
     PracticeStep,
     SceneCourseRow,
@@ -45,6 +49,9 @@ M1_TABLES = ("scene_courses", "practice_sessions", "practice_steps")
 # P3/T4 的 M2 (能力画像 + 表达库) 续在 M1 后面; T5 的 M3 还会再续.
 M2_REVISION = "f3b8d0716c52"
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
+# T5 的 M3 (生成任务 + 测评 + 通关进度) 续在 M2 后面 (contracts 在 test_m3_models.py).
+M3_REVISION = "9d2e4c6a8f01"
+M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "app" / "db" / "migrations"
 
@@ -311,16 +318,17 @@ def test_m1_then_m2_upgrade_downgrade_on_sqlite(
     assert "ix_practice_sessions_user_status_recency" in indexes
     assert not set(M2_TABLES) & names  # M2 还没上来
 
-    command.upgrade(cfg, "head")  # M2
+    command.upgrade(cfg, "head")  # M2 + (T5 的) M3 一起上来
     names, columns, indexes = _inspect(url)
-    assert set(M2_TABLES) <= names
-    assert _version(url) == M2_REVISION
+    assert set(M2_TABLES) | set(M3_TABLES) <= names
+    assert _version(url) == M3_REVISION
     assert "ix_ability_events_user_created" in indexes
     assert "ix_expressions_user_normalized" in indexes
 
-    command.downgrade(cfg, M1_REVISION)  # 只退 M2
+    command.downgrade(cfg, M1_REVISION)  # 退掉 M2+M3
     names_after, _, indexes_after = _inspect(url)
     assert not set(M2_TABLES) & names_after
+    assert not set(M3_TABLES) & names_after
     assert set(M1_TABLES) <= names_after  # M1 原样在
     assert "ix_ability_events_user_created" not in indexes_after
     assert _version(url) == M1_REVISION
@@ -332,8 +340,8 @@ def test_m1_then_m2_upgrade_downgrade_on_sqlite(
     assert "ix_practice_sessions_user_status_recency" not in indexes_after
     assert _version(url) == PREVIOUS_REVISION
 
-    command.upgrade(cfg, "head")  # 整段可重放 (P4 的 M3 续链后同样成立)
-    assert set(M1_TABLES) | set(M2_TABLES) <= _inspect(url)[0]
+    command.upgrade(cfg, "head")  # 整段可重放 (M3 续链后同样成立)
+    assert set(M1_TABLES) | set(M2_TABLES) | set(M3_TABLES) <= _inspect(url)[0]
 
 
 def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,6 +365,10 @@ def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         AbilityEvent,
         Expression,
         AnnotatedDiff,
+        GenerationJob,
+        AssessmentAttempt,
+        AssessmentAnswer,
+        CourseProgressRow,
     ):
         expected = {c.name for c in model.__table__.columns}
         assert expected == columns[model.__tablename__], (
@@ -365,8 +377,9 @@ def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_single_head_chains_m1_then_m2() -> None:
-    """单 head + 挂链正确: M2(T4) 修 M1(T3), M1 修 P1-era head (T5 的 M3 续 M2)."""
+    """单 head + 挂链正确: M3(T5) 修 M2(T4), M2 修 M1(T3), M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [M2_REVISION]
+    assert script.get_heads() == [M3_REVISION]
+    assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == M1_REVISION
     assert script.get_revision(M1_REVISION).down_revision == PREVIOUS_REVISION

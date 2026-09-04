@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "description": "CEFR 摸底测评题库 (v2.0 §5.2/§七 P4): 7 题人工编写、零 LLM 依赖, A2-B1 梯度。题型分布: 跟读×2、复述×1、翻译×1、开放问答×2、自由对话快答×1。每题带 ref_text (题目本体) / key_points (参考要点, 只进判级 prompt 不下发客户端) / cefr_anchor (难度锚)。",
+  "questions": [
+    {
+      "id": "a1",
+      "no": 1,
+      "type": "read_aloud",
+      "cefr_anchor": "A2",
+      "cn_prompt": "跟读下面的句子, 语速平稳、发音清晰即可。",
+      "ref_text": "I usually take the subway to work. It takes about twenty minutes.",
+      "translation_cn": "我通常坐地铁上班, 大约二十分钟。",
+      "key_points": ["重音落在 usually / subway / twenty", "整句语速平稳, 不抢不拖"],
+      "seconds": 30
+    },
+    {
+      "id": "a2",
+      "no": 2,
+      "type": "read_aloud",
+      "cefr_anchor": "A2",
+      "cn_prompt": "跟读下面的句子, 注意问句语调上扬。",
+      "ref_text": "Could you tell me where the meeting room is? I have a client call at three.",
+      "translation_cn": "能告诉我会议室在哪儿吗? 我三点有个客户电话。",
+      "key_points": ["问句用升调, could you 客气语气", "client call at three 连读自然"],
+      "seconds": 30
+    },
+    {
+      "id": "a3",
+      "no": 3,
+      "type": "retell",
+      "cefr_anchor": "B1",
+      "cn_prompt": "先读一遍下面的材料, 然后用自己的英文把大意复述出来 (不用逐字背)。",
+      "ref_text": "Last week our project hit a small delay because the client kept changing the requirements. We agreed on a fixed scope, and the new deadline is this Friday.",
+      "translation_cn": "上周项目出了一点延误, 因为客户不断改需求。我们商定了一个固定范围, 新的交付日期是本周五。",
+      "key_points": ["project delay", "client changed the requirements", "agreed on a fixed scope", "new deadline is Friday"],
+      "seconds": 45
+    },
+    {
+      "id": "a4",
+      "no": 4,
+      "type": "translate",
+      "cefr_anchor": "A2",
+      "cn_prompt": "把下面的中文说成英文。",
+      "ref_text": "我下周一要给新团队做第一次汇报。",
+      "translation_cn": "",
+      "key_points": ["give / presenting my first presentation", "to the new team", "next Monday"],
+      "seconds": 30
+    },
+    {
+      "id": "a5",
+      "no": 5,
+      "type": "open_question",
+      "cefr_anchor": "A2",
+      "cn_prompt": "用英文回答下面的问题, 至少说三句。",
+      "ref_text": "What do you usually do on weekends?",
+      "translation_cn": "你周末通常做什么?",
+      "key_points": ["一般现在时", "说清周末做的事", "至少两个具体细节"],
+      "seconds": 45
+    },
+    {
+      "id": "a6",
+      "no": 6,
+      "type": "open_question",
+      "cefr_anchor": "B1",
+      "cn_prompt": "用英文回答下面的问题, 说清事情经过。",
+      "ref_text": "Tell me about a time you solved a problem at work. What did you do?",
+      "translation_cn": "讲一次你在工作中解决问题的经历。你当时做了什么?",
+      "key_points": ["过去时叙事", "问题是什么", "采取了什么行动", "结果如何"],
+      "seconds": 60
+    },
+    {
+      "id": "a7",
+      "no": 7,
+      "type": "quick_chat",
+      "cefr_anchor": "A2",
+      "cn_prompt": "快问快答: 场景是咖啡店, 店员刚问完这句话, 立刻开口回答 (1-2 句即可)。",
+      "ref_text": "What can I get for you?",
+      "translation_cn": "您要点什么?",
+      "key_points": ["点一款饮品", "说出杯型或口味", "带 please 的礼貌表达"],
+      "seconds": 20
+    }
+  ]
+}

@@ -12,6 +12,7 @@ from loguru import logger
 
 from app.api.v1 import (
     ability,
+    assessment,
     books,
     course_sessions,
     dialogue,
@@ -69,6 +70,8 @@ app.include_router(ability.router, prefix="/api/v1")
 # 语法润色 / 个人表达库 —— 计划 §5.7, P3
 app.include_router(polish.router, prefix="/api/v1")
 app.include_router(expressions.router, prefix="/api/v1")
+# CEFR 摸底测评 (题库/start/answer/complete) —— 计划 §5.3/§5.5-3, P4
+app.include_router(assessment.router, prefix="/api/v1")
 
 # 挂载 /static/tts 提供下载 TTS 合成音频 (URL 前缀与 audio_url 一致, 避免路径拼接错位)
 app.mount(

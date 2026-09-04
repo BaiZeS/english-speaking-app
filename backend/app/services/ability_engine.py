@@ -88,15 +88,26 @@ def _effective_weight(event: AbilityEvidence) -> float:
     return max(0.0, min(1.0, float(event.weight)))
 
 
-def ewma_next(old: float | None, evidence: float, *, dimension: Dimension, weight: float) -> float:
+def ewma_next(
+    old: float | None,
+    evidence: float,
+    *,
+    dimension: Dimension,
+    weight: float,
+    alpha: float | None = None,
+) -> float:
     """单步 EWMA (§5.6 公式), 纯函数.
 
     调用前提: 有效权重 > 0 (门控过的证据不该走到这里, 见 :func:`apply_evidence`)。
     首条证据种子化: ``old is None -> evidence``; 否则按 ``new = old*(1-alpha*w) + evidence*(alpha*w)`` 更新。
+
+    ``alpha`` 覆写默认步长 (:data:`ALPHA`): P4 测评判级是**专程的一次性测量**,
+    用 0.6 重拉 (见 ``assessment_engine.ASSESSMENT_ALPHA``); 缺省 None = 维度默认,
+    既有调用方一个字不用改。
     """
     if old is None:
         return round(evidence, _PRECISION)
-    step = ALPHA[dimension] * max(0.0, min(1.0, weight))
+    step = (ALPHA[dimension] if alpha is None else float(alpha)) * max(0.0, min(1.0, weight))
     return round(old * (1.0 - step) + evidence * step, _PRECISION)
 
 
@@ -114,17 +125,20 @@ def apply_evidence(
     values: dict[str, float | None],
     counts: dict[str, int],
     event: AbilityEvidence,
+    *,
+    alpha: float | None = None,
 ) -> DimensionUpdate:
     """把一条证据作用到内存画像上 (原地更新 ``values`` / ``counts``).
 
     被门控 (w=0) 的证据: 画像与 n 都不动 —— 返回 ``weighted=False``。
+    ``alpha`` 覆写默认步长 (P4 测评用 0.6), 缺省 = 维度默认。
     """
     dim = event.dimension
     weight = _effective_weight(event)
     before = values.get(dim)
     if weight <= 0.0:
         return DimensionUpdate(dimension=dim, before=before, after=before, weighted=False)
-    after = ewma_next(before, event.score, dimension=dim, weight=weight)
+    after = ewma_next(before, event.score, dimension=dim, weight=weight, alpha=alpha)
     values[dim] = after
     counts[dim] = counts.get(dim, 0) + 1
     return DimensionUpdate(dimension=dim, before=before, after=after, weighted=True)
@@ -200,6 +214,7 @@ async def record_step_evidence(
     session_id: str | None = "",
     step_id: str = "",
     evidence: Sequence[AbilityEvidence],
+    alpha: float | None = None,
 ) -> int:
     """§5.6 管线的写入口 (也是 T3 在 ``/step`` 里留的钩子 ``record_step_evidence`` 的真身).
 
@@ -207,6 +222,9 @@ async def record_step_evidence(
     但只有未门控证据会推动画像。**不 commit** —— 事件、画像更新与调用方的 doc /
     practice_steps 行同一事务, 输掉乐观锁时一起回滚. 空 ``evidence`` (如跳过步) 是
     纯 no-op, 返回落库的事件条数。
+
+    ``alpha`` 覆写默认 EWMA 步长 (P4 测评 complete 用 0.6, 见
+    ``assessment_engine.ASSESSMENT_ALPHA``); 缺省 None = 既有口径不变。
     """
     if not evidence:
         return 0
@@ -246,7 +264,7 @@ async def record_step_evidence(
         "fluency": int(profile.fluency_n),
     }
     for event in moving:
-        update = apply_evidence(values, counts, event)
+        update = apply_evidence(values, counts, event, alpha=alpha)
         logger.bind(ability=True).debug(
             "ability ewma | user={} dim={} w={} before={} after={}",
             user_id,
