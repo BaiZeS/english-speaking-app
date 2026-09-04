@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "id": "scene_exam_job_interview",
+  "source": "curated",
+  "category": "exam",
+  "title": "英文求职面试",
+  "subtitle_en": "Thanks for having me. I have eight years of experience.",
+  "goal_text": "能用英语做完一段自我介绍，并接住面试官的追问。",
+  "level": "B1",
+  "est_minutes": 10,
+  "brief_cn": "面试最怕一开口就绕。这一课给你四句骨架：经验加团队、优势加一个例子、离开的正向理由、最后反过来问面试官一个问题。每句都不长，但都撑得住追问。",
+  "vocab": [
+    {
+      "word": "interview",
+      "ipa": "/ˈɪntɚvju/",
+      "meaning_cn": "n. 面试",
+      "example_en": "I practiced a short answer for my interview."
+    },
+    {
+      "word": "experience",
+      "ipa": "/ɪkˈspɪriəns/",
+      "meaning_cn": "n. 经验",
+      "example_en": "I have eight years of experience."
+    },
+    {
+      "word": "strength",
+      "ipa": "/strɛŋθ/",
+      "meaning_cn": "n. 优势",
+      "example_en": "My biggest strength is solving problems quickly."
+    },
+    {
+      "word": "team",
+      "ipa": "/tim/",
+      "meaning_cn": "n. 团队",
+      "example_en": "I lead a team of five people."
+    },
+    {
+      "word": "leave",
+      "ipa": "/liv/",
+      "meaning_cn": "v. 离开",
+      "example_en": "I want to leave my current company."
+    },
+    {
+      "word": "role",
+      "ipa": "/rol/",
+      "meaning_cn": "n. 职位",
+      "example_en": "I am looking for a role with a bigger team."
+    },
+    {
+      "word": "ask",
+      "ipa": "/æsk/",
+      "meaning_cn": "v. 提问",
+      "example_en": "I would like to ask about the team."
+    },
+    {
+      "word": "growth",
+      "ipa": "/ɡroθ/",
+      "meaning_cn": "n. 成长",
+      "example_en": "I want more growth in this role."
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句面试开场白。",
+      "ref_text": "Thank you for having me today.",
+      "translation_cn": "感谢您今天给我这个机会。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "having me 连读，today 收尾降调，别上扬。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句自我介绍主句。",
+      "ref_text": "I have eight years of experience and I lead a small team.",
+      "translation_cn": "我有八年经验，并带一个小团队。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "experience 三个音节读满，team 不吞。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说清经验、团队和优势。",
+      "ref_text": "I have eight years of experience. I lead a team of five. My biggest strength is solving problems quickly.",
+      "translation_cn": "我有八年经验。我带一个五人团队。我最大的优势是快速解决问题。",
+      "reference_answer": "I have eight years of experience. I lead a team of five. My strength is solving problems quickly.",
+      "target_word": "",
+      "accept_notes": "经验、团队人数、优势三个信息点说到即通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：解释你为什么想离开。",
+      "ref_text": "我离开现在的公司是因为想要更多成长。",
+      "translation_cn": "",
+      "reference_answer": "I am leaving because I want more growth.",
+      "target_word": "",
+      "accept_notes": "说出 leaving 或 leave，并提到 growth 即算通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：轮到你提问时。",
+      "ref_text": "我想问一下团队的情况。",
+      "translation_cn": "",
+      "reference_answer": "I would like to ask about the team.",
+      "target_word": "",
+      "accept_notes": "说出 would like to ask 和 team 即算通过。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 role 说一句：你想找什么样的位置。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "I am looking for a role with a bigger team.",
+      "target_word": "role",
+      "accept_notes": "说出 role 并表达想要的职位方向即算通过。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "外企面试官，HR 总监，问题一个接一个",
+    "user_role_cn": "来面试的候选人，一位带团队的管理者",
+    "context_cn": "一轮英文职位面试。面试官先要自我介绍，接着会追问团队、优势和例子，然后问离职原因，最后把提问权交给你。",
+    "opening_a": "Thanks for coming. Could you start with a short introduction?",
+    "opening_a_cn": "谢谢你来。先做个简短的自我介绍吧。",
+    "exchanges": [
+      {
+        "a": "Thanks for coming. Could you start with a short introduction?",
+        "b": "Thanks for having me. I have eight years of experience.",
+        "a_cn": "谢谢你来。先做个简短的自我介绍吧。",
+        "b_cn": "谢谢邀请。我有八年经验。"
+      },
+      {
+        "a": "Can you tell me about your team?",
+        "b": "I lead a team of five people.",
+        "a_cn": "你能说说你的团队吗？",
+        "b_cn": "我带一个五人团队。"
+      },
+      {
+        "a": "What is your biggest strength?",
+        "b": "My biggest strength is solving problems quickly.",
+        "a_cn": "你最大的优势是什么？",
+        "b_cn": "我最大的优势是快速解决问题。"
+      },
+      {
+        "a": "Can you give an example?",
+        "b": "Last month, I fixed a delivery problem in two days.",
+        "a_cn": "能举个例子吗？",
+        "b_cn": "上个月我两天内解决了一个交付问题。"
+      },
+      {
+        "a": "Why do you want to leave your current company?",
+        "b": "I want more growth and a bigger role.",
+        "a_cn": "你为什么想离开现在的公司？",
+        "b_cn": "我想要更多成长和一个更大的职位。"
+      },
+      {
+        "a": "What kind of role are you looking for?",
+        "b": "I am looking for a role with a bigger team.",
+        "a_cn": "你在找什么样的职位？",
+        "b_cn": "我想找一个团队更大的位置。"
+      },
+      {
+        "a": "Do you have any questions for me before we finish?",
+        "b": "Yes. I would like to ask about the team.",
+        "a_cn": "结束前你有什么想问我的吗？",
+        "b_cn": "有。我想了解一下团队情况。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "用两到三句话介绍自己的经验和团队。",
+        "hint_en": "I have eight years of experience and I lead a small team.",
+        "hint_cn": "先说经验，再说团队。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "说明自己的最大优势并给出一个简单例子。",
+        "hint_en": "My biggest strength is solving problems quickly, for example last month.",
+        "hint_cn": "说出优势，再用上个月举例。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "用积极原因解释为什么离开现在的公司。",
+        "hint_en": "I want more growth and a bigger role.",
+        "hint_cn": "强调成长，不抱怨现公司。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "向面试官提出一个关于职位或团队的问题。",
+        "hint_en": "I would like to ask about the team.",
+        "hint_cn": "最后提一个简短问题。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

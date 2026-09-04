@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "id": "scene_workplace_project_update",
+  "source": "curated",
+  "category": "workplace",
+  "title": "项目进展汇报",
+  "subtitle_en": "We're on schedule, but testing is a bit behind",
+  "goal_text": "能用英语向外籍上级汇报项目进展、风险，并给出下一步和时间点。",
+  "level": "B1",
+  "est_minutes": 9,
+  "brief_cn": "三分钟口头汇报的骨架：先说进度是否在计划内，再说一个风险和它的影响，最后给出完成时间和下一次反馈。上级会追问，你要顶住问题，别只说“我们在努力”。",
+  "vocab": [
+    {
+      "word": "update",
+      "ipa": "/ˈʌpdeɪt/",
+      "meaning_cn": "n. 进展汇报；v. 更新",
+      "example_en": "Quick update on the website project."
+    },
+    {
+      "word": "schedule",
+      "ipa": "/ˈskedʒuəl/",
+      "meaning_cn": "n. 计划表，进度表",
+      "example_en": "We're on schedule, but testing is a bit behind."
+    },
+    {
+      "word": "behind",
+      "ipa": "/bɪˈhaɪnd/",
+      "meaning_cn": "adv./adj. 落后，迟于计划",
+      "example_en": "The build is two days behind."
+    },
+    {
+      "word": "risk",
+      "ipa": "/rɪsk/",
+      "meaning_cn": "n. 风险",
+      "example_en": "The main risk is a late launch."
+    },
+    {
+      "word": "launch",
+      "ipa": "/lɔntʃ/",
+      "meaning_cn": "n./v. 上线，发布",
+      "example_en": "We can still keep the launch date."
+    },
+    {
+      "word": "engineer",
+      "ipa": "/ˌendʒɪˈnɪr/",
+      "meaning_cn": "n. 工程师",
+      "example_en": "We need one more engineer for a week."
+    },
+    {
+      "word": "client",
+      "ipa": "/ˈklaɪənt/",
+      "meaning_cn": "n. 客户，委托方",
+      "example_en": "The client sent the test data late."
+    },
+    {
+      "word": "check",
+      "ipa": "/tʃɛk/",
+      "meaning_cn": "v. 核实，确认",
+      "example_en": "I'll check and get back to you today."
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句开场汇报。",
+      "ref_text": "Quick update on the website project.",
+      "translation_cn": "快速汇报一下网站项目。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "重音落在 update 和 website 上，句尾降调。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句进度说明。",
+      "ref_text": "We're on schedule, but testing is a bit behind.",
+      "translation_cn": "总体按计划推进，但测试有点落后。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "读出 on schedule 和 behind，but 处稍作停顿。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍后，用自己的话说出原因和风险。",
+      "ref_text": "The client sent the test data late. So the main risk is a late launch.",
+      "translation_cn": "客户把测试数据给晚了。所以主要风险是上线延后。",
+      "reference_answer": "Data came late, so we may launch late.",
+      "target_word": "",
+      "accept_notes": "说到“数据晚”和“上线延后”两个点即算通过，不要求完整句子。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：我们需要多一位工程师，一周就够。",
+      "ref_text": "我们需要多一位工程师，一周就够。",
+      "translation_cn": "",
+      "reference_answer": "We need one more engineer for a week.",
+      "target_word": "engineer",
+      "accept_notes": "说出 need / one more engineer，并给出时间 for a week 即算通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：我们能在下周三前完成测试。",
+      "ref_text": "我们能在下周三前完成测试。",
+      "translation_cn": "",
+      "reference_answer": "We can finish testing by next Wednesday.",
+      "target_word": "finish",
+      "accept_notes": "关键是 by next Wednesday 这个时间点，动词可用 finish / have。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 check 造一句：现在答不上来时，怎么体面地收尾。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "I'll check and get back to you today.",
+      "target_word": "check",
+      "accept_notes": "含 check，并表示会再回复（get back to you / send an update）即算通过。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "你的外籍上级，产品总监，会追问原因、影响和时间",
+    "user_role_cn": "项目负责人，来做每周进展汇报",
+    "context_cn": "每周一的 1:1，他用十分钟问项目状态。他会连着追问：为什么慢、影响什么、要什么资源、什么时候能好。含糊回答会被再问一次。",
+    "opening_a": "Morning. Do you have a quick update on the website project?",
+    "opening_a_cn": "早上好，网站项目进展怎么样？",
+    "exchanges": [
+      {
+        "a": "Morning. Do you have a quick update on the website project?",
+        "b": "Yes. We're on schedule, but testing is a bit behind.",
+        "a_cn": "早上好，网站项目进展怎么样？",
+        "b_cn": "总体按计划走，但测试有点落后。"
+      },
+      {
+        "a": "Why is testing behind?",
+        "b": "The client sent the test data late.",
+        "a_cn": "测试为什么落后？",
+        "b_cn": "客户的测试数据给晚了。"
+      },
+      {
+        "a": "So what's the main risk?",
+        "b": "The main risk is a late launch.",
+        "a_cn": "那主要风险是什么？",
+        "b_cn": "主要风险是上线要延后。"
+      },
+      {
+        "a": "How late could it be?",
+        "b": "About one week, if we don't get more help.",
+        "a_cn": "可能延后多久？",
+        "b_cn": "如果不加人，大概一周。"
+      },
+      {
+        "a": "What do you need from us?",
+        "b": "We need one more engineer for a week.",
+        "a_cn": "你需要我们给什么支持？",
+        "b_cn": "我们需要多一位工程师，用一周。"
+      },
+      {
+        "a": "Okay. When can you finish testing?",
+        "b": "We can finish testing by next Wednesday.",
+        "a_cn": "好，测试什么时候能完成？",
+        "b_cn": "下周三之前能测完。"
+      },
+      {
+        "a": "Good. Keep me posted.",
+        "b": "Sure. I'll check with the client and send you the numbers on Friday.",
+        "a_cn": "行，随时同步。",
+        "b_cn": "好的，我跟客户核实后，周五把数据发给你。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "说清现在是否在计划内，哪里慢了",
+        "hint_en": "We're on schedule, but testing is a bit behind.",
+        "hint_cn": "先给结论（按计划/落后），再点出哪一块慢。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "说出一个主要风险，以及它会造成多大影响",
+        "hint_en": "The main risk is a late launch, about one week.",
+        "hint_cn": "risk 后面接具体后果，再给一个“多久”的数字。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "给出完成测试的时间点",
+        "hint_en": "We can finish testing by next Wednesday.",
+        "hint_cn": "by + 星期 是最省事的说法，别只说 soon。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "向上要一项支持（人或范围调整）",
+        "hint_en": "We need one more engineer for a week.",
+        "hint_cn": "汇报坏消息时顺手要资源，这句能加分。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "fluency",
+    "vocabulary",
+    "communication"
+  ]
+}

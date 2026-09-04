@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "id": "scene_travel_airport_checkin",
+  "source": "curated",
+  "category": "travel",
+  "title": "机场值机",
+  "subtitle_en": "I'd like to check in for my flight.",
+  "goal_text": "在值机柜台办登机牌、选座、托运行李，并问一句有没有更早一班。",
+  "level": "A2",
+  "est_minutes": 8,
+  "brief_cn": "值机是几分钟内说五六句话的场面。这一课把短句练熟：报航班、要过道座位、说几件行李、问托运费、最后一句“有更早的班吗”。柜员语速快，你也能接住。",
+  "vocab": [
+    {
+      "word": "flight",
+      "ipa": "/flaɪt/",
+      "meaning_cn": "n. 航班",
+      "example_en": "My flight leaves at nine."
+    },
+    {
+      "word": "check in",
+      "ipa": "/tʃɛk ɪn/",
+      "meaning_cn": "phrasal v. 办理值机",
+      "example_en": "I'd like to check in for my flight."
+    },
+    {
+      "word": "boarding pass",
+      "ipa": "/ˈbɔrdɪŋ pæs/",
+      "meaning_cn": "n. 登机牌",
+      "example_en": "Here is your boarding pass."
+    },
+    {
+      "word": "aisle",
+      "ipa": "/aɪl/",
+      "meaning_cn": "n. 过道",
+      "example_en": "Can I have an aisle seat?"
+    },
+    {
+      "word": "gate",
+      "ipa": "/ɡeɪt/",
+      "meaning_cn": "n. 登机口",
+      "example_en": "Do I go straight to the gate?"
+    },
+    {
+      "word": "bag",
+      "ipa": "/bæɡ/",
+      "meaning_cn": "n. 行李，包",
+      "example_en": "The first bag is free."
+    },
+    {
+      "word": "charge",
+      "ipa": "/tʃɑrdʒ/",
+      "meaning_cn": "n. 费用",
+      "example_en": "Is there an extra charge?"
+    },
+    {
+      "word": "earlier",
+      "ipa": "/ˈɝliɚ/",
+      "meaning_cn": "adj. 更早的",
+      "example_en": "Is there an earlier flight?"
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句值机开场。",
+      "ref_text": "I'd like to check in for my flight.",
+      "translation_cn": "我想办一下值机。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "check in 连读，for my flight 轻带过去。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句选座要求。",
+      "ref_text": "Can I have an aisle seat near the front?",
+      "translation_cn": "可以给我一个靠前的过道座位吗？",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "aisle 的 s 不发音，读 /aɪl/。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说出行李和费用的问题。",
+      "ref_text": "I have two bags to check. Is there an extra charge?",
+      "translation_cn": "我有两件行李要托运。有额外费用吗？",
+      "reference_answer": "Two bags to check, and asking if there is an extra charge.",
+      "target_word": "",
+      "accept_notes": "说出 two bags to check 并问到 extra charge 即算通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：确认登机牌到手。",
+      "ref_text": "我现在有登机牌了吗？",
+      "translation_cn": "",
+      "reference_answer": "Do I have my boarding pass?",
+      "target_word": "",
+      "accept_notes": "说出 boarding pass 即算通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：问有没有更早一班。",
+      "ref_text": "有更早的航班吗？",
+      "translation_cn": "",
+      "reference_answer": "Is there an earlier flight?",
+      "target_word": "",
+      "accept_notes": "说出 earlier flight 即算通过。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 aisle 说你要一个过道座位。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "I want an aisle seat.",
+      "target_word": "aisle",
+      "accept_notes": "先读对 aisle /aɪl/（s 不发音），再说出座位要求。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "值机柜台员工，手上在打单，说话快",
+    "user_role_cn": "赶去开会的外航旅客",
+    "context_cn": "早上八点的国际值机柜台。柜员会连着问护照、航班号、座位偏好、行李件数，最后一件是你主动开口：能不能改到更早一班。",
+    "opening_a": "Good morning. May I see your passport, please?",
+    "opening_a_cn": "早上好，请出示护照。",
+    "exchanges": [
+      {
+        "a": "Good morning. May I see your passport, please?",
+        "b": "Sure. I'd like to check in for my flight to London.",
+        "a_cn": "早上好，请出示护照。",
+        "b_cn": "好的，我想办一下去伦敦的值机。"
+      },
+      {
+        "a": "What is your flight number?",
+        "b": "It's flight BA123 to London.",
+        "a_cn": "您的航班号是多少？",
+        "b_cn": "是飞往伦敦的BA123航班。"
+      },
+      {
+        "a": "Would you like a window seat or an aisle seat?",
+        "b": "Can I have an aisle seat near the front?",
+        "a_cn": "您想要靠窗座位还是过道座位？",
+        "b_cn": "可以给我一个靠前的过道座位吗？"
+      },
+      {
+        "a": "I have a 12A for you. Do you have bags to check?",
+        "b": "I have two bags to check.",
+        "a_cn": "12A 可以吗？有行李要托运吗？",
+        "b_cn": "我有两件行李要托运。"
+      },
+      {
+        "a": "The first bag is free. The second bag has an extra charge.",
+        "b": "How much is the extra charge?",
+        "a_cn": "第一件行李免费。第二件行李有额外费用。",
+        "b_cn": "额外费用是多少？"
+      },
+      {
+        "a": "That's fifty dollars. Here's your boarding pass.",
+        "b": "Thanks. Do I go straight to the gate?",
+        "a_cn": "五十美元。这是您的登机牌。",
+        "b_cn": "谢谢。我直接去登机口吗？"
+      },
+      {
+        "a": "Yes. Your gate is B7. Boarding starts at nine twenty.",
+        "b": "Is there an earlier flight? I have a meeting at noon.",
+        "a_cn": "是的。登机口 B7，九点二十开始登机。",
+        "b_cn": "有更早一班吗？我中午有个会。"
+      },
+      {
+        "a": "There's one at ten thirty. Do you want to switch?",
+        "b": "Yes, please. Can I take that one?",
+        "a_cn": "十点半有一班。要改过去吗？",
+        "b_cn": "好的，就那班。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "开口说明来办值机，并报出航班",
+        "hint_en": "I'd like to check in for my flight.",
+        "hint_cn": "报不出航班号就说 my flight to + 城市。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "要一个靠前的过道座位",
+        "hint_en": "Can I have an aisle seat near the front?",
+        "hint_cn": "aisle seat + near the front，两个要求一句说完。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "说清两件托运行李，并问要不要加钱",
+        "hint_en": "I have two bags to check. Is there an extra charge?",
+        "hint_cn": "先报件数，再问 extra charge。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "询问是否有更早的航班",
+        "hint_en": "Is there an earlier flight?",
+        "hint_cn": "加一句 I have a meeting at noon. 更容易改成。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

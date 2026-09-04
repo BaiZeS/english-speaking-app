@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "id": "scene_small_talk_weekend",
+  "source": "curated",
+  "category": "daily",
+  "title": "周一聊周末",
+  "subtitle_en": "Pretty good, thanks. What about you?",
+  "goal_text": "能用英语应付周一早上的周末寒暄，并约同事吃顿午餐。",
+  "level": "A2",
+  "est_minutes": 8,
+  "brief_cn": "寒暄不难，难在不知道该说什么。这一课给一个最小套路：先答感受，再补一件小事，然后把问题还给对方，最后顺势约午饭。六句话能撑满一次茶水间偶遇。",
+  "vocab": [
+    {
+      "word": "weekend",
+      "ipa": "/ˈwikɛnd/",
+      "meaning_cn": "n. 周末",
+      "example_en": "How was your weekend?"
+    },
+    {
+      "word": "pretty",
+      "ipa": "/ˈprɪti/",
+      "meaning_cn": "adv. 相当地",
+      "example_en": "It was pretty good."
+    },
+    {
+      "word": "fun",
+      "ipa": "/fʌn/",
+      "meaning_cn": "adj. 有趣的",
+      "example_en": "Did you do anything fun?"
+    },
+    {
+      "word": "relaxed",
+      "ipa": "/rɪˈlækst/",
+      "meaning_cn": "v. 放松（过去式）",
+      "example_en": "I relaxed at home."
+    },
+    {
+      "word": "movie",
+      "ipa": "/ˈmuvi/",
+      "meaning_cn": "n. 电影",
+      "example_en": "I saw a movie."
+    },
+    {
+      "word": "lunch",
+      "ipa": "/lʌntʃ/",
+      "meaning_cn": "n. 午餐",
+      "example_en": "We should have lunch next week."
+    },
+    {
+      "word": "busy",
+      "ipa": "/ˈbɪzi/",
+      "meaning_cn": "adj. 忙的",
+      "example_en": "Are you busy next week?"
+    },
+    {
+      "word": "see you",
+      "ipa": "/si ju/",
+      "meaning_cn": "phrase. 到时候见",
+      "example_en": "Great. See you on Tuesday."
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句：先答感受，再补一件小事。",
+      "ref_text": "Pretty good, thanks. I relaxed at home.",
+      "translation_cn": "挺好的，谢谢。我在家休息了。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "Pretty good 后停顿，relaxed 的 -t 不必发音过重。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句：把问题还给对方。",
+      "ref_text": "What about you? Did you do anything fun?",
+      "translation_cn": "你呢？你做了什么有趣的事吗？",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "What about you? 用升调，问号处上扬。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说出他周末做了什么。",
+      "ref_text": "My weekend was pretty good. I relaxed at home and saw a movie. What about you?",
+      "translation_cn": "我的周末挺好的。我在家休息，还看了一部电影。你呢？",
+      "reference_answer": "It was good. I relaxed at home and saw a movie. What about you?",
+      "target_word": "",
+      "accept_notes": "说出感受 + 一个具体活动 + 反问对方，三点齐了即通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：先开口问对方的周末。",
+      "ref_text": "你周末过得怎么样？",
+      "translation_cn": "",
+      "reference_answer": "How was your weekend?",
+      "target_word": "",
+      "accept_notes": "说出 How was your weekend 即算通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：顺势约一次午餐。",
+      "ref_text": "我们下周一起吃个午饭吧。",
+      "translation_cn": "",
+      "reference_answer": "We should have lunch next week.",
+      "target_word": "",
+      "accept_notes": "能说出邀请，并提到 lunch 和 next week。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 fun 问同事周末有没有做有趣的事。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "Did you do anything fun?",
+      "target_word": "fun",
+      "accept_notes": "造出含 fun 的问句即算通过。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "同层办公的同事，会顺便聊自己周末",
+    "user_role_cn": "刚出差回来的管理者",
+    "context_cn": "周一早上九点的茶水间。同事会问你周末怎么样、说自己做了什么，然后问你下周忙不忙，这是你主动约午餐的时机。",
+    "opening_a": "Hi, good morning. How was your weekend?",
+    "opening_a_cn": "嗨，早上好。你周末过得怎么样？",
+    "exchanges": [
+      {
+        "a": "Hi, good morning. How was your weekend?",
+        "b": "Pretty good, thanks. I relaxed at home.",
+        "a_cn": "嗨，早上好。你周末过得怎么样？",
+        "b_cn": "挺好的，谢谢。我在家休息了。"
+      },
+      {
+        "a": "Nice. Did you do anything else?",
+        "b": "I saw a movie. What about you?",
+        "a_cn": "不错。你还做了什么吗？",
+        "b_cn": "我看了一部电影。你呢？"
+      },
+      {
+        "a": "I read a book and walked in the park.",
+        "b": "Did you have a good time?",
+        "a_cn": "我看了本书，还在公园走了走。",
+        "b_cn": "你过得开心吗？"
+      },
+      {
+        "a": "Yes, it was nice. Are you busy next week?",
+        "b": "Not too busy. We should have lunch next week.",
+        "a_cn": "是的，挺不错的。你下周忙吗？",
+        "b_cn": "不太忙。我们下周一起吃个午饭吧。"
+      },
+      {
+        "a": "Sure. Tuesday or Wednesday?",
+        "b": "Tuesday works for me.",
+        "a_cn": "好啊。周二还是周三？",
+        "b_cn": "周二我可以。"
+      },
+      {
+        "a": "Great. See you on Tuesday.",
+        "b": "Thanks. See you then.",
+        "a_cn": "太好了。周二见。",
+        "b_cn": "谢谢。到时候见。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "回答周末过得怎样，并说出一件具体做的事",
+        "hint_en": "Pretty good, thanks. I relaxed at home.",
+        "hint_cn": "先说整体感受，再说一件小事。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "反问对方的周末",
+        "hint_en": "What about you? Did you do anything fun?",
+        "hint_cn": "用 What about you 把话题交给对方。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "邀请对方下周一起吃午饭",
+        "hint_en": "We should have lunch next week.",
+        "hint_cn": "直接提出下周午餐。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "敲定一个具体的午餐时间",
+        "hint_en": "Tuesday works for me.",
+        "hint_cn": "选一个可行的时间。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

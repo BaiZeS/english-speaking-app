@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "id": "scene_ordering_coffee",
+  "source": "curated",
+  "category": "daily",
+  "title": "咖啡店点单",
+  "subtitle_en": "Can I get a medium coffee to go?",
+  "goal_text": "在咖啡店用英语点单、问价格，并能临时改单。",
+  "level": "A2",
+  "est_minutes": 8,
+  "brief_cn": "柜台点单是最低成本的开口练习。学完你能说清杯型和奶糖、选打包还是堂食、问总价，还能在队伍里礼貌改一句“换成大杯”。",
+  "vocab": [
+    {
+      "word": "coffee",
+      "ipa": "/ˈkɔfi/",
+      "meaning_cn": "n. 咖啡",
+      "example_en": "Can I get a coffee?"
+    },
+    {
+      "word": "medium",
+      "ipa": "/ˈmidiəm/",
+      "meaning_cn": "adj. 中杯的",
+      "example_en": "A medium coffee, please."
+    },
+    {
+      "word": "large",
+      "ipa": "/lɑrdʒ/",
+      "meaning_cn": "adj. 大杯的",
+      "example_en": "Can I change that to a large?"
+    },
+    {
+      "word": "cream",
+      "ipa": "/krim/",
+      "meaning_cn": "n. 奶精，淡奶",
+      "example_en": "With cream, no sugar."
+    },
+    {
+      "word": "sugar",
+      "ipa": "/ˈʃʊɡɚ/",
+      "meaning_cn": "n. 糖",
+      "example_en": "No sugar, thanks."
+    },
+    {
+      "word": "to go",
+      "ipa": "/tu ˈɡoʊ/",
+      "meaning_cn": "phrase. 带走，打包",
+      "example_en": "To go, please."
+    },
+    {
+      "word": "change",
+      "ipa": "/tʃendʒ/",
+      "meaning_cn": "v. 改，换成",
+      "example_en": "Can I change that to a large?"
+    },
+    {
+      "word": "add",
+      "ipa": "/æd/",
+      "meaning_cn": "v. 再加，添购",
+      "example_en": "Actually, add a cookie, please."
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句点单开场。",
+      "ref_text": "Can I get a medium coffee?",
+      "translation_cn": "我要一杯中杯咖啡。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "get a 与 medium 连读自然，词尾 /m/ 到位即可。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句打包回答。",
+      "ref_text": "To go, please.",
+      "translation_cn": "带走，谢谢。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "to 与 go 之间不断开，please 轻读。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，把这单咖啡的要求说出来。",
+      "ref_text": "I want a medium coffee with cream and no sugar. I'll take it to go.",
+      "translation_cn": "我要一杯中杯咖啡，加奶不加糖，带走。",
+      "reference_answer": "Medium coffee, cream, no sugar, to go.",
+      "target_word": "",
+      "accept_notes": "说出杯型、奶或糖、to go 三个信息点即算通过，词不必全对。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：一共多少钱？",
+      "ref_text": "一共多少钱？",
+      "translation_cn": "",
+      "reference_answer": "How much is that?",
+      "target_word": "",
+      "accept_notes": "How much 开头即算通过，不必加 in total。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：能换成大杯吗？",
+      "ref_text": "能换成大杯吗？",
+      "translation_cn": "",
+      "reference_answer": "Can I change that to a large?",
+      "target_word": "change",
+      "accept_notes": "说出 change ... to a large 即算通过。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 add 说一句你想再加点什么。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "Actually, add a cookie, please.",
+      "target_word": "add",
+      "accept_notes": "含 add 并说出要加的东西即算通过。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "咖啡店店员，语速快，会连着问杯型、奶糖、堂食还是打包",
+    "user_role_cn": "赶时间的顾客",
+    "context_cn": "早高峰的柜台。店员会一项项问你：要多大杯、加不加奶糖、在这儿喝还是带走、还要别的吗。没听清可以说 Please say that again.",
+    "opening_a": "Hi there. Can I get you something today?",
+    "opening_a_cn": "你好，今天来点儿什么？",
+    "exchanges": [
+      {
+        "a": "Hi there. Can I get you something today?",
+        "b": "Can I get a medium coffee?",
+        "a_cn": "你好，今天来点儿什么？",
+        "b_cn": "我要一杯中杯咖啡。"
+      },
+      {
+        "a": "Sure. Cream or sugar?",
+        "b": "With cream, no sugar.",
+        "a_cn": "好。加奶还是加糖？",
+        "b_cn": "加奶，不要糖。"
+      },
+      {
+        "a": "For here or to go?",
+        "b": "To go, please.",
+        "a_cn": "在这儿喝还是带走？",
+        "b_cn": "带走。"
+      },
+      {
+        "a": "Anything else?",
+        "b": "How much is that?",
+        "a_cn": "还要别的吗？",
+        "b_cn": "一共多少钱？"
+      },
+      {
+        "a": "That's four fifty.",
+        "b": "Can I change that to a large?",
+        "a_cn": "四块五。",
+        "b_cn": "能换成大杯吗？"
+      },
+      {
+        "a": "No problem. That makes five.",
+        "b": "Actually, add a cookie, please.",
+        "a_cn": "没问题，那就五块。",
+        "b_cn": "再加一块饼干。"
+      },
+      {
+        "a": "You got it. Six in total.",
+        "b": "Sure. Can I pay by card?",
+        "a_cn": "好的，一共六块。",
+        "b_cn": "可以刷卡吗？"
+      },
+      {
+        "a": "Of course. Your name for the cup?",
+        "b": "It's Lee. Thanks, have a good one.",
+        "a_cn": "当然。杯子上写什么名字？",
+        "b_cn": "我姓李。谢啦，祝你今天愉快。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "点一杯咖啡并说清杯型",
+        "hint_en": "Can I get a medium coffee?",
+        "hint_cn": "直接说 want 或 Can I get，加 small / medium / large。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "说明奶、糖和打包还是堂食",
+        "hint_en": "With cream, no sugar. To go, please.",
+        "hint_cn": "两短句就够：With / No ...；To go 或 For here。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "问清总价",
+        "hint_en": "How much is that?",
+        "hint_cn": "别忘了问价，这也是一次开口的机会。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "改单或加买一样东西",
+        "hint_en": "Can I change that to a large, and add a cookie?",
+        "hint_cn": "改单说 Can I change ... to ...；加购说 add a ...。",
+        "required": false
+      }
+    ],
+    "max_turns": 14
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

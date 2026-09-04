@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "id": "scene_travel_hotel_problem",
+  "source": "curated",
+  "category": "travel",
+  "title": "酒店房间有问题",
+  "subtitle_en": "There's a problem with my room.",
+  "goal_text": "在前台说清房间问题，拿到换房或延迟退房的处理结果。",
+  "level": "A2",
+  "est_minutes": 8,
+  "brief_cn": "房间出问题不是吵架，是要结果。这一课练四步：说清哪里坏了；问清什么时候修好；提出能接受的方案（修或换）；最后要一个时间点或一点补偿。",
+  "vocab": [
+    {
+      "word": "problem",
+      "ipa": "/ˈprɑbləm/",
+      "meaning_cn": "n. 问题",
+      "example_en": "There's a problem with my room."
+    },
+    {
+      "word": "air conditioning",
+      "ipa": "/ˈɛr kənˈdɪʃənɪŋ/",
+      "meaning_cn": "n. 空调",
+      "example_en": "The air conditioning doesn't work."
+    },
+    {
+      "word": "noise",
+      "ipa": "/nɔɪz/",
+      "meaning_cn": "n. 噪音",
+      "example_en": "There's also noise from the next room."
+    },
+    {
+      "word": "hot water",
+      "ipa": "/hɑt ˈwɔtɚ/",
+      "meaning_cn": "n. 热水",
+      "example_en": "And there's no hot water either."
+    },
+    {
+      "word": "fix",
+      "ipa": "/fɪks/",
+      "meaning_cn": "v. 修理",
+      "example_en": "When can you fix it?"
+    },
+    {
+      "word": "change",
+      "ipa": "/tʃeɪndʒ/",
+      "meaning_cn": "v. 更换",
+      "example_en": "Can I change to another room?"
+    },
+    {
+      "word": "send",
+      "ipa": "/sɛnd/",
+      "meaning_cn": "v. 派（人上来）",
+      "example_en": "Could you send someone up now?"
+    },
+    {
+      "word": "late",
+      "ipa": "/leɪt/",
+      "meaning_cn": "adj. 晚的；延迟的",
+      "example_en": "Is a late check-out possible?"
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句开场，先摊问题。",
+      "ref_text": "There's a problem with my room.",
+      "translation_cn": "我的房间有问题。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "There's 连读，problem 重音在前，整句降调。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句故障说明。",
+      "ref_text": "The air conditioning doesn't work.",
+      "translation_cn": "空调不工作了。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "air conditioning 三个音节别吞，doesn't work 收尾清楚。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说出问题和他要做的处理。",
+      "ref_text": "The air conditioning doesn't work, and there is no hot water. Please send someone up.",
+      "translation_cn": "空调不工作，也没有热水。请派人上来看看。",
+      "reference_answer": "The AC doesn't work and there's no hot water, so please send someone up.",
+      "target_word": "",
+      "accept_notes": "说到两处故障并提出要人上来，即算通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：追问处理时间。",
+      "ref_text": "请问什么时候能修好？",
+      "translation_cn": "",
+      "reference_answer": "When will it be fixed?",
+      "target_word": "",
+      "accept_notes": "When will it be fixed? 或直接问 What time can you fix it?"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：提出你的替代方案。",
+      "ref_text": "我可以换到另一个房间吗？",
+      "translation_cn": "",
+      "reference_answer": "Can I change to another room?",
+      "target_word": "",
+      "accept_notes": "change to another room，问句形式，升调收尾。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 late 说一句：争取延迟退房。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "Is a late check-out possible?",
+      "target_word": "late",
+      "accept_notes": "说出 late check-out 即算通过，句式不限。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "酒店夜班前台，会道歉也会给方案",
+    "user_role_cn": "明天要开早会的住客",
+    "context_cn": "晚上十一点，你的房间空调不制冷、也没有热水。前台会先道歉，再问细节、给出维修时间，并把换房和延迟退房的选项摆出来——你要自己开口选一个。",
+    "opening_a": "Good evening. How can I help you?",
+    "opening_a_cn": "晚上好，我能帮您什么？",
+    "exchanges": [
+      {
+        "a": "Good evening. How can I help you?",
+        "b": "There's a problem with my room.",
+        "a_cn": "晚上好，我能帮您什么？",
+        "b_cn": "我的房间有问题。"
+      },
+      {
+        "a": "I'm sorry. What is the problem?",
+        "b": "The air conditioning doesn't work.",
+        "a_cn": "很抱歉，是什么问题？",
+        "b_cn": "空调不工作了。"
+      },
+      {
+        "a": "Is there anything else?",
+        "b": "Yes, and there's no hot water either.",
+        "a_cn": "还有其他问题吗？",
+        "b_cn": "还有，也没有热水。"
+      },
+      {
+        "a": "I can send someone up tonight.",
+        "b": "When will it be fixed?",
+        "a_cn": "今晚我可以派人上去。",
+        "b_cn": "什么时候能修好？"
+      },
+      {
+        "a": "An engineer can come in ten minutes, but I can't promise.",
+        "b": "Can I change to another room?",
+        "a_cn": "工程师十分钟能上去，但我不敢保证。",
+        "b_cn": "那我换一间房可以吗？"
+      },
+      {
+        "a": "Yes. I can move you to a quiet room on a high floor.",
+        "b": "Please make sure it has hot water.",
+        "a_cn": "可以，给您换一间高层安静房。",
+        "b_cn": "请确认那间有热水。"
+      },
+      {
+        "a": "Of course. I'll also give you a late check-out.",
+        "b": "Great. Is a late check-out until two?",
+        "a_cn": "没问题，再给您一个延迟退房。",
+        "b_cn": "好，延迟退房可以到两点吗？"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "说清至少一个具体故障（空调、热水或噪音）",
+        "hint_en": "The air conditioning doesn't work.",
+        "hint_cn": "直接说哪样东西 doesn't work，别绕。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "请前台派人处理，并问清什么时候修好",
+        "hint_en": "Could you send someone up, and when will it be fixed?",
+        "hint_cn": "两句话：先请人上来，再问时间。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "提出换到另一间房这个方案",
+        "hint_en": "Can I change to another room?",
+        "hint_cn": "给前台一个他能马上执行的方案。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "为这晚的不便争取一点补偿（延迟退房）",
+        "hint_en": "Is a late check-out possible?",
+        "hint_cn": "补偿不用不好意思，问 until what time。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

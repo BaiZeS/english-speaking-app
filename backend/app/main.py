@@ -10,7 +10,18 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from app.api.v1 import books, dialogue, health, history, lessons, llm, score, tts, version
+from app.api.v1 import (
+    books,
+    dialogue,
+    health,
+    history,
+    lessons,
+    llm,
+    scenes,
+    score,
+    tts,
+    version,
+)
 from app.config import settings
 from app.core.errors import install_error_handler
 from app.core.logging import configure_logging
@@ -44,6 +55,8 @@ app.include_router(history.router, prefix="/api/v1")
 app.include_router(lessons.router, prefix="/api/v1")
 app.include_router(tts.router, prefix="/api/v1")
 app.include_router(score.router, prefix="/api/v1")
+# 情景课 (任务通关闭环) 画廊/详情/剧本 —— 计划 §5.3, 纯新增只读端点
+app.include_router(scenes.router, prefix="/api/v1")
 
 # 挂载 /static/tts 提供下载 TTS 合成音频 (URL 前缀与 audio_url 一致, 避免路径拼接错位)
 app.mount(

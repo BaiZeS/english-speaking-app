@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "id": "scene_exam_emba_interview",
+  "source": "curated",
+  "category": "exam",
+  "title": "EMBA 英文面谈",
+  "subtitle_en": "I graduated from business school and now run a company.",
+  "goal_text": "在 EMBA 英文面谈里说清背景、为什么现在读、读完要做什么。",
+  "level": "B1",
+  "est_minutes": 8,
+  "brief_cn": "面谈官不会只听你说的经历，他会连着问“为什么是现在”“读完打算做什么”“能给个例子吗”。这一课把这些追问的答法练成短句，四句话站住一场面试。",
+  "vocab": [
+    {
+      "word": "graduated",
+      "ipa": "/ˈɡrædʒuˌetɪd/",
+      "meaning_cn": "v. 毕业（过去式）",
+      "example_en": "I graduated from business school in 2015."
+    },
+    {
+      "word": "run",
+      "ipa": "/rʌn/",
+      "meaning_cn": "v. 经营",
+      "example_en": "I now run a trading company."
+    },
+    {
+      "word": "apply",
+      "ipa": "/əˈplaɪ/",
+      "meaning_cn": "v. 申请",
+      "example_en": "I want to apply for this EMBA program."
+    },
+    {
+      "word": "reason",
+      "ipa": "/ˈriːzən/",
+      "meaning_cn": "n. 原因",
+      "example_en": "The main reason is that my company is growing fast."
+    },
+    {
+      "word": "program",
+      "ipa": "/ˈproɡræm/",
+      "meaning_cn": "n. 项目",
+      "example_en": "After the program, I plan to expand our business."
+    },
+    {
+      "word": "plan",
+      "ipa": "/plæn/",
+      "meaning_cn": "v. 计划",
+      "example_en": "I plan to add an online sales team."
+    },
+    {
+      "word": "example",
+      "ipa": "/ɪɡˈzæmpəl/",
+      "meaning_cn": "n. 例子",
+      "example_en": "Let me give you an example."
+    },
+    {
+      "word": "specific",
+      "ipa": "/spəˈsɪfɪk/",
+      "meaning_cn": "adj. 具体的",
+      "example_en": "Could you be more specific?"
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句学历开场。",
+      "ref_text": "I graduated from business school.",
+      "translation_cn": "我毕业于商学院。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "graduated 重音在第一音节，-ed 读 /ɪd/，别读成 /ed/。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句工作现状。",
+      "ref_text": "I now run a trading company.",
+      "translation_cn": "我现在经营一家贸易公司。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "run a company 连读，trading 重音在前。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说出他的背景和报考原因。",
+      "ref_text": "I graduated from business school. I now run a company. I am applying because my company is growing.",
+      "translation_cn": "我从商学院毕业，现在经营一家公司。因为公司正在发展，我正在申请。",
+      "reference_answer": "I graduated from business school, I now run a company, and I am applying because it is growing.",
+      "target_word": "",
+      "accept_notes": "说出毕业、经营公司和报考原因三点即算通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文：解释你为什么现在来读。",
+      "ref_text": "我申请这个项目是因为公司正在发展。",
+      "translation_cn": "",
+      "reference_answer": "I am applying for this program because my company is growing.",
+      "target_word": "",
+      "accept_notes": "applying for this program + because 接一个理由即通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文：说完毕业后的打算。",
+      "ref_text": "毕业后，我计划扩展业务。",
+      "translation_cn": "",
+      "reference_answer": "After the program, I plan to expand our business.",
+      "target_word": "",
+      "accept_notes": "After the program 开头，plan to 后面接一件具体的事。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 example 起头，说自己要举一个工作中的例子。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "Let me give you an example.",
+      "target_word": "example",
+      "accept_notes": "说出 Let me give you an example 即算通过，后面接什么由他发挥。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "EMBA 招生官，会顺着你的回答往下追问",
+    "user_role_cn": "来参加英文面谈的企业管理者",
+    "context_cn": "招生官手上已有你的材料，所以他不想听背景复述，他要听你为什么现在来、读完做什么、能不能举一个真实例子。回答越具体，追问越早结束。",
+    "opening_a": "Welcome. Please tell me about your education and work.",
+    "opening_a_cn": "欢迎。请介绍一下你的教育和工作经历。",
+    "exchanges": [
+      {
+        "a": "Welcome. Please tell me about your education and work.",
+        "b": "I graduated from business school and now run a trading company.",
+        "a_cn": "欢迎。请介绍一下你的教育和工作经历。",
+        "b_cn": "我从商学院毕业，现在经营一家贸易公司。"
+      },
+      {
+        "a": "Why are you applying now?",
+        "b": "I'm applying now because my company is growing.",
+        "a_cn": "你为什么现在申请？",
+        "b_cn": "我现在申请，因为公司正在发展。"
+      },
+      {
+        "a": "What do you want to learn?",
+        "b": "I want to learn how to run a bigger team.",
+        "a_cn": "你想学习什么？",
+        "b_cn": "我想学会怎么带更大的团队。"
+      },
+      {
+        "a": "What will you do after the program?",
+        "b": "After the program, I plan to expand our business.",
+        "a_cn": "项目结束后你会做什么？",
+        "b_cn": "项目结束后，我计划扩展我们的业务。"
+      },
+      {
+        "a": "Could you be more specific?",
+        "b": "I plan to add an online sales team.",
+        "a_cn": "你能说得更具体一些吗？",
+        "b_cn": "我计划增加一个线上销售团队。"
+      },
+      {
+        "a": "Can you give an example from your work?",
+        "b": "Let me give you an example. I led a small team to win a big client.",
+        "a_cn": "能举一个你工作中的例子吗？",
+        "b_cn": "我举个例子：我带一个小团队拿下过一个大客户。"
+      },
+      {
+        "a": "How long did that take?",
+        "b": "It took four months and two trips.",
+        "a_cn": "那花了多长时间？",
+        "b_cn": "花了四个月，去了两次。"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "介绍教育和工作背景（一句就够）",
+        "hint_en": "I graduated from business school and now run a trading company.",
+        "hint_cn": "学历 + 现在做什么，一句说完。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "说清为什么是现在来读，而不是三年前",
+        "hint_en": "I'm applying now because my company is growing.",
+        "hint_cn": "because 后面一定给一个业务事实。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "说出读完之后的打算",
+        "hint_en": "After the program, I plan to expand our business.",
+        "hint_cn": "plan to 后面接具体动作，别说 improve myself。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "补充一个具体事例",
+        "hint_en": "I led a small team to win a big client.",
+        "hint_cn": "举例要有数字：时间、人数、结果。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}

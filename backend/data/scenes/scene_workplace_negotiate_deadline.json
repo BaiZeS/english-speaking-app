@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "id": "scene_workplace_negotiate_deadline",
+  "source": "curated",
+  "category": "workplace",
+  "title": "协商交付日期",
+  "subtitle_en": "Can we split the delivery into two parts?",
+  "goal_text": "跟客户谈下一个双方都认的交付日期，不当场答应做不到的事。",
+  "level": "B1",
+  "est_minutes": 10,
+  "brief_cn": "被人临时压期是最容易开口就输的场面。这一课练三步：问清到底要哪天；老实说做不到，并说清为什么；给出分阶段交付的方案，最后把两个日期钉下来。",
+  "vocab": [
+    {
+      "word": "deadline",
+      "ipa": "/ˈdɛdˌlaɪn/",
+      "meaning_cn": "n. 截止日期",
+      "example_en": "The new deadline is very tight."
+    },
+    {
+      "word": "deliver",
+      "ipa": "/dɪˈlɪvɚ/",
+      "meaning_cn": "v. 交付",
+      "example_en": "What we can do is deliver the first part."
+    },
+    {
+      "word": "exactly",
+      "ipa": "/ɪɡˈzæktli/",
+      "meaning_cn": "adv. 究竟，确切",
+      "example_en": "When exactly do you need it?"
+    },
+    {
+      "word": "honest",
+      "ipa": "/ˈɑnɪst/",
+      "meaning_cn": "adj. 坦诚的",
+      "example_en": "To be honest, that won't work."
+    },
+    {
+      "word": "split",
+      "ipa": "/splɪt/",
+      "meaning_cn": "v. 拆分，分阶段",
+      "example_en": "Can we split the delivery into two parts?"
+    },
+    {
+      "word": "scope",
+      "ipa": "/skoʊp/",
+      "meaning_cn": "n. 范围",
+      "example_en": "The current scope needs more time."
+    },
+    {
+      "word": "promise",
+      "ipa": "/ˈprɑmɪs/",
+      "meaning_cn": "v. 答应，承诺",
+      "example_en": "Your team promised a faster delivery."
+    },
+    {
+      "word": "agree",
+      "ipa": "/əˈɡri/",
+      "meaning_cn": "v. 达成一致",
+      "example_en": "So we agree on both dates?"
+    }
+  ],
+  "briefing": [
+    {
+      "id": "f1",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句，先把日期问死。",
+      "ref_text": "When exactly do you need it?",
+      "translation_cn": "你们到底需要哪天交付？",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "说出 exactly 和 need it，句子完整即通过。"
+    },
+    {
+      "id": "f2",
+      "type": "read_along",
+      "cn_prompt": "跟我读这句，客气但明确地说不行。",
+      "ref_text": "To be honest, that won't work.",
+      "translation_cn": "说实话，这个日期做不到。",
+      "reference_answer": "",
+      "target_word": "",
+      "accept_notes": "说出 honest 和 won't work，语气自然即通过。"
+    },
+    {
+      "id": "f3",
+      "type": "retell",
+      "cn_prompt": "听一遍，用自己的话说出你的拆分方案。",
+      "ref_text": "We can deliver the first part on Monday. The full report needs two more weeks. Can we split the delivery?",
+      "translation_cn": "我们可以在周一交付第一部分。完整报告还需要两周。我们可以拆分交付吗？",
+      "reference_answer": "Deliver first part Monday; full report needs two more weeks; split delivery.",
+      "target_word": "",
+      "accept_notes": "说出周一交第一部分、完整报告需两周、提出拆分即通过。"
+    },
+    {
+      "id": "f4",
+      "type": "translate",
+      "cn_prompt": "说成英文，争取时间：",
+      "ref_text": "如果你们再给我两周，我可以完成全部内容。",
+      "translation_cn": "",
+      "reference_answer": "If you give me two more weeks, I can finish everything.",
+      "target_word": "",
+      "accept_notes": "说出 two more weeks 和 finish everything 即通过。"
+    },
+    {
+      "id": "f5",
+      "type": "translate",
+      "cn_prompt": "说成英文，提出拆分：",
+      "ref_text": "我们可以把交付分成两个部分吗？",
+      "translation_cn": "",
+      "reference_answer": "Can we split the delivery into two parts?",
+      "target_word": "",
+      "accept_notes": "说出 split 和 two parts 即通过。"
+    },
+    {
+      "id": "f6",
+      "type": "make_sentence",
+      "cn_prompt": "用 deadline 说一句：新期限太紧。",
+      "ref_text": "",
+      "translation_cn": "",
+      "reference_answer": "The new deadline is very tight.",
+      "target_word": "deadline",
+      "accept_notes": "说出 deadline，并表达时间紧即通过。"
+    }
+  ],
+  "mission": {
+    "persona_cn": "客户方的项目对接人（甲方），只认会议时间",
+    "user_role_cn": "乙方项目负责人，你要保住质量也要守信用",
+    "context_cn": "你的咨询项目还剩两周工作量，客户周一早上突然说大老板要提前看东西。客户会反复把话题拉回“周一能不能全交”，你必须给出具体的拆分方案和两个日期。",
+    "opening_a": "We need the project earlier. Can you deliver everything next Monday?",
+    "opening_a_cn": "我们需要提前拿到项目。你们下周一能全部交付吗？",
+    "exchanges": [
+      {
+        "a": "We need the project earlier. Can you deliver everything next Monday?",
+        "b": "When exactly do you need it?",
+        "a_cn": "我们需要提前拿到项目。你们下周一能全部交付吗？",
+        "b_cn": "你们到底需要哪天交付？"
+      },
+      {
+        "a": "Monday morning is best. We have a big meeting at two.",
+        "b": "To be honest, that won't work.",
+        "a_cn": "周一上午最好。我们两点有个重要会议。",
+        "b_cn": "说实话，这个日期做不到。"
+      },
+      {
+        "a": "Why not? Your team promised a fast delivery.",
+        "b": "To be honest, the current scope needs more time.",
+        "a_cn": "为什么不行？你们团队说过可以很快交付。",
+        "b_cn": "说实话，现在这个范围需要更多时间。"
+      },
+      {
+        "a": "I can't wait two weeks. What can you do by Monday?",
+        "b": "What we can do is deliver the first part.",
+        "a_cn": "我等不了两周。周一你们能先交什么？",
+        "b_cn": "我们能先交第一部分。"
+      },
+      {
+        "a": "Which part can you finish first?",
+        "b": "We can finish the summary and slides.",
+        "a_cn": "你们能先完成哪部分？",
+        "b_cn": "我们可以完成摘要和幻灯片。"
+      },
+      {
+        "a": "That helps, but I still need the full report.",
+        "b": "If you give me two more weeks, I can finish everything.",
+        "a_cn": "这有帮助，但我还是需要完整报告。",
+        "b_cn": "如果再给我两周，我可以完成全部内容。"
+      },
+      {
+        "a": "Two weeks is late for us. So what can we do?",
+        "b": "Can we split the delivery into two parts?",
+        "a_cn": "两周对我们太晚了。那能怎么办？",
+        "b_cn": "我们能把交付拆成两部分吗？"
+      },
+      {
+        "a": "How would that work?",
+        "b": "One part on Monday, the full report in two weeks.",
+        "a_cn": "怎么个拆法？",
+        "b_cn": "一部分周一交，完整报告两周后。"
+      },
+      {
+        "a": "Fine. First part on Monday, full report in two weeks.",
+        "b": "So we agree on both dates?",
+        "a_cn": "行。第一部分周一，完整报告两周后。",
+        "b_cn": "那这两个日期就算定下来了？"
+      }
+    ],
+    "tasks": [
+      {
+        "id": "t1",
+        "desc_cn": "询问客户具体需要哪天交付",
+        "hint_en": "When exactly do you need it?",
+        "hint_cn": "别急着答应，先问 When exactly。",
+        "required": true
+      },
+      {
+        "id": "t2",
+        "desc_cn": "说明目前范围无法周一完成",
+        "hint_en": "To be honest, that won't work.",
+        "hint_cn": "To be honest 开头，拒绝就不生硬。",
+        "required": true
+      },
+      {
+        "id": "t3",
+        "desc_cn": "提出分阶段交付并说明先交内容",
+        "hint_en": "Can we split the delivery into two parts?",
+        "hint_cn": "split into two parts，并说先交哪一块。",
+        "required": true
+      },
+      {
+        "id": "t4",
+        "desc_cn": "确认双方接受的两个交付日期",
+        "hint_en": "So we agree on both dates?",
+        "hint_cn": "谈判收尾要复述一遍日期。",
+        "required": false
+      }
+    ],
+    "max_turns": 12
+  },
+  "skills": [
+    "pronunciation",
+    "grammar",
+    "vocabulary",
+    "fluency",
+    "communication"
+  ]
+}
