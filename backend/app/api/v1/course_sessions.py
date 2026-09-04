@@ -1,8 +1,8 @@
-"""通关会话状态机端点 (计划 §5.3「通关会话状态机」+ §5.4, 阶段 P2).
+"""通关会话状态机端点 (计划 §5.3「通关会话状态机」+ §5.4/§5.5-2, 阶段 P2+P3).
 
 情景课的学习闭环是 **打基础 (briefing) -> 实战对话 (mission) -> 复盘 (review)**.
-本模块负责第一段的会话状态与 4 种题型的评分接线; 第二段的 ``/mission``、``/hint``、
-``/finish-mission`` 归 P3 (T4), 接缝写在文件末尾的 EXTENSION POINT 注释里.
+本模块持有整个状态机: briefing 步骤评分接线在 P2 (T3), mission 轮 / hint /
+finish-mission (ReviewReport) 与 §5.6 画像落库在 P3 (T4)。
 
 为什么状态放在服务端 (计划 §四 决策表): 客户端只发音频/文本, 不回传 history ——
 省流量、防篡改、App 崩了也能用 ``GET /sessions/{id}`` 恢复到原处.
@@ -15,7 +15,10 @@
 ``POST /sessions``                开场: 建会话 + 课程快照 + 打基础清单 (201)
 ``POST /sessions/{id}/step``      逐步评分并推进 (4 种题型 -> DrillGrade)
 ``POST /sessions/{id}/skip-step`` 跳过一步 (每场最多 2 次, 第 3 次 409)
-``GET  /sessions/{id}``           崩溃恢复快照
+``POST /sessions/{id}/mission``   实战对话每轮 (1 次综合 LLM 调用, §5.5-2)
+``POST /sessions/{id}/hint``      要提示 (不消耗判定, 标记 costs_score, 不调 LLM)
+``POST /sessions/{id}/finish-mission`` 主动收工 -> ReviewReport (§5.3)
+``GET  /sessions/{id}``           崩溃恢复快照 (含 mission / review 视图)
 ``GET  /sessions``                最近会话列表 (首页「继续学习」)
 ================================  ==================================================
 
@@ -51,8 +54,10 @@ from sqlalchemy.orm.exc import StaleDataError
 from app.api.v1.deps import get_db
 from app.core.errors import AppError
 from app.models.course import FoundationStep, SceneCourse
-from app.models.db import PracticeSession, PracticeStep, User
-from app.services import scene_store
+from app.models.db import History, PracticeSession, PracticeStep, User
+from app.models.schema import WordScore
+from app.services import ability_engine, mission_engine, scene_store
+from app.services.ability_engine import record_step_evidence
 from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
@@ -62,8 +67,9 @@ from app.services.drill_grader import (
     DrillGrade,
     ability_evidence,
     grade_step,
-    record_step_evidence,
+    transcribe_audio,
 )
+from app.services.mission_engine import MissionTaskView, Polish, ReviewReport
 
 router = APIRouter(tags=["course-sessions"])
 
@@ -149,8 +155,12 @@ class SessionView(BaseModel):
     created_at: str
     last_active_at: str
     briefing: BriefingProgress
-    #: P3 起写内容 (turns / tasks_done / polish); P2 恒为空 dict, 字段先给出去.
+    #: 实战对话状态机分区 (§5.3 P3): ``turns`` / ``tasks`` (累积清单) / ``turn_count`` /
+    #: ``max_turns`` / ``cleared`` / ``auto_finished`` / ``finished`` / ``hints_used`` /
+    #: ``opening``. 首轮 ``/mission`` 之前是空 dict; 恢复页面直接按它重绘气泡与清单.
     mission: dict[str, Any] = Field(default_factory=dict)
+    #: 收工后的复盘报告 (``doc["review"]``); 未收工为 null. 崩溃恢复复盘页不必重算.
+    review: dict[str, Any] | None = None
     #: 整课内容: 开场与恢复都要回, 客户端画词汇卡/题干不必再打一次 /scenes/{id}.
     course: SceneCourse | None = None
 
@@ -194,8 +204,110 @@ class StepAttemptResponse(BaseModel):
     grade: DrillGrade
     briefing: BriefingProgress
     unlocked_mission: bool
-    #: §5.6 维度证据 (P2 只算不写: ability_events 表在 M2, EWMA 管线归 T4).
+    #: §5.6 维度证据 (P3 起同一份证据已经写进 ``ability_events`` 并推动画像).
     ability_events: list[AbilityEvidence] = Field(default_factory=list)
+
+
+# ====== P3: 实战对话 (mission) 的请求 / 响应模型 ======
+
+
+class MissionTurnRequest(_Identity):
+    """实战单轮输入: 只给音频 (IAT 转写) 或只给文本, 至少一个."""
+
+    audio_b64: bytes | None = Field(default=None, max_length=_MAX_AUDIO_B64_CHARS)
+    text: str | None = Field(default=None, max_length=ANSWER_MAX_CHARS)
+
+
+class NewlyDoneTask(BaseModel):
+    """本轮**新**完成的任务 (checklist 弹勾动画的原料)."""
+
+    id: str
+    evidence: str = ""
+
+
+class MissionTurnResponse(BaseModel):
+    """``POST /sessions/{id}/mission`` 的返回 (§5.3 形状: 含 newly_done + checklist)."""
+
+    session_id: str
+    revision: int
+    stage: str
+    status: str
+    #: 本次是第几轮 (1 起).
+    turn_index: int
+    #: 学员这轮说的话 (文本作答原样; 音频作答为 IAT 转写).
+    transcript: str
+    #: persona 的下一句英文 (客户端播 TTS).
+    reply: str
+    #: 给学员的下一句示范.
+    suggestion: str
+    #: 「原句 vs 更好说法」对照; 没问题 / 不可用时为 null.
+    polish: Polish | None = None
+    #: 4 维子分 (null = 本轮该维度没有证据, §5.3 sub_scores).
+    sub_scores: dict[str, float | None] = Field(default_factory=dict)
+    #: 锚定 ISE 的逐词染色 (自由产出; 讯飞没配时为 []).
+    word_details: list[WordScore] = Field(default_factory=list)
+    speech_rate_wpm: float | None = None
+    newly_done: list[NewlyDoneTask] = Field(default_factory=list)
+    #: 任务清单的**服务端累积全景** (done 粘滞).
+    checklist: list[MissionTaskView] = Field(default_factory=list)
+    #: 全部必做任务已达成 (通关).
+    cleared: bool
+    turn_count: int
+    max_turns: int
+    #: 本轮到达 ``max_turns`` 上限 -> 服务端自动收工 (report 一并返回).
+    auto_finished: bool
+    #: 会话是否已结束 (auto-finish 或 finish-mission 之后 true).
+    finished: bool
+    #: 本轮写进 §5.6 管线的维度证据 (stub/heuristic 为 weight=0).
+    ability_events: list[AbilityEvidence] = Field(default_factory=list)
+    #: 评分侧来源: llm | heuristic (UI 按 heuristic 打"非真实评测"警示).
+    source: str
+    #: 判分 LLM 的 provenance: 模型 id | "stub".
+    llm_source: str | None = None
+    #: 本轮是否因之前"要提示"被标记 (提示过的回合分数可信度打折, §5.3).
+    costs_score: bool = False
+    #: 仅 ``auto_finished`` 时有值: 服务端已生成的复盘报告 (§5.3 ReviewReport).
+    review: ReviewReport | None = None
+
+
+class HintRequest(_Identity):
+    """``POST /sessions/{id}/hint``: 无参数动作 (调的是"现在的卡点")."""
+
+
+class MissionHintPayload(BaseModel):
+    """提示内容: 优先给未完成的必做任务示范, 任务全给了就回落到参考剧本."""
+
+    task_id: str | None = None
+    desc_cn: str = ""
+    hint_en: str = ""
+    #: 参考剧本里学员的下一句 (没有未完成任务时的兜底素材).
+    script_line: str = ""
+    #: 中文说明 ("先把价格问出来" 之类).
+    note_cn: str = ""
+
+
+class HintResponse(BaseModel):
+    session_id: str
+    revision: int
+    stage: str
+    status: str
+    hint: MissionHintPayload
+    #: 提示不调 LLM、不改变任务判定; 只是**标记**下一个判定回合 (costs_score).
+    costs_score: bool = True
+    hints_used: int
+
+
+class FinishMissionRequest(_Identity):
+    """主动收工."""
+
+
+class FinishMissionResponse(BaseModel):
+    session_id: str
+    revision: int
+    stage: str
+    status: str
+    #: §5.3 复盘报告 (持久化在 ``doc["review"]``, ``GET /sessions/{id}`` 亦返回).
+    report: ReviewReport
 
 
 # ====== doc 快照 schema ======
@@ -211,7 +323,11 @@ class StepAttemptResponse(BaseModel):
 #     "skips_used": int, "skip_limit": 2,
 #     "unlocked_mission": bool,
 #     "events": [ {"at","kind","step_id","score"} ],   # 最近 40 条
-#     "mission": { P3 写 },
+#     "ability_before": {4 维画像分快照 | None},        # P3: 开局基线 (§5.3 ability_delta)
+#     "mission": { P3: v / turns / tasks(累积状态) / turn_count / max_turns /
+#                  cleared / auto_finished / finished / hints_used / pending_costs
+#                  / opening },   首轮 /mission 时才初始化
+#     "review": { ReviewReport.model_dump() },    # P3: 收工后写入 (此前不存在)
 #     "stage": ..., "status": ..., "created_at": ..., "updated_at": ...
 #   }
 
@@ -258,7 +374,9 @@ def _truncate(value: str, limit: int = 300) -> str:
     return cleaned if len(cleaned) <= limit else cleaned[:limit] + "…"
 
 
-def _initial_doc(course: SceneCourse, kind: str) -> dict[str, Any]:
+def _initial_doc(
+    course: SceneCourse, kind: str, ability_before: dict[str, float | None] | None = None
+) -> dict[str, Any]:
     now = _iso(_now())
     return {
         "v": DOC_VERSION,
@@ -283,6 +401,8 @@ def _initial_doc(course: SceneCourse, kind: str) -> dict[str, Any]:
         "skip_limit": SKIP_LIMIT,
         "unlocked_mission": False,
         "events": [],
+        # P3: §5.3 ability_delta 的"前"快照 (复盘时与画像现值做差).
+        "ability_before": dict(ability_before) if ability_before else None,
         "mission": {},
         "stage": "briefing",
         "status": "active",
@@ -675,6 +795,7 @@ def _response(
 
 def _view(row: PracticeSession, course: SceneCourse) -> SessionView:
     doc = _reconcile_stage(_doc_of(row))
+    review = doc.get("review")
     return SessionView(
         session_id=row.id,
         kind=row.kind,
@@ -686,6 +807,7 @@ def _view(row: PracticeSession, course: SceneCourse) -> SessionView:
         last_active_at=_iso(row.last_active_at),
         briefing=_briefing_progress(doc),
         mission=dict(doc.get("mission") or {}),
+        review=dict(review) if isinstance(review, dict) else None,
         course=course,
     )
 
@@ -737,7 +859,9 @@ async def create_session(
     if course is None:
         raise AppError(404, f"scene {req.scene_id} not found", "SCENE_NOT_FOUND")
 
-    doc = _initial_doc(course, req.kind)
+    # §5.3 ability_delta 的"前"快照: 开局就把画像现状钉进 doc, 复盘时与现值做差.
+    ability_before = (await ability_engine.get_snapshot(db, user.id)).snapshot()
+    doc = _initial_doc(course, req.kind, ability_before)
     row = PracticeSession(
         user_id=user.id,
         kind=req.kind,
@@ -843,11 +967,13 @@ async def submit_step(
     _apply_grade(doc, entry, grade, _as_int(entry.get("attempts")) + 1)
     _add_step_row(db, row, entry, step, grade)
     _reconcile_stage(doc)
-    revision = await _save_doc(db, row, doc)
     events = ability_evidence(grade)
-    record_step_evidence(
+    # §5.6 管线: 事件流水 + EWMA 画像与 doc/step 行**同一事务**提交 (输掉乐观锁
+    # 时一起回滚, 不会留下半条证据).
+    await record_step_evidence(
         db, user_id=row.user_id, session_id=row.id, step_id=step.id, evidence=events
-    )  # P3 的画像落库钩子 (T4 填实现); P2 什么都不写
+    )
+    revision = await _save_doc(db, row, doc)
     logger.info(
         "drill graded | session={} step={} type={} score={} passed={} source={} llm={}",
         row.id,
@@ -902,11 +1028,437 @@ async def skip_step(
     return _response(row, revision, doc, _skipped_grade(step), [])
 
 
-# P3 EXTENSION POINT (T4 负责, 别再往别的 router 塞):
-#   ``POST /sessions/{id}/mission`` + ``/hint`` + ``/finish-mission`` 挂本文件.
-#   实战每轮的状态 (turns / tasks_done / polish 历史) 写进同一个 doc 的
-#   ``doc["mission"]``, 复用 ``_load_owned_session(for_update=True)`` + ``_save_doc``
-#   这套序列, 并发纪律不用重写; ``/step`` 在 stage 不是 briefing 时会自己 409
-#   ``WRONG_STAGE``. ReviewReport 落 ``doc["review"]``, 并把 ``stage`` 推到 "review"、
-#   ``status`` 收成 "completed" (之后的提交会被 ``SESSION_NOT_ACTIVE`` 挡住).
-#   画像 EWMA 落库填 ``drill_grader.record_step_evidence()`` 这个空钩子.
+# ============================================================ P3: 实战对话 (mission)
+#
+# 状态全部长在 doc["mission"] 里 (首轮懒初始化), 复用
+# ``_load_owned_session(for_update=True)`` + ``_save_doc`` 这套序列 —— 乐观锁与
+# 回滚纪律和 /step 完全一致。每轮**恰好一次** LLM 综合调用 (§5.5-2: 人设回复 +
+# 提示 + 润色 + 语法/词汇判分 + 任务累积重判一个 JSON), 判分模型为服务端默认,
+# 客户端不能选 (§四 决策表 / T3 先例); LLM 不可用退回剧本回放的确定性降级,
+# ``source="heuristic"`` + ``llm_source="stub"``, 画像按 §5.6 门控不吃降级证据。
+
+
+def _initial_mission(course: SceneCourse) -> dict[str, Any]:
+    """首轮 `/mission` 时的 mission 分区 (清单状态全 pending, 开场白直接回剧本)."""
+    return {
+        "v": 1,
+        "opening": {"a": course.mission.opening_a, "a_cn": course.mission.opening_a_cn},
+        "turns": [],
+        "tasks": mission_engine.initial_task_states(course.mission.tasks),
+        "turn_count": 0,
+        "max_turns": course.mission.max_turns,
+        "cleared": False,
+        "auto_finished": False,
+        "finished": False,
+        "hints_used": 0,
+        "pending_costs": 0,
+        "started_at": _iso(_now()),
+    }
+
+
+def _require_mission_actionable(row: PracticeSession, doc: dict[str, Any]) -> None:
+    """实战门禁 (与 /step 的门禁**可区分**): 打完基础才能开局, 收工后一律 409.
+
+    ``_reconcile_stage`` 已保证: briefing 清单跑完 -> ``stage`` 自动翻 ``mission``,
+    所以这里 stage 还是 briefing 就意味着清单没走完 (409 WRONG_STAGE)。
+    """
+    if row.status != "active":
+        raise AppError(409, f"session is {row.status}", "SESSION_NOT_ACTIVE")
+    stage = str(doc.get("stage") or "briefing")
+    if stage == "briefing":
+        raise AppError(
+            409,
+            "finish the briefing checklist before starting the mission",
+            "WRONG_STAGE",
+        )
+    if stage in ("review", "done"):
+        raise AppError(409, "this session already went to review", "MISSION_FINISHED")
+    mission = _sub_doc(doc, "mission")
+    if bool(mission.get("finished")):
+        raise AppError(409, "the mission was already finished", "MISSION_FINISHED")
+
+
+def _add_mission_step_row(
+    db: AsyncSession,
+    row: PracticeSession,
+    entry: dict[str, Any],
+    turn_index: int,
+) -> None:
+    """实战一轮 = 一行 ``practice_steps`` (step_type=``mission_turn``).
+
+    分数列按维度**稀疏**落: 没证据的维度留 NULL (§5.6 前提). ``ok`` 记"本轮是否
+    新完成了任务" —— 实战轮的"达标"事实是沟通推进, 不是分数。
+    """
+    sub = entry.get("sub_scores") or {}
+    total = [v for v in sub.values() if isinstance(v, (int, float))]
+    db.add(
+        PracticeStep(
+            session_id=row.id,
+            user_id=row.user_id,
+            step_id=f"m{turn_index}",
+            step_index=turn_index,
+            step_type="mission_turn",
+            attempt=1,
+            transcript=entry.get("user_text"),
+            score_total=round(sum(total) / len(total), 1) if total else None,
+            score_pronunciation=sub.get("pronunciation"),
+            score_fluency=sub.get("fluency"),
+            score_grammar=sub.get("grammar"),
+            score_vocabulary=sub.get("vocabulary"),
+            ise_ref_mode=entry.get("ise_ref_mode"),
+            annotated_json={
+                "reply": entry.get("reply"),
+                "suggestion": entry.get("suggestion"),
+                "polish": entry.get("polish"),
+                "newly_done": entry.get("newly_done"),
+                "tasks_done": entry.get("tasks_done"),
+                "word_details": entry.get("word_details"),
+                "costs_score": entry.get("costs_score"),
+                "hinted": entry.get("costs_score"),
+                "ise_source": entry.get("ise_source"),
+            },
+            speech_rate_wpm=entry.get("speech_rate_wpm"),
+            source=str(entry.get("source") or "heuristic"),
+            llm_source=entry.get("llm_source"),
+            ok=bool(entry.get("newly_done")),
+        )
+    )
+
+
+async def _finish_mission_state(
+    db: AsyncSession,
+    row: PracticeSession,
+    doc: dict[str, Any],
+    course: SceneCourse,
+    mission: dict[str, Any],
+    *,
+    auto: bool,
+) -> ReviewReport:
+    """收工: 生成 ReviewReport、落 ``doc["review"]``、投影 ``review/completed``、写历史行.
+
+    调用方负责 ``_save_doc`` 提交; 这里所有 ``db.add`` / flush 都留在同一事务里
+    (报告聚合需要刚写入的 step/事件行, 所以先 flush 再 SELECT)。
+    """
+    mission["finished"] = True
+    if auto:
+        mission["auto_finished"] = True
+    await db.flush()
+    step_rows = (
+        (
+            await db.execute(
+                select(PracticeStep)
+                .where(PracticeStep.session_id == row.id)
+                .order_by(PracticeStep.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    steps: list[dict[str, Any]] = [
+        {
+            "step_id": step.step_id,
+            "step_type": step.step_type,
+            "transcript": step.transcript,
+            "score_total": step.score_total,
+            "score_pronunciation": step.score_pronunciation,
+            "score_fluency": step.score_fluency,
+            "score_completeness": step.score_completeness,
+            "score_grammar": step.score_grammar,
+            "score_vocabulary": step.score_vocabulary,
+            "ise_ref_mode": step.ise_ref_mode,
+            "annotated_json": step.annotated_json,
+            "source": step.source,
+            "llm_source": step.llm_source,
+            "ok": step.ok,
+        }
+        for step in step_rows
+    ]
+    after = await ability_engine.get_snapshot(db, row.user_id)
+    before_raw = doc.get("ability_before")
+    briefing_done = all(
+        str(step.get("status")) == "passed" for step in cast("list[dict[str, Any]]", doc["steps"])
+    ) and bool(doc["steps"])
+    report = await mission_engine.build_review_report(
+        course=course,
+        session_id=row.id,
+        mission=mission,
+        steps=steps,
+        ability_before=cast("dict[str, float | None] | None", before_raw)
+        if isinstance(before_raw, dict)
+        else None,
+        ability_after=after.snapshot(),
+        briefing_passed=briefing_done,
+        hints_used=_as_int(mission.get("hints_used")),
+    )
+    doc["review"] = report.model_dump(mode="json")
+    doc["stage"] = "review"
+    doc["status"] = "completed"
+    _push_event(doc, "mission_review" + ("_auto" if auto else ""), "", report.overall)
+    _add_history_row(db, row, course, report)
+    return report
+
+
+def _add_history_row(
+    db: AsyncSession, row: PracticeSession, course: SceneCourse, report: ReviewReport
+) -> None:
+    """通关总结落 ``history`` (kind=scene_course): 老历史页零改动也能渲染.
+
+    形状与 ``HistoryWriteRequest`` 完全同构: 分数列 NOT NULL, 没测的维度补 0.0
+    (UI 不显示该维度即可, 别当成真分数); ``lesson_id`` 复用 ``scene_store`` 的稳定
+    散列 —— 与 /scenes/{id}/script 的课号同源, 同一门课的多场收工在老界面里按
+    (book="scenes", lesson_id) 聚合成"多次尝试"。P8 的 kind/label 化改造拿
+    book + line_id (=session id) 反解标题。
+    """
+    dims = report.dims
+    subs = report.pronunciation_subs
+    db.add(
+        History(
+            user_id=row.user_id,
+            book=scene_store.SCRIPT_BOOK,
+            lesson_id=scene_store.script_lesson_no(course.id),
+            line_id=row.id,
+            audio_path=course.id,
+            score_total=report.overall or 0.0,
+            score_pronunciation=subs.get("pronunciation") or dims.get("pronunciation") or 0.0,
+            score_fluency=subs.get("fluency") or dims.get("fluency") or 0.0,
+            score_completeness=subs.get("completeness") or 0.0,
+        )
+    )
+
+
+@router.post("/sessions/{session_id}/mission", response_model=MissionTurnResponse)
+async def submit_mission_turn(
+    session_id: str,
+    req: MissionTurnRequest,
+    db: AsyncSession = Depends(get_db),
+) -> MissionTurnResponse:
+    """实战对话的一轮 (§5.3: 客户端发 ``audio_b64`` 或 ``text``, 状态在服务端).
+
+    流程: 门禁 -> (音频则 IAT 转写, 转不出 = 400 TRANSCRIPT_UNAVAILABLE: 没有转写
+    就没有证据) -> (有真音频且讯飞已配置则**转写锚定 ISE**, 产出
+    ``transcript_anchored`` 发音/流利证据) -> **单次**综合 LLM 调用 (回复/提示/
+    润色/语法词汇/任务累积重判) -> 服务端累积合并任务状态 -> 落 step 行 + §5.6
+    维度证据 -> 到 ``max_turns`` 自动收工 (报告随本响应返回) -> 一次提交.
+    """
+    row = await _load_owned_session(db, session_id, req, for_update=True)
+    doc = _reconcile_stage(_doc_of(row))
+    _require_mission_actionable(row, doc)
+    course = _course_of(doc)
+    mission_raw = doc.get("mission")
+    mission: dict[str, Any] = (
+        mission_raw if isinstance(mission_raw, dict) and mission_raw else _initial_mission(course)
+    )
+    doc["mission"] = mission  # 懒初始化也要回到快照 (整体写回的老纪律)
+
+    audio_bytes = decode_audio(req.audio_b64 or b"")
+    user_text = (req.text or "").strip()
+    input_kind = "text"
+    if not user_text:
+        if not audio_bytes:
+            raise AppError(
+                400,
+                "mission turn needs audio_b64 or text",
+                "MISSION_INPUT_REQUIRED",
+            )
+        transcript = (await transcribe_audio(audio_bytes) or "").strip()
+        if not transcript:
+            raise AppError(
+                400,
+                "音频无法转写 (讯飞 IAT 未配置), 请改用 text 作答",
+                "TRANSCRIPT_UNAVAILABLE",
+            )
+        user_text = transcript[:ANSWER_MAX_CHARS]
+        input_kind = "iat"
+
+    tasks_state = cast("list[dict[str, Any]]", mission.get("tasks") or [])
+    turns = cast("list[dict[str, Any]]", mission.get("turns") or [])
+    turn_index = _as_int(mission.get("turn_count")) + 1
+
+    # 自由产出的发音证据 (转写锚定 ISE; 没配讯飞 -> None, 绝不拿回声 95 分冒充):
+    anchored = await mission_engine.anchored_pronunciation(audio_bytes, user_text)
+    judgement, score_source, llm_source = await mission_engine.judge_turn(
+        course, tasks_state, turns, user_text, turn_index
+    )
+    newly_done_raw = mission_engine.merge_task_progress(
+        tasks_state, judgement.task_progress, turn_index=turn_index
+    )
+    mission["cleared"] = mission_engine.all_required_done(tasks_state)
+    costs_score = _as_int(mission.get("pending_costs")) > 0
+    if costs_score:
+        mission["pending_costs"] = _as_int(mission.get("pending_costs")) - 1
+
+    events = mission_engine.turn_ability_events(judgement, anchored, score_source=score_source)
+    sub_scores: dict[str, float | None] = {
+        "pronunciation": anchored.pronunciation if anchored else None,
+        "grammar": judgement.grammar_score,
+        "vocabulary": judgement.vocabulary_score,
+        "fluency": anchored.fluency if anchored else None,
+    }
+    turn_entry: dict[str, Any] = {
+        "index": turn_index,
+        "at": _iso(_now()),
+        "user_text": user_text,
+        "input": input_kind,
+        "reply": judgement.reply,
+        "suggestion": judgement.suggestion,
+        "polish": judgement.polish.model_dump(mode="json") if judgement.polish else None,
+        "sub_scores": sub_scores,
+        "grammar_score": judgement.grammar_score,
+        "vocabulary_score": judgement.vocabulary_score,
+        "ise_ref_mode": "transcript_anchored" if anchored else None,
+        "ise_source": "xunfei" if anchored else None,
+        "speech_rate_wpm": anchored.speech_rate_wpm if anchored else None,
+        "word_details": (
+            [w.model_dump(mode="json") for w in anchored.word_details] if anchored else []
+        ),
+        "newly_done": newly_done_raw,
+        "tasks_done": [str(t["id"]) for t in tasks_state if t.get("done")],
+        "source": score_source,
+        "llm_source": llm_source,
+        "costs_score": costs_score,
+    }
+    mission["turns"] = [*turns, turn_entry]
+    mission["turn_count"] = turn_index
+    _push_event(doc, "mission_turn", f"m{turn_index}", judgement.grammar_score)
+    if judgement.polish is not None:
+        mission_engine.record_annotated_diff(
+            db,
+            row.user_id,
+            polish=judgement.polish,
+            origin="mission",
+            session_id=row.id,
+            step_id=f"m{turn_index}",
+            scene_id=course.id,
+            llm_source=llm_source,
+        )
+    _add_mission_step_row(db, row, turn_entry, turn_index)
+    await record_step_evidence(
+        db,
+        user_id=row.user_id,
+        session_id=row.id,
+        step_id=f"m{turn_index}",
+        evidence=events,
+    )
+
+    report: ReviewReport | None = None
+    # 到回合上限 -> 服务端自动收工 (§5.1 max_turns: "到顶仍未集齐必选任务则按未通关
+    # 收口"), 报告随本响应一并返回, 客户端不用再打一次 finish-mission.
+    if turn_index >= _as_int(mission.get("max_turns")):
+        report = await _finish_mission_state(db, row, doc, course, mission, auto=True)
+    revision = await _save_doc(db, row, doc)
+    logger.info(
+        "mission turn graded | session={} turn={} source={} llm={} newly_done={} cleared={}",
+        row.id,
+        turn_index,
+        score_source,
+        llm_source,
+        len(newly_done_raw),
+        bool(mission["cleared"]),
+    )
+    return MissionTurnResponse(
+        session_id=row.id,
+        revision=revision,
+        stage=row.stage,
+        status=row.status,
+        turn_index=turn_index,
+        transcript=user_text,
+        reply=judgement.reply,
+        suggestion=judgement.suggestion,
+        polish=judgement.polish,
+        sub_scores=sub_scores,
+        word_details=list(anchored.word_details) if anchored else [],
+        speech_rate_wpm=anchored.speech_rate_wpm if anchored else None,
+        newly_done=[NewlyDoneTask.model_validate(item) for item in newly_done_raw],
+        checklist=mission_engine.task_views(tasks_state),
+        cleared=bool(mission["cleared"]),
+        turn_count=turn_index,
+        max_turns=_as_int(mission.get("max_turns")),
+        auto_finished=bool(mission.get("auto_finished")),
+        finished=bool(mission.get("finished")),
+        ability_events=events,
+        source=score_source,
+        llm_source=llm_source,
+        costs_score=costs_score,
+        review=report,
+    )
+
+
+@router.post("/sessions/{session_id}/hint", response_model=HintResponse)
+async def request_hint(
+    session_id: str,
+    req: HintRequest,
+    db: AsyncSession = Depends(get_db),
+) -> HintResponse:
+    """要提示 (§5.3): 不调 LLM、不改变任务判定, 只是**标记下一个判定回合**."""
+    row = await _load_owned_session(db, session_id, req, for_update=True)
+    doc = _reconcile_stage(_doc_of(row))
+    _require_mission_actionable(row, doc)
+    course = _course_of(doc)
+    mission = _sub_doc(doc, "mission")
+    if not mission:
+        mission = _initial_mission(course)
+    tasks_state = cast("list[dict[str, Any]]", mission.get("tasks") or [])
+    open_tasks = [entry for entry in tasks_state if not entry.get("done")]
+    required_first = [entry for entry in open_tasks if entry.get("required")] or open_tasks
+    if required_first:
+        first = required_first[0]
+        hint = MissionHintPayload(
+            task_id=str(first["id"]),
+            desc_cn=str(first.get("desc_cn") or ""),
+            hint_en=str(first.get("hint_en") or ""),
+            note_cn="先把这个沟通任务说出来。",
+        )
+    else:
+        turns = cast("list[dict[str, Any]]", mission.get("turns") or [])
+        script = course.mission.exchanges[len(turns) % len(course.mission.exchanges)]
+        hint = MissionHintPayload(
+            script_line=script.b,
+            note_cn="任务都推进完了, 把对话自然收尾就行。",
+        )
+    mission["hints_used"] = _as_int(mission.get("hints_used")) + 1
+    mission["pending_costs"] = _as_int(mission.get("pending_costs")) + 1
+    doc["mission"] = mission
+    _push_event(doc, "mission_hint", "", None)
+    revision = await _save_doc(db, row, doc)
+    return HintResponse(
+        session_id=row.id,
+        revision=revision,
+        stage=row.stage,
+        status=row.status,
+        hint=hint,
+        costs_score=True,
+        hints_used=_as_int(mission.get("hints_used")),
+    )
+
+
+@router.post("/sessions/{session_id}/finish-mission", response_model=FinishMissionResponse)
+async def finish_mission(
+    session_id: str,
+    req: FinishMissionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> FinishMissionResponse:
+    """主动收工 -> ReviewReport (§5.3)."""
+    row = await _load_owned_session(db, session_id, req, for_update=True)
+    doc = _reconcile_stage(_doc_of(row))
+    _require_mission_actionable(row, doc)
+    course = _course_of(doc)
+    mission_raw = doc.get("mission")
+    mission: dict[str, Any] = (
+        mission_raw if isinstance(mission_raw, dict) and mission_raw else _initial_mission(course)
+    )
+    report = await _finish_mission_state(db, row, doc, course, mission, auto=False)
+    revision = await _save_doc(db, row, doc)
+    logger.info(
+        "mission finished | session={} cleared={} overall={} source={}",
+        row.id,
+        report.cleared,
+        report.overall,
+        report.source,
+    )
+    return FinishMissionResponse(
+        session_id=row.id,
+        revision=revision,
+        stage=row.stage,
+        status=row.status,
+        report=report,
+    )

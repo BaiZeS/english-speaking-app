@@ -51,8 +51,13 @@ class Settings(BaseSettings):
     # 留空时 ``/dialogue/*`` 自动回退到内置 deterministic fallback.
     llm_base_url: str = Field(default="")
     llm_api_key: str = Field(default="")
-    llm_default_model: str = Field(default="qwen-plus")
-    # 逗号分隔的模型白名单, 限制客户端可选范围; 留空则用代码内置的百炼目录.
+    # 服务端默认模型 (判分/生成/实战对话恒用它). **默认留空**: 未配置的环境里
+    # 解析链走 "首个 LLM_ALLOWED_MODELS -> 内置目录第一项" 的确定性回退
+    # (见 ``llm_provider.resolve_server_default_model``), 不再藏一个可能已配额
+    # 耗尽的具体模型 id (2026-08-31 实测 qwen-plus 系全 403; 本机 .env 配 qwen3.8-max).
+    llm_default_model: str = Field(default="")
+    # 逗号分隔的模型白名单, 限制客户端可选范围 **并** 作为服务端默认的回退第一项;
+    # 留空则用代码内置的百炼目录.
     llm_allowed_models: str = Field(default="")
     # JSON 数组, 给企业自建代理场景追加自定义模型:
     #   '[{"id":"my-gpt","display_name":"My GPT","provider":"custom","description":"内网代理"}]'

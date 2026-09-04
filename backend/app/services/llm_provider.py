@@ -135,6 +135,81 @@ def _parse_model_catalog() -> list[ModelInfo]:
     return catalog
 
 
+# ---------- Model resolution (single source of truth for the fallback chain) ----------
+#
+# 已知缺陷修正 (T2 发现, T4 落地): 旧链在 ``LLM_ALLOWED_MODELS`` /
+# ``LLM_DEFAULT_MODEL`` 都没配时会返回**硬编码的 qwen-plus** (而且走的是
+# ``next(iter(set))``, 顺序都不确定)。qwen-plus 这类模型随时可能配额耗尽
+# (2026-08-31 实测本机百炼 qwen-plus/max/turbo 全 403), "藏一个具体模型 id 在代码里"
+# 的兜底本质上会烂掉. 现在的链条全部由运维配置驱动、且确定性排序:
+#
+#   服务端默认 (判分/生成一律用它):  settings.LLM_DEFAULT_MODEL
+#                                     -> 首个 ALLOWED 条目
+#                                     -> 内置目录第一项 (顺序固定, 仅剩的确定性信号)
+#   角色对话文本 (可按老约定跟随客户端):  白名单 (显式 ALLOWED, 未配时 = 内置目录)
+#                                     命中 client model_id -> 用它
+#                                     否则回落服务端默认
+#
+# **判分永远不开放客户端选模型** (T3 先例: 同一门课不同题用不同模型, 分数没法
+# 比较, 也没法拿去更新画像)。这条链只提供两个入口: ``resolve_server_default_model``
+# (判分/生成) 与 ``resolve_roleplay_model`` (人设回复/润色文本)。
+
+
+def explicit_allowed_models() -> list[str]:
+    """Operator allow-list from ``LLM_ALLOWED_MODELS`` (empty when unset)."""
+    return [item.strip() for item in settings.llm_allowed_models.split(",") if item.strip()]
+
+
+def allowed_model_ids() -> list[str]:
+    """The list that gates client ``model_id``: explicit allow-list, else catalog.
+
+    Order is stable here on purpose — the fallback ("first allowed entry") must
+    be deterministic across restarts (the old code did ``next(iter(set))``).
+    """
+    explicit = explicit_allowed_models()
+    if explicit:
+        return explicit
+    return [info.id for info in get_model_catalog()]
+
+
+def resolve_server_default_model() -> str:
+    """Server-side default (grading / generation / mission turns).
+
+    Chain: ``LLM_DEFAULT_MODEL`` -> first allow-list entry -> first catalog entry.
+    No hard-coded dead model id anywhere.
+    """
+    default = settings.llm_default_model.strip()
+    if default:
+        return default
+    allowed = allowed_model_ids()
+    if allowed:
+        first = allowed[0]
+        logger.warning(
+            "LLM_DEFAULT_MODEL unset; falling back to the first allowed/catalog model {}",
+            first,
+        )
+        return first
+    logger.error("LLM model catalog is empty — configuration bug")
+    return ""
+
+
+def resolve_roleplay_model(model_id: str | None) -> str:
+    """Resolve a caller-supplied ``model_id`` for *text* (persona reply / polish).
+
+    Honored only when inside the allow-list (back-compat: with no allow-list the
+    built-in catalog is the allow-list, mirroring the pre-v2.0 contract). Grades
+    must never be resolved through this function — see
+    :func:`resolve_server_default_model`.
+    """
+    requested = (model_id or "").strip()
+    if not requested:
+        return resolve_server_default_model()
+    if requested in allowed_model_ids():
+        return requested
+    logger.warning("model_id {!r} is not in the server allow-list; using default", requested)
+    return resolve_server_default_model()
+
+
 # ---------- Bailian (OpenAI-compatible) ----------
 
 
@@ -149,7 +224,6 @@ class BailianOpenAIProvider:
     def __init__(self) -> None:
         self._base_url = settings.llm_base_url.rstrip("/")
         self._api_key = settings.llm_api_key
-        self._default_model = settings.llm_default_model
         self._client: AsyncOpenAI | None = None
         if self._api_key:
             self._client = AsyncOpenAI(
@@ -165,7 +239,8 @@ class BailianOpenAIProvider:
 
     @property
     def default_model(self) -> str:
-        return self._default_model or _DEFAULT_BAILIAN_MODELS[0].id
+        """Server default via the config-driven chain (never a hard-coded model id)."""
+        return resolve_server_default_model()
 
     async def list_models(self) -> list[str]:
         """Best-effort model list from the upstream Maas gateway.

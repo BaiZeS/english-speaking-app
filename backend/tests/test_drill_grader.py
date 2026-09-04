@@ -575,10 +575,18 @@ async def test_ability_evidence_only_lists_dimensions_with_evidence(
     assert [(e.dimension, e.weight) for e in events] == [("vocabulary", 1.0)]
 
 
-def test_record_step_evidence_hook_is_inert_in_p2() -> None:
-    """P2 不落 ability_events (表在 M2, EWMA 归 T4) —— 钩子必须是纯 no-op."""
-    assert dg.record_step_evidence() is None
-    assert dg.record_step_evidence(object(), user_id="u", evidence=[]) is None
+def test_record_step_evidence_moved_to_ability_engine() -> None:
+    """P3 (T4) 兑现了 P2 留的空钩子: 实现搬去 ``ability_engine`` (drill 里没有僵尸).
+
+    ``ability_engine`` 反过来 import ``drill_grader.AbilityEvidence`` —— 若实现留在
+    drill 会成环, 所以端点从 ``app.api.v1.course_sessions.record_step_evidence``
+    (import 自 ``app.services.ability_engine``) 取真身, 见
+    ``tests/test_ability_engine.py``.
+    """
+    from app.services import ability_engine
+
+    assert not hasattr(dg, "record_step_evidence")
+    assert callable(ability_engine.record_step_evidence)
 
 
 # ============================================================ 边界与降级细节

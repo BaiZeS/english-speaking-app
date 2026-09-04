@@ -28,11 +28,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.config import settings
-from app.models.db import PracticeSession, PracticeStep, SceneCourseRow, User
+from app.models.db import (
+    AbilityEvent,
+    AbilityProfile,
+    AnnotatedDiff,
+    Expression,
+    PracticeSession,
+    PracticeStep,
+    SceneCourseRow,
+    User,
+)
 
 M1_REVISION = "c9a1f4e7b208"
 PREVIOUS_REVISION = "a3f7c9d21b45"
 M1_TABLES = ("scene_courses", "practice_sessions", "practice_steps")
+# P3/T4 的 M2 (能力画像 + 表达库) 续在 M1 后面; T5 的 M3 还会再续.
+M2_REVISION = "f3b8d0716c52"
+M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "app" / "db" / "migrations"
 
@@ -275,15 +287,15 @@ def _version(url: str) -> str:
         engine.dispose()
 
 
-def test_m1_upgrade_then_downgrade_on_sqlite(
+def test_m1_then_m2_upgrade_downgrade_on_sqlite(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """M1 在 sqlite 上升 -> 表齐 -> downgrade -1 -> 表光 -> 再升可重放.
+    """M1 升 -> M2 升 -> 逐段降 -> 重放, 全在 sqlite 上正反跑.
 
     链条从 0 开始跑不动 sqlite: 既有迁移 ``edb6eb8d27a1`` 用 ``op.drop_constraint``
     删 history 外键, sqlite 不支持 (要 batch mode)。那是 **P2 之前的既有限制** —— CI 与
-    生产都在 PG16 上跑整链 (也在 PG 上正反验过 M1, 见 tasks/T3/progress.md)。这里所以
-    先建出既有表 + stamp 到前一个 head, 只把 **M1 这两步** 在 sqlite 上正反跑一遍。
+    生产都在 PG16 上跑整链 (M1/M2 也在 PG 上正反验过, 见 tasks/T3+T4 progress.md)。这里
+    先建出既有表 + stamp 到前一个 head, 把 **M1/M2 这两步** 在 sqlite 上正反跑一遍。
     """
     url = f"sqlite:///{tmp_path / 'm1.db'}"
     monkeypatch.setattr(settings, "database_url", url)
@@ -291,26 +303,45 @@ def test_m1_upgrade_then_downgrade_on_sqlite(
     _create_legacy_tables(url)
     command.stamp(cfg, PREVIOUS_REVISION)
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, M1_REVISION)
     names, columns, indexes = _inspect(url)
     assert set(M1_TABLES) <= names
     assert _version(url) == M1_REVISION
     assert "revision" in columns["practice_sessions"]
     assert "ix_practice_sessions_user_status_recency" in indexes
+    assert not set(M2_TABLES) & names  # M2 还没上来
 
-    command.downgrade(cfg, "-1")
+    command.upgrade(cfg, "head")  # M2
+    names, columns, indexes = _inspect(url)
+    assert set(M2_TABLES) <= names
+    assert _version(url) == M2_REVISION
+    assert "ix_ability_events_user_created" in indexes
+    assert "ix_expressions_user_normalized" in indexes
+
+    command.downgrade(cfg, M1_REVISION)  # 只退 M2
+    names_after, _, indexes_after = _inspect(url)
+    assert not set(M2_TABLES) & names_after
+    assert set(M1_TABLES) <= names_after  # M1 原样在
+    assert "ix_ability_events_user_created" not in indexes_after
+    assert _version(url) == M1_REVISION
+
+    command.downgrade(cfg, PREVIOUS_REVISION)  # 再退 M1
     names_after, _, indexes_after = _inspect(url)
     assert not set(M1_TABLES) & names_after
     assert set(LEGACY_TABLES) <= names_after  # 老表一支没动
     assert "ix_practice_sessions_user_status_recency" not in indexes_after
     assert _version(url) == PREVIOUS_REVISION
 
-    command.upgrade(cfg, "head")  # 可重放 (P3-P4 续链后同样成立)
-    assert set(M1_TABLES) <= _inspect(url)[0]
+    command.upgrade(cfg, "head")  # 整段可重放 (P4 的 M3 续链后同样成立)
+    assert set(M1_TABLES) | set(M2_TABLES) <= _inspect(url)[0]
 
 
-def test_m1_migration_matches_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """迁移建出来的列集合必须与 ORM 一致 (漏列 = 运行期才炸的定时炸弹)."""
+def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """迁移建出来的列集合必须与 ORM 一致 (漏列 = 运行期才炸的定时炸弹).
+
+    M1 (T3) 与 M2 (T4) 的全部新表都进来对 —— 这是 ``alembic check`` 的 sqlite 版,
+    PG16 上的真 ``alembic check`` 见 tasks/T4/progress.md.
+    """
     url = f"sqlite:///{tmp_path / 'm1_match.db'}"
     monkeypatch.setattr(settings, "database_url", url)
     _create_legacy_tables(url)
@@ -318,15 +349,24 @@ def test_m1_migration_matches_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     command.stamp(cfg, PREVIOUS_REVISION)
     command.upgrade(cfg, "head")
     _, columns, _ = _inspect(url)
-    for model in (PracticeSession, PracticeStep, SceneCourseRow):
+    for model in (
+        PracticeSession,
+        PracticeStep,
+        SceneCourseRow,
+        AbilityProfile,
+        AbilityEvent,
+        Expression,
+        AnnotatedDiff,
+    ):
         expected = {c.name for c in model.__table__.columns}
         assert expected == columns[model.__tablename__], (
             f"{model.__tablename__} 列漂移: {expected ^ columns[model.__tablename__]}"
         )
 
 
-def test_m1_is_the_only_head_and_chains_from_the_p1_head() -> None:
-    """M1 必须挂在既有 head 上且只有一个 head (P3/P4 的 M2/M3 还要续链)."""
+def test_single_head_chains_m1_then_m2() -> None:
+    """单 head + 挂链正确: M2(T4) 修 M1(T3), M1 修 P1-era head (T5 的 M3 续 M2)."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [M1_REVISION]
+    assert script.get_heads() == [M2_REVISION]
+    assert script.get_revision(M2_REVISION).down_revision == M1_REVISION
     assert script.get_revision(M1_REVISION).down_revision == PREVIOUS_REVISION

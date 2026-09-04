@@ -34,7 +34,7 @@ from app.core.errors import AppError
 from app.db.base import Base
 from app.db.session import get_sessionmaker
 from app.main import app
-from app.models.db import PracticeSession, PracticeStep, User
+from app.models.db import AbilityEvent, AbilityProfile, PracticeSession, PracticeStep, User
 from app.services import drill_grader as dg
 from app.services import llm_provider, scene_store
 from tests.test_scene_store import write_course
@@ -939,10 +939,14 @@ async def test_llm_graded_step_reports_provenance_through_the_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_ability_events_are_computed_but_nothing_is_persisted(
+async def test_stub_evidence_lands_in_events_but_never_touches_the_profile(
     scene_root: Path, db: AsyncSession
 ) -> None:
-    """P2 只把维度证据算给客户端 + 调 T4 的空钩子, **不写任何画像数据** (表在 M2)."""
+    """P3 门控的**本机路径**: stub 证据全量落流水 (w=0), 画像一行都不长.
+
+    T3 的"P2 只算不写"断言到这里换成真契约: M2 表已在, 事件已入库 —— 但
+    全被门控的事件不许创建/推动 ``ability_profiles`` (§5.6 / §四 决策表).
+    """
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         sid = await _open(c)
         res = await _step(c, sid, "f1", audio_b64=PCM_B64)
@@ -950,27 +954,42 @@ async def test_ability_events_are_computed_but_nothing_is_persisted(
     assert events and all(e["weight"] == 0.0 for e in events)  # stub 证据门控成 0
     assert {e["dimension"] for e in events} >= {"pronunciation", "fluency"}
     tables = set(await db.run_sync(lambda sm: sa_inspect(sm.get_bind()).get_table_names()))
-    assert "ability_events" not in tables and "ability_profiles" not in tables
-    assert "practice_steps" in tables
+    assert {"ability_events", "ability_profiles", "practice_steps"} <= tables
+    rows = (
+        (await db.execute(select(AbilityEvent).where(AbilityEvent.session_id == sid)))
+        .scalars()
+        .all()
+    )
+    assert [(r.dimension, r.weight, r.source_kind) for r in rows] == [
+        (e["dimension"], 0.0, "stub") for e in events
+    ]
+    assert all(
+        r.ise_ref_mode == ("exact_reference" if r.dimension == "pronunciation" else None)
+        for r in rows
+    )
+    profiles = (await db.execute(select(AbilityProfile))).scalars().all()
+    assert profiles == []  # 全门控 -> 画像行都不该建 (空画像 = 没证据)
 
 
 @pytest.mark.asyncio
 async def test_record_step_evidence_hook_is_called_per_attempt(
     scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """P3 的画像管线靠这个调用点接进去: 每落一行证据就通知一次 (P2 里它是 no-op)."""
+    """§5.6 的调用点钉死: 每落一行 step 证据就调一次画像管线 (P3 起它是 async)."""
     seen: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        cs,
-        "record_step_evidence",
-        lambda *_args, **kwargs: seen.append(kwargs),
-    )
+
+    async def _spy(*_args: Any, **kwargs: Any) -> int:
+        seen.append(kwargs)
+        return 0
+
+    monkeypatch.setattr(cs, "record_step_evidence", _spy)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         sid = await _open(c)
         await _step(c, sid, "f1", audio_b64=PCM_B64)
     assert len(seen) == 1
     assert seen[0]["step_id"] == "f1" and seen[0]["session_id"] == sid
     assert seen[0]["evidence"] and seen[0]["evidence"][0].weight == 0.0
+    assert seen[0]["user_id"]
 
 
 @pytest.mark.asyncio

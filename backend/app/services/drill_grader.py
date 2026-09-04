@@ -31,9 +31,9 @@
 LLM 调用预算: 每题恰好 1 次调用; JSON 不合规时把校验错误回喂再试 1 次 (§5.5),
 没有第三次 —— 直接降级, 移动端不等第二分钟.
 
-P3 接缝: :func:`ability_evidence` 把一次评分算成 §5.6 的维度证据 (含 stub 门控权重),
-但 **P2 不落 ``ability_events``** (M2 表与 EWMA 管线归 T4);
-:func:`record_step_evidence` 是给 T4 留的空钩子.
+P3 接缝: :func:`ability_evidence` 把一次评分算成 §5.6 的维度证据 (含 stub 门控权重);
+P3 (T4) 起由 ``course_sessions`` 在每次评分后把该列表交给
+:func:`app.services.ability_engine.record_step_evidence` 落库 (事件流水 + EWMA 画像)。
 """
 
 from __future__ import annotations
@@ -390,23 +390,34 @@ def _resolve_judge_model() -> str:
     return cast(str, getattr(provider, "default_model", "") or "") or "llm"
 
 
-async def _judge(schema: type[_J], messages: Sequence[LlmMessage]) -> _J:
+async def _judge(
+    schema: type[_J],
+    messages: Sequence[LlmMessage],
+    *,
+    max_tokens: int = LLM_MAX_TOKENS,
+    model: str | None = None,
+) -> _J:
     """一次 LLM 判分 + 容错解析; 输出不合规则**回喂校验错误重试 1 次**.
 
     未配置 -> ``LlmUnavailableError(not_configured=True)``; 传输异常 / 二次仍不合规
     -> ``LlmUnavailableError``. 调用方一律降级到确定性启发式.
+
+    P3 起该模式被 mission/polish/dialogue 复用 (见 ``app.services.mission_engine``):
+    ``max_tokens`` 给更大的综合 JSON 留预算; ``model`` **只允许纯文本用途**
+    (润色) 传入覆盖 —— 判分/任务判定恒用服务端默认模型 (``_resolve_judge_model``),
+    调用方不许拿客户端选的模型污染分数。
     """
     provider = get_llm_provider()
     if not cast(bool, getattr(provider, "is_configured", False)):
         raise LlmUnavailableError("LLM 未配置 (缺 LLM_API_KEY)", not_configured=True)
-    model = _resolve_judge_model()
+    resolved_model = model or _resolve_judge_model()
 
     async def _ask(turns: Sequence[LlmMessage]) -> str:
         completion = await provider.chat(
-            model=model,
+            model=resolved_model,
             messages=turns,
             temperature=0.2,
-            max_tokens=LLM_MAX_TOKENS,
+            max_tokens=max_tokens,
             timeout=LLM_TIMEOUT_S,
         )
         return completion.content
@@ -777,7 +788,7 @@ async def grade_step(
 
 
 def ability_evidence(grade: DrillGrade) -> list[AbilityEvidence]:
-    """把一次评分拆成 §5.6 的维度证据 (**P2 只算不写**).
+    """把一次评分拆成 §5.6 的维度证据 (落库管线见 ``app.services.ability_engine``).
 
     只产出真正有值的维度; ``source`` 落在占位家族 (stub / heuristic) 时 ``weight=0``,
     即画像 EWMA 不会因此动一分. T4 的 ``ability_events`` 直接吃这个列表.
@@ -805,14 +816,10 @@ def ability_evidence(grade: DrillGrade) -> list[AbilityEvidence]:
     return events
 
 
-def record_step_evidence(*_args: Any, **_kwargs: Any) -> None:
-    """P3 EXTENSION POINT: 画像 EWMA 落库 (``ability_events`` + ``ability_profiles``).
-
-    M1 没有画像表 (在 M2), 且 §八 把 ``services/ability.py`` 划给 T4 —— 这里留空钩子:
-    ``course_sessions`` 每落一行 ``practice_steps`` 就调一次本函数, P3 把实现填进来
-    (吃 :func:`ability_evidence` 的返回), 端点与调用点都不用改.
-    """
-    return None
+# P3 (T4) 落位说明: P2 留在这里的 ``record_step_evidence`` 空钩子已兑现为
+# :func:`app.services.ability_engine.record_step_evidence` (EWMA + 事件流水真实现).
+# 端点改为直接引用 ability_engine 的同名函数 (两个模块有向依赖: ability_engine ->
+# drill_grader 只吃 :class:`AbilityEvidence` 类型, 反向 import 会成环).
 
 
 __all__ = sorted(
@@ -833,7 +840,6 @@ __all__ = sorted(
         "grade_retell",
         "grade_step",
         "grade_translate",
-        "record_step_evidence",
         "resolve_answer_text",
         "transcribe_audio",
     ]

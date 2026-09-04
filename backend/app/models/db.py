@@ -254,3 +254,165 @@ class PracticeStep(Base):
         kwargs.setdefault("id", _uuid())
         kwargs.setdefault("created_at", _utcnow())
         super().__init__(**kwargs)
+
+
+# ============================================================ v2.0 M2 (§5.2)
+#
+# 能力画像两张 + 表达库两张, 全部 add-only (不动 M1 与既有表).
+#
+# ``ability_events`` 是**流水 (source of truth)**, ``ability_profiles`` 只是它的
+# 可重建物化快照 (§5.2: "profiles is only a rebuildable materialization"):
+# 任何时候按 (user, created_at) 顺序重放 events + EWMA 都能还原 profiles。轨迹视图
+# (GET /ability) 也全部从 events 派生, 不读快照。
+
+
+class AbilityProfile(Base):
+    """能力画像快照 (计划 §5.2 M2 / §5.6).
+
+    - 4 维分 **可空**: ``NULL`` = 该维度还没有过"未被门控"的证据 (stub/heuristic
+      的 w=0 事件只进流水、不动画像 —— 本机没讯飞 key 时画像就是全 NULL)。
+    - ``*_n`` 只统计真的动过画像的证据条数 (w>0), 与 ``ability_events`` 的全量
+      流水行数有意不对齐: "样本数" 是给学员看的可信度, 不是审计计数。
+    - CEFR 三列: ``cefr_level`` 是**权威定级**, 测评 (P4) 写 ``assessment_cefr``
+      后才映射; 测评前恒 NULL (§5.3: null pre-assessment)。``band_locked`` 为真
+      时画像映射出的等级只允许在锚定 band ±1 内漂移 (口径在
+      ``app.services.ability_engine``)。
+    """
+
+    __tablename__ = "ability_profiles"
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), primary_key=True)
+    pronunciation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    grammar: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vocabulary: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fluency: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pronunciation_n: Mapped[int] = mapped_column(Integer, default=0)
+    grammar_n: Mapped[int] = mapped_column(Integer, default=0)
+    vocabulary_n: Mapped[int] = mapped_column(Integer, default=0)
+    fluency_n: Mapped[int] = mapped_column(Integer, default=0)
+    #: 权威 CEFR (测评驱动); 测评前为 NULL (雷达图照常画, 徽章位显示"未测评").
+    cefr_level: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    #: 最近一次 CEFR 测评直接给出的等级 (P4 写). NULL = 还没测过.
+    assessment_cefr: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    #: 锁带开关: 真 -> 派生等级只能在 assessment_cefr ±1 band 内漂移.
+    band_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        kwargs.setdefault("band_locked", False)
+        for name in ("pronunciation_n", "grammar_n", "vocabulary_n", "fluency_n"):
+            kwargs.setdefault(name, 0)
+        super().__init__(**kwargs)
+
+
+class AbilityEvent(Base):
+    """一条维度证据 (计划 §5.6 管线的事件流水).
+
+    **每一次有分的尝试都写**, 包括被门控的 (``weight=0`` 的 stub/heuristic) ——
+    流水是全量的 (画像被污染可以整表重建), 门控发生在"更不更新 profile"这一步。
+    ``session_id`` 是**无外键**的引用: 自由对话轮次没有 practice_session, 而且会话
+    将来若可清理, 审计流水不该被 FK 钉死。
+    """
+
+    __tablename__ = "ability_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: pronunciation | grammar | vocabulary | fluency (口径同 §5.6).
+    dimension: Mapped[str] = mapped_column(String(16))
+    score: Mapped[float] = mapped_column(Float)
+    #: 0 = 被门控 (stub/heuristic/skip), 画像不动; >0 = 参与 EWMA 的实际步长权重.
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    #: 证据来源: xunfei | llm | heuristic | stub | skip.
+    source_kind: Mapped[str] = mapped_column(String(16))
+    #: 发音证据的参考口径 (exact_reference | transcript_anchored); 其它维度 NULL.
+    ise_ref_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: 关联的会话 id (可为空: 自由对话轮次没有 practice_session). 无 FK, 见 docstring.
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    #: 关联的步骤/回合标识 (``f1..`` / ``m1..`` / dialogue scene id).
+    step_id: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        # 轨迹视图 (GET /ability?days=) 与画像重建都按 (user, 时间) 扫流水.
+        Index("ix_ability_events_user_created", "user_id", "created_at"),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("step_id", "")
+        super().__init__(**kwargs)
+
+
+class Expression(Base):
+    """个人表达库 (计划 §5.7 / §6.4 「收藏进个人表达库」).
+
+    润色结果 (mission 轮 / 自由对话轮 / 独立 ``POST /polish``) 可收藏; 收藏入口
+    带 ``source_label`` 说明它从哪来。**去重键 ``normalized``**: 润色句归一化
+    (小写 + 去标点 + 压空白) 后同一用户只存一条, ``collect`` 重试 / 多场景润出
+    同一句都不会堆重复卡片。
+    """
+
+    __tablename__ = "expressions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: 更好的说法 (卡片主文案, 能直接开口用).
+    polished: Mapped[str] = mapped_column(Text)
+    #: 被润色的原句 (卡片小字 + 删除线展示).
+    original: Mapped[str] = mapped_column(Text, default="")
+    explanation_cn: Mapped[str] = mapped_column(Text, default="")
+    #: polish | mission | dialogue | manual (来源标签, §5.7).
+    source_label: Mapped[str] = mapped_column(String(32), default="manual")
+    #: 出处标注 (§5.7: 支持 source_text/scene_id 标注).
+    scene_id: Mapped[str] = mapped_column(String(64), default="")
+    session_id: Mapped[str] = mapped_column(String(36), default="")
+    #: 去重键 (由服务端从 polished 归一化, 客户端不传).
+    normalized: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_expressions_user_normalized", "user_id", "normalized", unique=True),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        super().__init__(**kwargs)
+
+
+class AnnotatedDiff(Base):
+    """逐条润色对照流水 (计划 §5.2 M4 表, 由 P3/T4 随 M2 一并落地).
+
+    每一次真的产出过 polish 的动作都追加一行 (mission 轮 / 自由对话轮 / 独立
+    /polish)。它是"原话 vs 更好说法"的**跨会话**审计: 复盘报告读会话 doc 里的
+    标注即可成形, 这张表让同一份标注在会话之外也可追溯 (表达库收藏可回链)。
+    """
+
+    __tablename__ = "annotated_diffs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    original: Mapped[str] = mapped_column(Text)
+    polished: Mapped[str] = mapped_column(Text)
+    explanation_cn: Mapped[str] = mapped_column(Text, default="")
+    #: mission | dialogue | polish (产出场景).
+    origin: Mapped[str] = mapped_column(String(32), default="polish")
+    #: 无外键引用 (同 AbilityEvent.session_id 的理由).
+    session_id: Mapped[str] = mapped_column(String(36), default="")
+    step_id: Mapped[str] = mapped_column(String(32), default="")
+    scene_id: Mapped[str] = mapped_column(String(64), default="")
+    #: 润色 LLM 的 provenance: 模型 id | "stub".
+    llm_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        super().__init__(**kwargs)

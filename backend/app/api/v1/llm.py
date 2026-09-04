@@ -3,6 +3,9 @@
 客户端 (Android) 启动时拉取 ``GET /api/v1/llm/models`` 获取可选模型清单,
 用于设置页的「对话模型」下拉框. 始终返回静态目录 (代码内置的百炼模型),
 并且在 ``llm_allowed_models`` 配置了白名单时按白名单过滤.
+
+注意: 目录里出现的 id **不等于**可用 —— ``default_model`` 是服务端默认
+(白名单只约束客户端可选范围, 不约束服务端自己用哪个模型).
 """
 
 from __future__ import annotations
@@ -10,7 +13,11 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.services.llm_provider import ModelInfo, get_model_catalog
+from app.services.llm_provider import (
+    ModelInfo,
+    get_model_catalog,
+    resolve_server_default_model,
+)
 
 router = APIRouter(tags=["llm"])
 
@@ -48,8 +55,6 @@ async def list_llm_models() -> LlmModelsResponse:
     model ids. New models are added by updating ``llm_provider._DEFAULT_BAILIAN_MODELS``
     (or by setting ``LLM_EXTRA_MODELS_JSON``).
     """
-    from app.config import settings
-
     catalog = _filter_catalog(get_model_catalog())
     return LlmModelsResponse(
         models=[
@@ -61,5 +66,7 @@ async def list_llm_models() -> LlmModelsResponse:
             )
             for info in catalog
         ],
-        default_model=settings.llm_default_model or catalog[0].id,
+        # P3: 默认模型收口到 ``resolve_server_default_model`` (settings 驱动 +
+        # 确定性回退); 旧式 ``or catalog[0].id`` 在白名单过滤成空列表时会 IndexError.
+        default_model=resolve_server_default_model(),
     )
