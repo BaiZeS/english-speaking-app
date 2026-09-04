@@ -85,7 +85,7 @@ def test_fallback_turn_skips_tasks_without_hint_en() -> None:
         course, 1, "How much is that?", state, me.LlmUnavailableError("x", not_configured=True)
     )
     assert source == "heuristic" and llm == "stub"
-    assert judgement.reply == course.mission.exchanges[0].a
+    assert judgement.reply == course.mission.exchanges[1].a  # 开场白不重播
     assert [p.id for p in judgement.task_progress] == ["t2"]  # t1 无示范句被跳过
 
 

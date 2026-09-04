@@ -360,7 +360,9 @@ def fallback_turn(
     """
     logger.warning("mission turn degraded to heuristic | reason={}", failure)
     lines = course.mission.exchanges
-    script = lines[(turn_index - 1) % len(lines)]
+    # turn 1 的降级回复不能再吐 ``exchanges[0].a`` —— 开场白 (= 它) 已经由服务端
+    # 先说过了; 从剧本第 2 句往下走, 超出剧本长度后停在最后一句 (可接受的回环).
+    script = lines[min(turn_index, len(lines) - 1)]
     progress: list[TaskProgress] = []
     for entry in tasks_state:
         if entry.get("done"):

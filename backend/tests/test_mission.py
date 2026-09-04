@@ -375,8 +375,9 @@ async def test_second_bad_output_degrades_to_script_replay(
     body = (await _mission(client, sid, {"text": "Medium coffee with cream please."})).json()
     assert len(fake.requests) == 2  # 只重试一次, 不做第三次
     assert body["source"] == "heuristic" and body["llm_source"] == "stub"
-    assert body["reply"] == "Hi, what can I get you?"  # 参考剧本 A 行 (确定性回放, 不冒充生成)
-    assert body["suggestion"] == "A small coffee, please."  # 剧本 B 行当示范
+    # 剧本回放从开场白的下一句开始 (开场白客户端已经播过, 不重复)
+    assert body["reply"] == "Anything else?"
+    assert body["suggestion"] == "No, that's all."
     assert body["polish"] is None
     assert body["sub_scores"]["grammar"] is None  # 降级轮不出语法/词汇证据 (宁缺勿滥)
     assert body["ability_events"] == []
