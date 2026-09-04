@@ -4,12 +4,20 @@ import com.app.english.data.repository.BooksRepository
 import com.app.english.data.repository.BooksRepositoryImpl
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.EnglishRepositoryImpl
+import com.app.english.data.repository.ExpressionRepository
+import com.app.english.data.repository.ExpressionRepositoryImpl
+import com.app.english.data.repository.GenerateRepository
+import com.app.english.data.repository.GenerateRepositoryImpl
 import com.app.english.data.repository.HistoryRepository
 import com.app.english.data.repository.HistoryRepositoryImpl
 import com.app.english.data.repository.MistakeWordRepository
 import com.app.english.data.repository.MistakeWordRepositoryImpl
+import com.app.english.data.repository.ProgressRepository
+import com.app.english.data.repository.ProgressRepositoryImpl
 import com.app.english.data.repository.SceneRepository
 import com.app.english.data.repository.SceneRepositoryImpl
+import com.app.english.data.repository.SessionRepository
+import com.app.english.data.repository.SessionRepositoryImpl
 import com.app.english.data.repository.StatsRepository
 import com.app.english.data.repository.StatsRepositoryImpl
 import dagger.Binds
@@ -44,4 +52,20 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindSceneRepository(impl: SceneRepositoryImpl): SceneRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSessionRepository(impl: SessionRepositoryImpl): SessionRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindGenerateRepository(impl: GenerateRepositoryImpl): GenerateRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindProgressRepository(impl: ProgressRepositoryImpl): ProgressRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindExpressionRepository(impl: ExpressionRepositoryImpl): ExpressionRepository
 }

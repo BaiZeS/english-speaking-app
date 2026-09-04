@@ -217,7 +217,7 @@ class FreeDialogueViewModel @Inject constructor(
                         role = if (it.isUser) "user" else "assistant",
                         text = it.text
                     )
-                } + DialogueMessageDto(role = "user", text = "（本轮自由回答）")
+                } + DialogueMessageDto(role = "user", text = "")
                 val next = repository.dialogueTurn(
                     current.sceneId,
                     history,
@@ -231,7 +231,8 @@ class FreeDialogueViewModel @Inject constructor(
                         scores = it.scores + FreeDialogueScore(current.suggestedReply, result),
                         messages = it.messages + FreeDialogueMessage(
                             role = "user",
-                            text = next.recognizedText ?: "（本轮自由回答）",
+                            text = next.recognizedText?.takeIf { it.isNotBlank() }
+                                ?: "（这句没有识别到文字）",
                             isUser = true
                         ) + FreeDialogueMessage(
                             role = "assistant",

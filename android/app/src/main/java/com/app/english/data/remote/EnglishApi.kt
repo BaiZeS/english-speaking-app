@@ -1,6 +1,7 @@
 package com.app.english.data.remote
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -73,4 +74,92 @@ interface EnglishApi {
         @Query("category") category: String? = null,
         @Query("device_id") deviceId: String
     ): ScenesResponseDto
+
+    // ====== 情景课全流程(计划 §5.3, P6 消费) ======
+
+    /** 一门课的完整内容(生成课仅归属者可见; 不带身份只看 curated)。 */
+    @GET("scenes/{sceneId}")
+    suspend fun getScene(
+        @Path("sceneId") sceneId: String,
+        @Query("device_id") deviceId: String
+    ): SceneCourseDto
+
+    /** 删除自己的生成课(curated 405)。 */
+    @DELETE("scenes/{sceneId}")
+    suspend fun deleteScene(@Path("sceneId") sceneId: String, @Query("device_id") deviceId: String)
+
+    @POST("scenes/generate")
+    suspend fun generateScene(@Body request: GenerateSceneRequestDto): GenerateAcceptedDto
+
+    @GET("scenes/jobs/{jobId}")
+    suspend fun getGenerationJob(
+        @Path("jobId") jobId: String,
+        @Query("device_id") deviceId: String
+    ): GenerationJobDto
+
+    @GET("courses/progress")
+    suspend fun listCourseProgress(@Query("device_id") deviceId: String): CourseProgressPageDto
+
+    // ====== 通关会话状态机 ======
+
+    @POST("sessions")
+    suspend fun createSession(@Body request: CreateSessionRequestDto): SessionViewDto
+
+    /** 最近会话列表; `status=active` 过滤未打完的场(首页「继续学习」)。 */
+    @GET("sessions")
+    suspend fun listSessions(
+        @Query("device_id") deviceId: String,
+        @Query("status") status: String = "",
+        @Query("limit") limit: Int = 10
+    ): List<SessionSummaryDto>
+
+    /** 崩溃恢复快照(stage/mission/review 视图 + 整课内容)。 */
+    @GET("sessions/{sessionId}")
+    suspend fun getSession(
+        @Path("sessionId") sessionId: String,
+        @Query("device_id") deviceId: String
+    ): SessionViewDto
+
+    @POST("sessions/{sessionId}/step")
+    suspend fun submitStep(
+        @Path("sessionId") sessionId: String,
+        @Body request: StepAttemptRequestDto
+    ): StepAttemptResponseDto
+
+    @POST("sessions/{sessionId}/skip-step")
+    suspend fun skipStep(
+        @Path("sessionId") sessionId: String,
+        @Body request: StepAttemptRequestDto
+    ): StepAttemptResponseDto
+
+    @POST("sessions/{sessionId}/mission")
+    suspend fun submitMissionTurn(
+        @Path("sessionId") sessionId: String,
+        @Body request: MissionTurnRequestDto
+    ): MissionTurnResponseDto
+
+    @POST("sessions/{sessionId}/hint")
+    suspend fun requestHint(
+        @Path("sessionId") sessionId: String,
+        @Body request: MissionTurnRequestDto
+    ): HintResponseDto
+
+    @POST("sessions/{sessionId}/finish-mission")
+    suspend fun finishMission(
+        @Path("sessionId") sessionId: String,
+        @Body request: MissionTurnRequestDto
+    ): FinishMissionResponseDto
+
+    // ====== 个人表达库(§5.7) ======
+
+    @GET("expressions")
+    suspend fun listExpressions(@Query("device_id") deviceId: String): List<ExpressionDto>
+
+    @POST("expressions")
+    suspend fun createExpression(
+        @Body request: CreateExpressionRequestDto
+    ): CreateExpressionResponseDto
+
+    @DELETE("expressions/{id}")
+    suspend fun deleteExpression(@Path("id") id: String, @Query("device_id") deviceId: String)
 }

@@ -47,10 +47,26 @@ sealed class Route(val route: String) {
 
     data object ScoreResult : Route("score_result")
 
-    // ---- 情景课: P5 只有占位页, P6 换成真详情 ----
+    // ---- 情景课(P6 全流程: 详情 -> 打基础 -> 实战 -> 复盘) ----
     data object SceneDetail : Route("scene_detail/{sceneId}") {
         const val ARG_SCENE_ID = "sceneId"
         fun create(sceneId: String): String = "scene_detail/$sceneId"
+    }
+
+    /** 打基础; 会话 id 是服务端状态机的句柄, 快照经 GET /sessions/{id} 恢复。 */
+    data object SceneBriefing : Route("scene_briefing/{sessionId}") {
+        const val ARG_SESSION_ID = "sessionId"
+        fun create(sessionId: String): String = "scene_briefing/$sessionId"
+    }
+
+    data object SceneMission : Route("scene_mission/{sessionId}") {
+        const val ARG_SESSION_ID = "sessionId"
+        fun create(sessionId: String): String = "scene_mission/$sessionId"
+    }
+
+    data object SceneReview : Route("scene_review/{sessionId}") {
+        const val ARG_SESSION_ID = "sessionId"
+        fun create(sessionId: String): String = "scene_review/$sessionId"
     }
 
     // ---- 我的 / 词汇 的二级页 ----
@@ -82,6 +98,9 @@ val allRoutes: List<Route> = listOf(
     Route.FreeDialogue,
     Route.ScoreResult,
     Route.SceneDetail,
+    Route.SceneBriefing,
+    Route.SceneMission,
+    Route.SceneReview,
     Route.History,
     Route.HistoryDetail,
     Route.MistakeDrill,

@@ -37,6 +37,11 @@ import com.app.english.ui.home.HomeScreen
 import com.app.english.ui.lesson.LessonDetailScreen
 import com.app.english.ui.me.MeScreen
 import com.app.english.ui.player.PlayerScreen
+import com.app.english.ui.scenes.BriefingScreen
+import com.app.english.ui.scenes.GenerateCourseScreen
+import com.app.english.ui.scenes.MissionScreen
+import com.app.english.ui.scenes.ReviewScreen
+import com.app.english.ui.scenes.SceneDetailScreen
 import com.app.english.ui.score.ScoreResultScreen
 import com.app.english.ui.settings.SettingsScreen
 import com.app.english.ui.vocab.VocabHubScreen
@@ -92,6 +97,7 @@ fun AppNavHost() {
             vocabTab(navController)
             meTab(navController)
             lessonGraph(navController)
+            sceneGraph(navController)
             placeholderGraph(navController)
         }
     }
@@ -249,32 +255,85 @@ private fun NavGraphBuilder.lessonGraph(navController: NavHostController) {
 }
 
 /**
- * P5 建好、P6/P7 才填内容的目的地: 导航图先完整, 入口不会指向不存在的 route。
+ * P6 情景课全流程的目的地(替换 P5 占位); 测评与表达库仍是 P7 占位。
  */
-private fun NavGraphBuilder.placeholderGraph(navController: NavHostController) {
-    // TODO(P6): 换成 SceneDetailScreen(读 GET /scenes/{id} 的词汇卡 / 打基础 / 任务清单)。
+private fun NavGraphBuilder.sceneGraph(navController: NavHostController) {
     composable(
         route = Route.SceneDetail.route,
         arguments = listOf(
             navArgument(Route.SceneDetail.ARG_SCENE_ID) { type = NavType.StringType }
         )
-    ) { entry ->
-        val sceneId = entry.arguments?.getString(Route.SceneDetail.ARG_SCENE_ID).orEmpty()
-        ComingSoonScreen(
-            title = "情景课详情",
-            detail = "课程 $sceneId 的词汇卡、打基础四步与通关任务清单会排在这里。",
-            plannedPhase = "P6 情景课全流程",
-            onBack = { navController.popBackStack() }
+    ) {
+        SceneDetailScreen(
+            onBack = { navController.popBackStack() },
+            onOpenBriefing = { sessionId ->
+                navController.navigate(Route.SceneBriefing.create(sessionId))
+            },
+            onOpenMission = { sessionId ->
+                navController.navigate(Route.SceneMission.create(sessionId))
+            }
         )
     }
     composable(Route.GenerateCourse.route) {
-        ComingSoonScreen(
-            title = "生成我的专属课",
-            detail = "说一句话描述你的目标, AI 生成一整节情景课(词汇 + 任务 + 对话)。",
-            plannedPhase = "P6 情景课全流程",
-            onBack = { navController.popBackStack() }
+        GenerateCourseScreen(
+            onBack = { navController.popBackStack() },
+            onCourseReady = { sceneId ->
+                // 生成课在画廊里已可见(合并自 DB), 打开它的详情页。
+                navController.navigate(Route.SceneDetail.create(sceneId)) {
+                    popUpTo(Route.Home.route)
+                }
+            }
         )
     }
+    composable(
+        route = Route.SceneBriefing.route,
+        arguments = listOf(
+            navArgument(Route.SceneBriefing.ARG_SESSION_ID) { type = NavType.StringType }
+        )
+    ) {
+        BriefingScreen(
+            onBack = { navController.popBackStack() },
+            onOpenMission = { sessionId ->
+                navController.navigate(Route.SceneMission.create(sessionId)) {
+                    // 打基础一走完, 返回栈里不需要再留它(回退锚点是课程详情)。
+                    popUpTo(Route.SceneDetail.route)
+                }
+            }
+        )
+    }
+    composable(
+        route = Route.SceneMission.route,
+        arguments = listOf(
+            navArgument(Route.SceneMission.ARG_SESSION_ID) { type = NavType.StringType }
+        )
+    ) {
+        MissionScreen(
+            onBack = { navController.popBackStack() },
+            onOpenReview = { sessionId ->
+                navController.navigate(Route.SceneReview.create(sessionId)) {
+                    popUpTo(Route.SceneDetail.route)
+                }
+            }
+        )
+    }
+    composable(
+        route = Route.SceneReview.route,
+        arguments = listOf(
+            navArgument(Route.SceneReview.ARG_SESSION_ID) { type = NavType.StringType }
+        )
+    ) {
+        ReviewScreen(
+            onBack = { navController.popBackStack() },
+            onReplay = { sceneId ->
+                navController.navigate(Route.SceneDetail.create(sceneId)) {
+                    popUpTo(Route.Home.route)
+                }
+            }
+        )
+    }
+}
+
+private fun NavGraphBuilder.placeholderGraph(navController: NavHostController) {
     composable(Route.AssessmentIntro.route) {
         ComingSoonScreen(
             title = "CEFR 能力测评",

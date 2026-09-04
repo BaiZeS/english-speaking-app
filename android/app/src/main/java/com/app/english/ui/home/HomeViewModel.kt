@@ -3,8 +3,10 @@ package com.app.english.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.app.english.data.repository.SceneRepository
+import com.app.english.data.repository.SessionRepository
 import com.app.english.data.repository.StatsRepository
 import com.app.english.data.repository.pickRecommended
+import com.app.english.domain.model.ContinueSession
 import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.SceneCategoryStat
 import com.app.english.domain.model.SceneSummary
@@ -58,7 +60,8 @@ data class HomeUiState(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val statsRepository: StatsRepository,
-    private val sceneRepository: SceneRepository
+    private val sceneRepository: SceneRepository,
+    private val sessionRepository: SessionRepository
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         HomeUiState(greeting = greetingLabel(LocalTime.now().hour))
@@ -73,6 +76,7 @@ class HomeViewModel @Inject constructor(
     fun refresh() {
         loadStats()
         loadScenes()
+        loadContinueLearning()
     }
 
     private fun loadStats() {
@@ -109,6 +113,37 @@ class HomeViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * 「继续学习」(计划 §6.3): GET /sessions?status=active 最近一场 —— P4 的
+     * course_sessions 落地后这里才有真数据; 接口挂了整卡隐藏, 不放假入口。
+     */
+    private fun loadContinueLearning() {
+        viewModelScope.launch {
+            try {
+                val latest = sessionRepository.list(status = "active").firstOrNull()
+                _state.update {
+                    it.copy(
+                        continueLearning = latest?.let { session ->
+                            ContinueLearningTarget(
+                                title = session.toCardTitle(),
+                                sceneId = session.sceneId,
+                                stage = session.stage
+                            )
+                        }
+                    )
+                }
+            } catch (_: Exception) {
+                _state.update { it.copy(continueLearning = null) }
+            }
+        }
+    }
+}
+
+/** 卡片副标题: 打基础显示步数进度, 实战直接说人话。 */
+private fun ContinueSession.toCardTitle(): String = when (stage) {
+    "mission" -> "$title · 实战对话"
+    else -> "$title · 打基础 $doneSteps/$totalSteps"
 }
 
 /** 问候语按本地时间分三段(可栗首页顶部就是一句问候, 不做成固定标题)。 */
