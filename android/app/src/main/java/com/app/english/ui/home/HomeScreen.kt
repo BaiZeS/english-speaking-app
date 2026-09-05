@@ -94,15 +94,17 @@ fun HomeScreen(
                 containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer
             )
-            // 后端 GET /assessment 之前没有定级数据, 所以引导卡恒显示; P7 有画像后隐藏。
-            ActionEntryCard(
-                title = "5 分钟测出你的英语水平",
-                subtitle = "测评后解锁四维能力画像",
-                icon = Icons.Filled.Explore,
-                onClick = onAssessmentClick,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // 未测评才引导(P7 起 assessed 来自 GET /ability 的权威 CEFR); 测过即隐藏。
+            if (!state.assessed) {
+                ActionEntryCard(
+                    title = "5 分钟测出你的英语水平",
+                    subtitle = "测评后解锁四维能力画像",
+                    icon = Icons.Filled.Explore,
+                    onClick = onAssessmentClick,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

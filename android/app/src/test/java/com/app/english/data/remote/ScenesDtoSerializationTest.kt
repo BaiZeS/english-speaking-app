@@ -1,7 +1,6 @@
 package com.app.english.data.remote
 
-import com.app.english.data.repository.RECOMMENDED_SCENE_ID
-import com.app.english.data.repository.pickRecommended
+import com.app.english.data.repository.pickTodayScene
 import com.app.english.domain.model.SceneSummary
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -161,15 +160,12 @@ class ScenesDtoSerializationTest {
     @Test
     fun recommendedPickTargetsTheCuratedStarterCourse() {
         val catalog = json.decodeFromString(ScenesResponseDto.serializer(), fullPage).toDomain()
-        // 「今日推荐」冷启动固定给这节 curated 职场课(计划 §6.3), 与后端内容清单对齐。
-        assertEquals("scene_workplace_project_update", RECOMMENDED_SCENE_ID)
-        assertEquals(RECOMMENDED_SCENE_ID, catalog.scenes.pickRecommended()?.id)
+        // P7 起「今日推荐」= 画像最低维匹配场景 skills; 空画像(null)按计划 §6.3
+        // 走 curated 第 1 课兜底, 与后端内容清单对齐。
+        assertEquals("scene_workplace_project_update", catalog.scenes.pickTodayScene(null)?.id)
         // 后端换了内容清单 -> 退回首门课, 不给空白卡
         val withoutStarter = catalog.scenes.drop(1)
-        assertEquals(
-            "scene_ordering_coffee",
-            withoutStarter.pickRecommended("scene_not_present")?.id
-        )
-        assertNull(emptyList<SceneSummary>().pickRecommended())
+        assertEquals("scene_ordering_coffee", withoutStarter.pickTodayScene(null)?.id)
+        assertNull(emptyList<SceneSummary>().pickTodayScene(null))
     }
 }

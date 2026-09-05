@@ -2,10 +2,13 @@ package com.app.english.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.app.english.data.repository.AbilityRepository
+import com.app.english.data.repository.DEFAULT_ABILITY_DAYS
 import com.app.english.data.repository.SceneRepository
 import com.app.english.data.repository.SessionRepository
 import com.app.english.data.repository.StatsRepository
-import com.app.english.data.repository.pickRecommended
+import com.app.english.data.repository.pickTodayScene
+import com.app.english.domain.model.AbilityProfile
 import com.app.english.domain.model.ContinueSession
 import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.SceneCategoryStat
@@ -23,9 +26,8 @@ import kotlinx.coroutines.launch
 /**
  * 「继续学习」卡片的目标(计划 §6.3)。
  *
- * TODO(P6): 数据源是 `GET /courses/progress?device_id=` / `GET /sessions`(P2/P4
- * 落地), 取最近一条活跃的 practice_session 拼出标题 + 要回到的 stage 路由。
- * P5 没有任何数据可读, 所以这个值恒为 null, 首页整卡隐藏而不是显示一个假入口。
+ * 数据源是 `GET /sessions`(P4 落地), 取最近一条活跃的 practice_session 拼出
+ * 标题 + 要回到的 stage 路由; 没有数据时整卡隐藏而不是显示一个假入口。
  */
 data class ContinueLearningTarget(
     /** 卡片主文案, 例如「项目进展汇报 · 打基础 3/5」。 */
@@ -42,15 +44,26 @@ data class HomeUiState(
     val stats: PracticeStats? = null,
     val statsError: String? = null,
     val isLoadingScenes: Boolean = true,
-    val recommended: SceneSummary? = null,
+    /** 画廊全量摘要; [recommended] 按「画像最低维 → skills 匹配」从它里挑。 */
+    val scenes: List<SceneSummary> = emptyList(),
     val categories: List<SceneCategoryStat> = emptyList(),
     val sceneTotal: Int = 0,
     val scenesError: String? = null,
-    val continueLearning: ContinueLearningTarget? = null
+    val continueLearning: ContinueLearningTarget? = null,
+    /** 画像最低维(pronunciation/grammar/vocabulary/fluency); 空画像 = null。 */
+    val weakestDimension: String? = null,
+    /** 是否已经测评过(测评过 → 首页「未测评引导」卡隐藏)。 */
+    val assessed: Boolean = false
 ) {
     val streakDays: Int get() = stats?.streakDays ?: 0
 
     val hasPracticeData: Boolean get() = stats?.hasData == true
+
+    /**
+     * 今日推荐: 最低维匹配场景 skills, 匹配不上/空画像走 curated 第 1 课兜底
+     * (pickTodayScene)。画像路挂了 weakestDimension 就是 null, 走兜底不白屏。
+     */
+    val recommended: SceneSummary? get() = scenes.pickTodayScene(weakestDimension)
 
     /** 画廊分类卡: 后端给的分类(空目录时 SceneFilter 兜底四类)。 */
     val galleryCategories: List<SceneCategoryStat>
@@ -61,7 +74,8 @@ data class HomeUiState(
 class HomeViewModel @Inject constructor(
     private val statsRepository: StatsRepository,
     private val sceneRepository: SceneRepository,
-    private val sessionRepository: SessionRepository
+    private val sessionRepository: SessionRepository,
+    private val abilityRepository: AbilityRepository
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         HomeUiState(greeting = greetingLabel(LocalTime.now().hour))
@@ -72,11 +86,12 @@ class HomeViewModel @Inject constructor(
         refresh()
     }
 
-    /** 两路数据各自独立加载: 画廊挂了不该把打卡/推荐一起变白屏。 */
+    /** 各路数据独立加载: 画廊/画像挂了不该把打卡/推荐一起变白屏。 */
     fun refresh() {
         loadStats()
         loadScenes()
         loadContinueLearning()
+        loadAbility()
     }
 
     private fun loadStats() {
@@ -101,7 +116,7 @@ class HomeViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         isLoadingScenes = false,
-                        recommended = catalog.scenes.pickRecommended(),
+                        scenes = catalog.scenes,
                         categories = catalog.categories,
                         sceneTotal = catalog.total
                     )
@@ -115,8 +130,8 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 「继续学习」(计划 §6.3): GET /sessions?status=active 最近一场 —— P4 的
-     * course_sessions 落地后这里才有真数据; 接口挂了整卡隐藏, 不放假入口。
+     * 「继续学习」(计划 §6.3): GET /sessions?status=active 最近一场; 接口挂了
+     * 整卡隐藏, 不放假入口。
      */
     private fun loadContinueLearning() {
         viewModelScope.launch {
@@ -135,6 +150,27 @@ class HomeViewModel @Inject constructor(
                 }
             } catch (_: Exception) {
                 _state.update { it.copy(continueLearning = null) }
+            }
+        }
+    }
+
+    /**
+     * 画像快照(计划 §6.3): 「未测评引导」卡的显隐 + 今日推荐的最低维匹配。
+     * 接口挂了按未测评处理(引导卡照常显示), 不因画像路失败丢入口。
+     */
+    private fun loadAbility() {
+        viewModelScope.launch {
+            try {
+                val profile: AbilityProfile =
+                    abilityRepository.getProfile(DEFAULT_ABILITY_DAYS)
+                _state.update {
+                    it.copy(
+                        weakestDimension = profile.weakestDimension(),
+                        assessed = profile.isAssessed
+                    )
+                }
+            } catch (_: Exception) {
+                _state.update { it.copy(assessed = false, weakestDimension = null) }
             }
         }
     }

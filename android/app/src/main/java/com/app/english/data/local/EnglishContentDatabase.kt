@@ -61,6 +61,9 @@ interface ExpressionCacheDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putAll(entities: List<ExpressionCacheEntity>)
 
+    @Query("DELETE FROM expressions_cache WHERE id = :id")
+    suspend fun delete(id: String)
+
     @Query("DELETE FROM expressions_cache")
     suspend fun clear()
 }

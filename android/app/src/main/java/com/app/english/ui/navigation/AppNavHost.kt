@@ -27,14 +27,18 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.app.english.ui.about.AboutScreen
-import com.app.english.ui.components.ComingSoonScreen
+import com.app.english.ui.assessment.AssessmentIntroScreen
+import com.app.english.ui.assessment.AssessmentResultScreen
+import com.app.english.ui.assessment.AssessmentScreen
 import com.app.english.ui.courses.CourseHubScreen
 import com.app.english.ui.drill.MistakeDrillScreen
+import com.app.english.ui.expressions.ExpressionLibraryScreen
 import com.app.english.ui.freedialogue.FreeDialogueScreen
 import com.app.english.ui.history.HistoryDetailScreen
 import com.app.english.ui.history.HistoryListScreen
 import com.app.english.ui.home.HomeScreen
 import com.app.english.ui.lesson.LessonDetailScreen
+import com.app.english.ui.me.AbilityProfileScreen
 import com.app.english.ui.me.MeScreen
 import com.app.english.ui.player.PlayerScreen
 import com.app.english.ui.scenes.BriefingScreen
@@ -98,7 +102,7 @@ fun AppNavHost() {
             meTab(navController)
             lessonGraph(navController)
             sceneGraph(navController)
-            placeholderGraph(navController)
+            assessmentGraph(navController)
         }
     }
 }
@@ -169,7 +173,8 @@ private fun NavGraphBuilder.meTab(navController: NavHostController) {
             onHistoryClick = { navController.navigate(Route.History.route) },
             onSettingsClick = { navController.navigate(Route.Settings.route) },
             onAboutClick = { navController.navigate(Route.About.route) },
-            onAssessmentClick = { navController.navigate(Route.AssessmentIntro.route) }
+            onAssessmentClick = { navController.navigate(Route.AssessmentIntro.route) },
+            onProfileClick = { navController.navigate(Route.AbilityProfile.route) }
         )
     }
 }
@@ -245,6 +250,9 @@ private fun NavGraphBuilder.lessonGraph(navController: NavHostController) {
     }
     composable(Route.MistakeDrill.route) {
         MistakeDrillScreen(onBack = { navController.popBackStack() })
+    }
+    composable(Route.AbilityProfile.route) {
+        AbilityProfileScreen(onBack = { navController.popBackStack() })
     }
     composable(Route.Settings.route) {
         SettingsScreen(onAboutClick = { navController.navigate(Route.About.route) })
@@ -333,21 +341,35 @@ private fun NavGraphBuilder.sceneGraph(navController: NavHostController) {
     }
 }
 
-private fun NavGraphBuilder.placeholderGraph(navController: NavHostController) {
+/**
+ * P7 的测评链路与表达库(替换 P5 占位); 做题路由不带载荷, 判级结果经
+ * `AssessmentResultHolder` 单例交接。
+ */
+private fun NavGraphBuilder.assessmentGraph(navController: NavHostController) {
     composable(Route.AssessmentIntro.route) {
-        ComingSoonScreen(
-            title = "CEFR 能力测评",
-            detail = "5 分钟 7 道题, 定级 A1-C2 并给出发音 / 语法 / 词汇 / 流利度四维雷达。",
-            plannedPhase = "P7 测评与画像",
-            onBack = { navController.popBackStack() }
+        AssessmentIntroScreen(
+            onBack = { navController.popBackStack() },
+            onStart = { navController.navigate(Route.Assessment.route) }
+        )
+    }
+    composable(Route.Assessment.route) {
+        AssessmentScreen(
+            onBack = { navController.popBackStack() },
+            onFinished = {
+                navController.navigate(Route.AssessmentResult.route) {
+                    // 做题页与引导页都不必留在返回栈里。
+                    popUpTo(Route.AssessmentIntro.route) { inclusive = true }
+                }
+            }
+        )
+    }
+    composable(Route.AssessmentResult.route) {
+        AssessmentResultScreen(
+            onBack = { navController.popBackStack() },
+            onDone = { navController.navigateToTab(Route.Me.route) }
         )
     }
     composable(Route.ExpressionLibrary.route) {
-        ComingSoonScreen(
-            title = "表达库",
-            detail = "自由对话里被润色过的好句子会自动收在这里, 可以随时回放和删除。",
-            plannedPhase = "P7 表达库",
-            onBack = { navController.popBackStack() }
-        )
+        ExpressionLibraryScreen(onBack = { navController.popBackStack() })
     }
 }

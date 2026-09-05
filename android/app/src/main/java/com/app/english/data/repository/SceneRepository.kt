@@ -67,12 +67,16 @@ class SceneRepositoryImpl @Inject constructor(
 }
 
 /**
- * 「今日推荐」冷启动用的固定 curated 课 id(计划 §6.3: 冷启动给 curated 第 1 课)。
+ * 「今日推荐」(计划 §6.3, P7 起接真逻辑): 画像最低维 -> 场景 `skills` 匹配。
  *
- * P7 会把这里换成「画像最低维度 × 场景 skills」的匹配; 现在先按 id 命中, 命不中
- * (后端改了内容清单)就退回首门课, 不给空白卡片。
+ * 兜底链: 画像为空/没有最低维(stub、什么都没练)→ curated 第 1 课;
+ * 最低维没有任何场景带这个 skill → curated 第 1 课; 连 curated 都没有 → 全表
+ * 第一门。**冷启动永远有推荐, 但绝不假装知道你弱在哪。**
  */
-const val RECOMMENDED_SCENE_ID: String = "scene_workplace_project_update"
-
-fun List<SceneSummary>.pickRecommended(preferredId: String = RECOMMENDED_SCENE_ID): SceneSummary? =
-    firstOrNull { it.id == preferredId } ?: firstOrNull()
+fun List<SceneSummary>.pickTodayScene(weakestDimension: String?): SceneSummary? {
+    if (isEmpty()) return null
+    if (weakestDimension != null) {
+        firstOrNull { weakestDimension in it.skills }?.let { return it }
+    }
+    return firstOrNull { it.source == "curated" } ?: first()
+}

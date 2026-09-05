@@ -75,10 +75,14 @@ sealed class Route(val route: String) {
     data object MistakeDrill : Route("mistake_drill")
     data object Settings : Route("settings")
     data object About : Route("about")
+    data object AbilityProfile : Route("ability_profile")
 
-    // ---- 占位目的地(P5 建, P6/P7 填) ----
-    data object GenerateCourse : Route("generate_course")
+    // ---- CEFR 测评(P7: 引导 -> 做题 -> 结果) ----
     data object AssessmentIntro : Route("assessment_intro")
+    data object Assessment : Route("assessment")
+    data object AssessmentResult : Route("assessment_result")
+
+    data object GenerateCourse : Route("generate_course")
     data object ExpressionLibrary : Route("expressions")
 }
 
@@ -106,7 +110,10 @@ val allRoutes: List<Route> = listOf(
     Route.MistakeDrill,
     Route.Settings,
     Route.About,
+    Route.AbilityProfile,
     Route.GenerateCourse,
     Route.AssessmentIntro,
+    Route.Assessment,
+    Route.AssessmentResult,
     Route.ExpressionLibrary
 )

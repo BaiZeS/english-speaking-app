@@ -45,6 +45,7 @@ fun MeScreen(
     onSettingsClick: () -> Unit,
     onAboutClick: () -> Unit,
     onAssessmentClick: () -> Unit,
+    onProfileClick: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: MeViewModel = hiltViewModel()
 ) {
@@ -58,7 +59,14 @@ fun MeScreen(
             verticalArrangement = Arrangement.spacedBy(Spacings.s3)
         ) {
             SectionHeader(title = "我的", subtitle = "能力画像与练习足迹")
-            AbilityProfileCard(ability = state.ability, onAssessmentClick = onAssessmentClick)
+            AbilityProfileCard(
+                ability = state.ability,
+                cefrLevel = state.cefrLevel,
+                bandLocked = state.bandLocked,
+                assessed = state.assessed,
+                onAssessmentClick = onAssessmentClick,
+                onProfileClick = onProfileClick
+            )
             state.stats?.let { stats -> PracticeSummary(stats = stats) }
             val weakest = state.weakest
             if (weakest.isNotEmpty()) {
@@ -93,11 +101,18 @@ fun MeScreen(
 }
 
 /**
- * 能力画像卡: 雷达图只画有证据的维度, 缺的维度用一句话说明, 不拿总平均分凑一个
- * 假画像(计划 §四「画像更新算法」的证据门控思路)。
+ * 能力画像卡: 雷达接 `GET /ability` 的真画像(P7 起), CEFR 徽章读权威定级;
+ * 缺的维度用一句话说明, 不拿总平均分凑一个假画像。
  */
 @Composable
-private fun AbilityProfileCard(ability: AbilityAxes, onAssessmentClick: () -> Unit) {
+private fun AbilityProfileCard(
+    ability: AbilityAxes,
+    cefrLevel: String?,
+    bandLocked: Boolean,
+    assessed: Boolean,
+    onAssessmentClick: () -> Unit,
+    onProfileClick: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(Spacings.s3),
@@ -113,8 +128,14 @@ private fun AbilityProfileCard(ability: AbilityAxes, onAssessmentClick: () -> Un
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                // TODO(P7): CEFR 徽章读 GET /ability 的 cefr_level; 现在还没有定级数据。
-                LevelPill("未测评")
+                LevelPill(cefrLevel ?: "未测评")
+            }
+            if (bandLocked) {
+                Text(
+                    text = "已按测评锁带: 四维等级最多 ±1 档浮动",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
             }
             RadarChart(
                 values = ability.radarValues(),
@@ -130,9 +151,14 @@ private fun AbilityProfileCard(ability: AbilityAxes, onAssessmentClick: () -> Un
                         " 还没有数据, 完成一次测评即可补全画像。"
                 )
             }
-            if (!ability.isComplete) {
-                TextButton(onClick = onAssessmentClick) {
-                    Text("去测评, 解锁完整四维画像")
+            Row {
+                if (!assessed) {
+                    TextButton(onClick = onAssessmentClick) {
+                        Text("去测评, 解锁完整四维画像")
+                    }
+                }
+                TextButton(onClick = onProfileClick) {
+                    Text("查看完整画像")
                 }
             }
         }

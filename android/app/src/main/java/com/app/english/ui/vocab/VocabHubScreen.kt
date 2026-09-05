@@ -26,8 +26,9 @@ import com.app.english.ui.theme.Spacings
 /**
  * 词汇 Tab(计划 §6.3 Tab 3): 个人表达库 + 弱词训练两个入口。
  *
- * 表达库的数据源 `GET /expressions` 在 P4(后端)/ P7(Android)落地, 现在点进去是
- * 占位页; 弱词训练是 v1 的 [com.app.english.ui.drill.MistakeDrillScreen] 原样平移。
+ * 表达库入口(P7 真实化)的条数读 `GET /expressions`(Room 快照先行 + 网络校正),
+ * 点进 [com.app.english.ui.expressions.ExpressionLibraryScreen]; 弱词训练是 v1 的
+ * [com.app.english.ui.drill.MistakeDrillScreen] 原样平移。
  */
 @Composable
 fun VocabHubScreen(

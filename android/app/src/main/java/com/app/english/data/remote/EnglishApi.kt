@@ -150,6 +150,44 @@ interface EnglishApi {
         @Body request: MissionTurnRequestDto
     ): FinishMissionResponseDto
 
+    // ====== CEFR 测评(计划 §5.3, P7 消费) ======
+
+    /** 题库摘要(题目本体 + 建议用时; 参考要点永不下发)。 */
+    @GET("assessment")
+    suspend fun getAssessmentBank(): AssessmentBankDto
+
+    @POST("assessment/start")
+    suspend fun startAssessment(
+        @Body request: AssessmentStartRequestDto
+    ): AssessmentStartResponseDto
+
+    /** 音频转写不出(讯飞未配)时后端 400 TRANSCRIPT_UNAVAILABLE —— 引导改文本。 */
+    @POST("assessment/{attemptId}/answer")
+    suspend fun submitAssessmentAnswer(
+        @Path("attemptId") attemptId: String,
+        @Body request: AssessmentAnswerRequestDto
+    ): AssessmentAnswerResponseDto
+
+    /** 一次批量 LLM 判级; 幂等(已完成重放同形状)。 */
+    @POST("assessment/{attemptId}/complete")
+    suspend fun completeAssessment(
+        @Path("attemptId") attemptId: String,
+        @Body request: AssessmentCompleteRequestDto
+    ): AssessmentCompleteResponseDto
+
+    // ====== 能力画像(§5.6; days 只接受 7/30/90) ======
+
+    @GET("ability")
+    suspend fun getAbility(
+        @Query("device_id") deviceId: String,
+        @Query("days") days: Int = 30
+    ): AbilityResponseDto
+
+    // ====== 独立润色(§5.7) ======
+
+    @POST("polish")
+    suspend fun polishText(@Body request: PolishRequestDto): PolishResponseDto
+
     // ====== 个人表达库(§5.7) ======
 
     @GET("expressions")

@@ -1,5 +1,6 @@
 package com.app.english.ui.me
 
+import com.app.english.domain.model.AbilityProfile
 import com.app.english.domain.model.PracticeStats
 import com.app.english.ui.components.toRadarValue
 
@@ -48,10 +49,24 @@ data class AbilityAxes(
         val EMPTY = AbilityAxes()
 
         /**
-         * P5 的临时画像源: 把练习聚合分映射到能映射的维度。
+         * P7 起的真画像源: `GET /ability` 的 EWMA 四维快照(§5.6)。
+         * profile 为 null(接口挂了)时退回 [EMPTY], 由调用方决定是否再回落 [fromStats]。
+         */
+        fun fromProfile(profile: AbilityProfile?): AbilityAxes {
+            if (profile == null) return EMPTY
+            return AbilityAxes(
+                pronunciation = profile.pronunciation,
+                grammar = profile.grammar,
+                vocabulary = profile.vocabulary,
+                fluency = profile.fluency
+            )
+        }
+
+        /**
+         * P5 的临时画像源, 现在只作降级路径: `GET /ability` 没回或四维全空时,
+         * Me 页用 `GET /stats` 里两个 ISE 维度画一张「不完整」雷达兜底。
          *
-         * TODO(P7, 计划 §5.6/§6.4): 换成 `GET /ability?device_id=&days=` 返回的
-         *  EWMA 画像 + CEFR 定级, 届时 7/30/90 天轨迹与雷达共用同一份数据。
+         * P7 起的正源是 [fromProfile](计划 §5.6/§6.4: EWMA 画像 + CEFR + 轨迹)。
          */
         fun fromStats(stats: PracticeStats?): AbilityAxes {
             if (stats == null || !stats.hasData) return EMPTY

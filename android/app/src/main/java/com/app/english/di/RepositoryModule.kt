@@ -1,5 +1,9 @@
 package com.app.english.di
 
+import com.app.english.data.repository.AbilityRepository
+import com.app.english.data.repository.AbilityRepositoryImpl
+import com.app.english.data.repository.AssessmentRepository
+import com.app.english.data.repository.AssessmentRepositoryImpl
 import com.app.english.data.repository.BooksRepository
 import com.app.english.data.repository.BooksRepositoryImpl
 import com.app.english.data.repository.EnglishRepository
@@ -68,4 +72,12 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindExpressionRepository(impl: ExpressionRepositoryImpl): ExpressionRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAbilityRepository(impl: AbilityRepositoryImpl): AbilityRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAssessmentRepository(impl: AssessmentRepositoryImpl): AssessmentRepository
 }
