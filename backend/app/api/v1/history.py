@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, status
@@ -9,8 +10,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
-from app.models.db import History, User
+from app.core.errors import AppError
+from app.models.db import History, SceneCourseRow, User
 from app.models.schema import HistoryItem, HistoryWriteRequest
+from app.services import corpus_loader, scene_store
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -82,16 +85,63 @@ async def list_history(
         .order_by(History.created_at.desc())
         .limit(limit)
     )
-    rows = res.scalars().all()
-    return [_to_item(h) for h in rows]
+    rows = list(res.scalars().all())
+    titles = await _history_titles(db, user.id, rows)
+    return [_to_item(h, titles) for h in rows]
 
 
-def _to_item(h: History) -> HistoryItem:
+async def _history_titles(
+    db: AsyncSession, user_id: str, rows: Sequence[History]
+) -> dict[str, str]:
+    """``{course_id: 标题}`` —— 只为情景课行查标题 (§5.7: kind/label, 历史页显示
+    中文课名而不是裸 line_id)。
+
+    生成课在 ``scene_courses`` 表: 按 device 一次拉取后在 Python 里按 ``doc.id``
+    建索引 (每设备生成课量小, 且这比 JSON 路径查询更方言中立); curated 课在
+    data/scenes/*.json (走 scene_store 的 60s 文件缓存)。textbook 行不查 ——
+    它们的标题由客户端课本缓存负责, 这里保持读路径零额外 IO。
+    """
+    scene_ids = {h.audio_path for h in rows if h.book == scene_store.SCRIPT_BOOK}
+    if not scene_ids:
+        return {}
+    titles: dict[str, str] = {}
+    res = await db.execute(select(SceneCourseRow).where(SceneCourseRow.user_id == user_id))
+    for row in res.scalars().all():
+        doc = row.doc if isinstance(row.doc, dict) else {}
+        course_id = str(doc.get("id") or "")
+        title = str(doc.get("title") or "")
+        if course_id in scene_ids and title:
+            titles[course_id] = title
+    for scene_id in scene_ids - set(titles):
+        course = scene_store.get_course(scene_id)
+        if course is not None:
+            titles[scene_id] = course.title
+    return titles
+
+
+#: ``history.kind`` 的取值: 课本四模式 vs 情景课实战收工行 (P8 §5.7)。
+KIND_LESSON = "lesson"
+KIND_SCENE_COURSE = "scene_course"
+
+
+def resolve_history_kind(h: History) -> str:
+    return KIND_SCENE_COURSE if h.book == scene_store.SCRIPT_BOOK else KIND_LESSON
+
+
+def _to_item(h: History, titles: Mapping[str, str] | None = None) -> HistoryItem:
+    kind = resolve_history_kind(h)
+    if kind == KIND_SCENE_COURSE:
+        title = (titles or {}).get(h.audio_path) or "情景课"
+        label = f"{title} · 实战对话"
+    else:
+        label = h.line_id
     return HistoryItem(
         id=h.id,
         book=h.book,
         lesson_id=h.lesson_id,
         line_id=h.line_id,
+        kind=kind,
+        label=label,
         score_total=h.score_total,
         score_pronunciation=h.score_pronunciation,
         score_fluency=h.score_fluency,
@@ -118,6 +168,9 @@ class WeakestLesson(BaseModel):
     best_score: float
     avg_score: float
     attempts: int
+    #: P8 顺手修: 人读标签「新概念英语 第一册 · 第3课」(书元数据来自 /books 同源),
+    #: 情景课行则是课名。旧客户端继续读 book+lesson_id, 新客户端优先渲染 label。
+    label: str = ""
 
 
 class StatsResponse(BaseModel):
@@ -229,11 +282,12 @@ async def _compute_stats(db: AsyncSession, device_id: str) -> StatsResponse:
 def _weakest_lessons(rows: list[History], limit: int = 3) -> list[WeakestLesson]:
     """Group rows by (book, lesson), drop single-attempt flukes, pick lowest best_score.
 
-    lesson_id 是书内课号, 跨书会重复, 必须和 book 一起分组.
+    lesson_id 是书内课号, 跨书会重复, 必须和 book 一起分组 (复合去重键)。
     """
     by_lesson: dict[tuple[str, int], list[History]] = {}
     for r in rows:
         by_lesson.setdefault((r.book, r.lesson_id), []).append(r)
+    book_names = {b.id: b.display_name for b in corpus_loader.list_books()}
     scored: list[WeakestLesson] = []
     for (book, lesson_id), items in by_lesson.items():
         if len(items) < 2:
@@ -247,10 +301,28 @@ def _weakest_lessons(rows: list[History], limit: int = 3) -> list[WeakestLesson]
                 best_score=best,
                 avg_score=avg,
                 attempts=len(items),
+                label=_weakest_label(book, lesson_id, items[0].audio_path, book_names),
             )
         )
     scored.sort(key=lambda w: (w.best_score, -w.attempts))
     return scored[:limit]
+
+
+def _weakest_label(book: str, lesson_id: int, audio_path: str, names: Mapping[str, str]) -> str:
+    """复习卡的人读标题 (P8 顺手修: stats 不再 book-blind).
+
+    课本书行用 /books 同源元数据拼「商务英语口语 · 职场场景 · 第3课」;
+    情景课行 (book=="scenes") 用课名 (audio_path 存的就是 scene id)。
+    元数据缺失时诚实回退裸 id, UI 照常渲染, 不为此 500。
+    """
+    if book == scene_store.SCRIPT_BOOK:
+        try:
+            course = scene_store.get_course(audio_path) if audio_path else None
+        except AppError:
+            course = None
+        return f"{course.title} · 实战对话" if course else "情景实战课"
+    display = names.get(book, book)
+    return f"{display} · 第{lesson_id}课"
 
 
 @router.get("/stats", response_model=StatsResponse)

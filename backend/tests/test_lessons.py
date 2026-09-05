@@ -113,3 +113,20 @@ async def test_gapped_corpus_id_consistency(
         r = await c.get("/api/v1/lessons/2/roles?book=nce1")
         assert r.status_code == 404
         assert r.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_list_lessons_duration_is_deterministic_line_estimate(
+    fake_corpus_dir: Path,
+) -> None:
+    """P8 顺手修: duration_s 曾是写死的 0.0, 现在是 行数 x 3.5s 的确定性估算.
+
+    fake corpus 的第 1 课有 1 行 -> 3.5s; 且同一课两次请求返回一致
+    (估算不掺实时数据, 刷新不跳数)。
+    """
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r1 = await c.get("/api/v1/lessons", params={"book": "nce1"})
+        r2 = await c.get("/api/v1/lessons", params={"book": "nce1"})
+    body = r1.json()
+    assert body[0]["duration_s"] == pytest.approx(3.5)
+    assert body == r2.json()

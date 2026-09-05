@@ -11,7 +11,11 @@ from app.models import db as _db_models  # noqa: F401  (register tables)
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: alembic 默认会**关停**所有已存在的应用
+    # logger (fileConfig 的历史包袱)。同进程跑迁移 (tests/test_migrations_sqlite.py)
+    # 或 uvicorn 内嵌 upgrade 时, app.* 的 warning 会被静默吞掉 —— 曾以
+    # test_scene_store 日志断言在整链跑后必红的形式暴露。日志配置只增不杀。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 db_url = settings.database_url
 if db_url.startswith("sqlite+"):
     db_url = db_url.replace("sqlite+aiosqlite", "sqlite")

@@ -63,11 +63,19 @@ async def test_app_version_endpoint_returns_configured_values(
 async def test_app_version_force_update_false_when_min_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "app_latest_version", "1.0.0")
+    """P8 强更 bug 回归: env 未配置时 min_supported 不能等于 latest.
+
+    旧默认 (min = latest) 让所有旧包 (客户端判 current < min → 必弹且「稍后再说」
+    无效) 陷入不可跳过的更新弹窗, 与计划 §九.5 「OTA 对 1.4.0 正常提示且不强制」
+    矛盾。未配置 = 0.0.0 哨兵 (没有版本被判不支持), 弹窗回到可跳过的常规路径。
+    """
+    monkeypatch.setattr(settings, "app_latest_version", "2.0.0")
     monkeypatch.setattr(settings, "app_min_supported_version", "")
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.get("/api/v1/app/version")
-    assert r.json()["force_update"] is False
+    data = r.json()
+    assert data["force_update"] is False
+    assert data["min_supported_version"] == "0.0.0"
 
 
 @pytest.mark.asyncio

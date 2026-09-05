@@ -99,6 +99,11 @@ class HistoryItem(BaseModel):
     book: str = "nce1"
     lesson_id: int
     line_id: str
+    #: P8 §5.7: 行种类 — "lesson" (课本四模式) | "scene_course" (情景课实战收工).
+    #: add-only, 旧客户端不读不受影响.
+    kind: str = "lesson"
+    #: 人读标题: 情景课行为「课名 · 实战对话」, 课本行沿用 line_id.
+    label: str = ""
     score_total: float
     score_pronunciation: float
     score_fluency: float

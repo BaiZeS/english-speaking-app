@@ -20,6 +20,21 @@ from app.services import corpus_loader
 
 router = APIRouter(tags=["lessons"])
 
+#: 「约 X 分钟」估算口径 (P8 顺手修, 替代写死的 duration_s=0):
+#: 一句英文平均朗读时长 ≈ 3.5s (A2-B1 学习者跟读节奏, 含停顿; 样本: nce1 全 72 课
+#: 平均 ~14 行/课 -> ~49s/课, 与真实跟读用时同量级). 行数确定性可复现, 同一课
+#: 刷新不跳数 —— 故意**不**掺音频真实时长 (示范音还没配齐, 掺了反而漂移)。
+SECONDS_PER_LINE = 3.5
+
+
+def _estimated_duration_s(line_count: int) -> float:
+    """行数 x 3.5s 的确定性估时 (见 [SECONDS_PER_LINE] 的口径说明)."""
+    return round(line_count * SECONDS_PER_LINE, 1)
+
+
+def _line_count(lesson: corpus_loader.CorpusLesson) -> int:
+    return sum(len(role.lines) for role in lesson.roles)
+
 
 def _as_utc(dt: datetime) -> datetime:
     """Coerce a datetime to aware UTC.
@@ -43,7 +58,7 @@ async def list_lessons(book: str = Query(..., min_length=1)) -> list[LessonSumma
             lesson_no=r.lesson_no,
             title=r.title,
             role_count=len(r.roles),
-            duration_s=0.0,  # TODO: compute from audio
+            duration_s=_estimated_duration_s(_line_count(r)),
         )
         for r in rows
     ]

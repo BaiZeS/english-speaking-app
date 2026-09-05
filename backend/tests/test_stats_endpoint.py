@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import History
+from app.services import corpus_loader, scene_store
 
 
 async def _seed_history(
@@ -213,3 +214,66 @@ async def test_weakest_lessons_empty_for_new_device(
 ) -> None:
     r = await client.get("/api/v1/stats?device_id=fresh-user")
     assert r.json()["weakest_lessons"] == []
+
+
+@pytest.mark.asyncio
+async def test_weakest_lessons_carry_human_label(
+    db: AsyncSession,
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """P8 顺手修 (2b): weakest 行带上人读 label, 前端不再拿裸 book id 渲染.
+
+    - 课本书行: 「<display_name> · 第N课」, display_name 与 /books 同源
+      (book.json 缺失时诚实回退裸 book id, 这里用真 nce1 语料断言前缀非空)。
+    - 情景课行 (book=="scenes"): 用课名; curated 未命中 -> 「情景实战课」(不 500)。
+    - 跨书同课号 (nce1#4 vs nce2#4) 是**不同**组, 各自独立进榜。
+    """
+    # 隔离 scene_store: 空 scenes 目录, 让 scene 行走兜底分支且不受 data/ 真实内容影响。
+    (tmp_path / "scenes").mkdir()
+    monkeypatch.setattr(scene_store, "_CORPUS_ROOT", tmp_path)
+    scene_store.invalidate_cache()
+    try:
+
+        async def post(
+            device: str, book: str, lesson_id: int, audio_path: str, total: float
+        ) -> None:
+            r = await client.post(
+                "/api/v1/history",
+                json={
+                    "device_id": device,
+                    "book": book,
+                    "lesson_id": lesson_id,
+                    "line_id": "L",
+                    "audio_path": audio_path,
+                    "score_total": total,
+                    "score_pronunciation": total,
+                    "score_fluency": total,
+                    "score_completeness": total,
+                },
+            )
+            assert r.status_code == 201, r.text
+
+        dev = "weak-label-dev"
+        for total in (40.0, 60.0):
+            await post(dev, "nce1", 4, "p1", total)
+        for total in (50.0, 55.0):
+            await post(dev, "nce2", 4, "p2", total)
+        for total in (30.0, 35.0):
+            await post(dev, "scenes", 0, "scene_missing_xx", total)
+
+        r = await client.get(f"/api/v1/stats?device_id={dev}")
+        weakest = r.json()["weakest_lessons"]
+        by_key = {(w["book"], w["lesson_id"]): w for w in weakest}
+        assert ("nce1", 4) in by_key and ("nce2", 4) in by_key, (
+            f"book-blind 分组被合并: {list(by_key)}"
+        )
+        names = {b.id: b.display_name for b in corpus_loader.list_books()}
+        assert by_key[("nce1", 4)]["label"] == f"{names.get('nce1', 'nce1')} · 第4课"
+        assert by_key[("nce2", 4)]["label"] != by_key[("nce1", 4)]["label"]
+        scene_row = by_key[("scenes", 0)]
+        assert scene_row["label"] == "情景实战课"  # curated 未命中的诚实兜底
+        assert scene_row["best_score"] == 35.0
+    finally:
+        scene_store.invalidate_cache()
