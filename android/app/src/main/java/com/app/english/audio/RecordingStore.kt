@@ -40,12 +40,6 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
         return target
     }
 
-    /** The most recently saved recording for this line, if any. */
-    fun latestRecording(book: String, lessonId: Int, lineId: String): File? =
-        lineDir(book, lessonId)
-            .listFiles { file -> isRecordingOf(file, lineId) }
-            ?.maxByOrNull { it.lastModified() }
-
     private fun lineDir(book: String, lessonId: Int): File =
         File(File(File(context.filesDir, "recordings"), sanitize(book)), lessonId.toString())
 

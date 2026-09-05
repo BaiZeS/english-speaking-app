@@ -43,7 +43,7 @@
 ## 技术栈
 
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
-- **后端**：Python 3.11 + FastAPI + PostgreSQL 16 + Redis 7
+- **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
 - **AI 服务**：MiMo TTS（语音合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ OpenAI/阿里（备选 LLM）
 - **CI**：GitHub Actions（零环境开发，本机不装 Android SDK）
 
@@ -59,7 +59,7 @@ cd english-speaking-app
 详见 [`backend/README.md`](backend/README.md)。简要：
 ```bash
 cd backend
-docker compose up -d postgres          # 起 Postgres（Redis 需本机 6379）
+docker compose up -d postgres          # 起 Postgres（唯一外部依赖）
 uv sync --frozen --extra dev           # 装依赖（用锁定的 uv.lock）
 uv run alembic upgrade head            # 跑数据库迁移
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

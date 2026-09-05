@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import struct
 
 from loguru import logger
 from openai import OpenAI
@@ -41,29 +40,9 @@ def _audio_cache_path(text: str, voice: str) -> tuple[str, str]:
     return os.path.join(audio_dir, f"{h}.wav"), f"/static/tts/{h}.wav"
 
 
-def _pcm16_to_wav(pcm_data: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:
-    """Wrap raw PCM16 bytes in a WAV header."""
-    bits_per_sample = 16
-    byte_rate = sample_rate * channels * bits_per_sample // 8
-    block_align = channels * bits_per_sample // 8
-    data_size = len(pcm_data)
-    header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + data_size,
-        b"WAVE",
-        b"fmt ",
-        16,  # chunk size
-        1,  # PCM
-        channels,
-        sample_rate,
-        byte_rate,
-        block_align,
-        bits_per_sample,
-        b"data",
-        data_size,
-    )
-    return header + pcm_data
+# WAV 封装挪到 app.services.wav (stub 占位音频同源复用, 反向 import 会成环);
+# 保留 _pcm16_to_wav 别名: tests/test_mimo_tts.py 直接导入这个名字。
+from app.services.wav import pcm16_to_wav as _pcm16_to_wav  # noqa: E402
 
 
 class MimoTtsProvider:

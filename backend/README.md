@@ -7,16 +7,16 @@ FastAPI 后端，提供语料、TTS、ISE 语音评测、历史等 API。
 > MiMo TTS（语音合成）与讯飞 ISE（语音评测，逐词音素评分）已接入。配 `.env` 凭据即走真实服务；
 > 未配凭据时自动 fallback 到 stub，课程列表 / 录音评分 / 历史的完整闭环仍可跑通。
 
-### 1. 起依赖（Postgres + Redis）
+### 1. 起依赖（Postgres，唯一外部依赖）
 
 ```bash
 # Postgres（用项目自带的 docker-compose，凭据 english/english，库 english_dev）
 docker compose up -d postgres
-
-# Redis：需本机有 redis-server 监听 6379
-#   检查：redis-cli ping  ->  PONG
-#   没有则装一个：apt install redis-server && systemctl start redis
 ```
+
+> v2.0 起 Redis 依赖已移除（`tts_cache` 服务的 Redis 面从未接线到 API；
+> `tts_cache` 数据库表保留但不再读写，理由见 `AppDatabase` 同类"表壳冻结"注记与
+> v2.0 P8 报告）。
 
 ### 2. 安装依赖 + 跑数据库迁移
 
@@ -73,7 +73,7 @@ XUNFEI_API_SECRET=...
 ### 备选：Docker Compose 一键起全部
 
 ```bash
-docker compose up -d        # 起 postgres + redis + api 容器
+docker compose up -d        # 起 postgres + api 容器
 # API: http://localhost:8000   Docs: http://localhost:8000/docs
 ```
 

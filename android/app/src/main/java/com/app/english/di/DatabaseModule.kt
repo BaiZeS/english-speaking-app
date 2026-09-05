@@ -6,7 +6,6 @@ import com.app.english.data.local.AppDatabase
 import com.app.english.data.local.CourseCacheDao
 import com.app.english.data.local.EnglishContentDatabase
 import com.app.english.data.local.ExpressionCacheDao
-import com.app.english.data.local.HistoryCacheDao
 import com.app.english.data.local.MistakeWordDao
 import dagger.Module
 import dagger.Provides
@@ -40,9 +39,6 @@ object DatabaseModule {
         EnglishContentDatabase::class.java,
         "english_content.db"
     ).fallbackToDestructiveMigration().build()
-
-    @Provides
-    fun provideHistoryCacheDao(db: AppDatabase): HistoryCacheDao = db.historyCacheDao()
 
     @Provides
     fun provideMistakeWordDao(db: AppDatabase): MistakeWordDao = db.mistakeWordDao()

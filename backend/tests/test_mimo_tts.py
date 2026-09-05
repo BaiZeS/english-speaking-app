@@ -120,7 +120,8 @@ async def test_synthesize_fallback_when_no_key(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(mimo_tts.settings, "mimo_api_key", "")
 
     result = await MimoTtsProvider().synthesize("Hello", "Mia")
-    assert result.audio_bytes.startswith(b"STUB_TTS::")
+    # P8: 无 key 降级给的必须是可解码的 (静音) WAV, 不再是假 blob。
+    assert result.audio_bytes.startswith(b"RIFF")
     assert result.source == "stub"
 
 

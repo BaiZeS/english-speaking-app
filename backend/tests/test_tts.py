@@ -23,7 +23,7 @@ async def test_tts_returns_audio_url_and_duration() -> None:
         r = await c.get("/api/v1/tts", params={"text": "Hello", "voice": "Mia"})
     assert r.status_code == 200
     data = r.json()
-    assert data["audio_url"].endswith(".m4a")
+    assert data["audio_url"].endswith(".wav")
     assert data["duration_ms"] > 0
     assert data["source"] == "stub"
 

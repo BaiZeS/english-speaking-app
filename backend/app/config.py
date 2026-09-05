@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+asyncpg://english:english@localhost:5432/english_dev"
     )
-    redis_url: str = Field(default="redis://localhost:6379/0")
 
     # ====== 讯飞 ISE (语音评测, 保留) ======
     xunfei_app_id: str = Field(default="")
@@ -81,9 +80,6 @@ class Settings(BaseSettings):
     app_github_asset_name: str = Field(default="app-debug.apk")
     # 当一个 release 带多个 .apk asset 时, 按这个 glob 优先匹配.
     app_github_asset_glob: str = Field(default="EnglishAssistant-*.apk")
-
-    # ====== TTS 缓存 ======
-    tts_cache_ttl: int = Field(default=86400)
 
 
 @lru_cache
