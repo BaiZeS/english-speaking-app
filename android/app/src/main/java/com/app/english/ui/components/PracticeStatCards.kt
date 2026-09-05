@@ -329,7 +329,8 @@ fun ReviewSuggestionsCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = item.book + " L" + item.lessonId.toString(),
+                        // P8·2b: 优先服务端人读标题 (跨书不再裸 book id), 旧后端回退原样。
+                        text = item.label.ifBlank { item.book + " L" + item.lessonId.toString() },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )

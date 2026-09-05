@@ -4,6 +4,7 @@ import android.content.Context
 import com.app.english.BuildConfig
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.repository.EnglishRepository
+import com.app.english.domain.model.AppVersion
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,22 +38,12 @@ class AppUpdateManager @Inject constructor(
     suspend fun checkForUpdate(force: Boolean = false): UpdateCheckState {
         val current = currentVersion
         return try {
-            val remote = repository.getAppVersion()
-            val latest = remote.latestVersion
-            if (SemVer.isOlder(current, remote.minSupportedVersion)) {
-                // The server marked the running build as unsupported: always
-                // prompt, even if the user previously dismissed this version.
-                UpdateCheckState.UpdateAvailable(UpdateInfo.fromDomain(current, remote))
-            } else if (SemVer.isNewer(latest, current)) {
-                val dismissed = settingsStore.getDismissedUpdateVersion()
-                if (!force && dismissed == latest) {
-                    UpdateCheckState.UpToDate(current)
-                } else {
-                    UpdateCheckState.UpdateAvailable(UpdateInfo.fromDomain(current, remote))
-                }
-            } else {
-                UpdateCheckState.UpToDate(current)
-            }
+            decideUpdate(
+                current = current,
+                remote = repository.getAppVersion(),
+                dismissedVersion = settingsStore.getDismissedUpdateVersion(),
+                force = force
+            )
         } catch (e: Exception) {
             Timber.w(e, "Update check failed")
             UpdateCheckState.Failed(e.message ?: "无法连接到更新服务")
@@ -62,4 +53,26 @@ class AppUpdateManager @Inject constructor(
     fun markVersionDismissed(version: String) {
         settingsStore.setDismissedUpdateVersion(version)
     }
+}
+
+/**
+ * 更新检查的纯判定核 (P8·2e: 从 [checkForUpdate] 里剥出来, JVM 可测)。
+ *
+ * 语义与 v2.0 服务端约定锁死: 未显式配置 APP_MIN_SUPPORTED_VERSION 时,
+ * 后端回发 ``min_supported_version = "0.0.0"`` 哨兵 + force_update=false ——
+ * 任何真实版本都不会落进「不支持」分支, 「稍后再说」(dismissed) 保持有效;
+ * 只有运维显式收紧 min 且 current 低于它, 才无视 dismissed 必弹。
+ */
+internal fun decideUpdate(
+    current: String,
+    remote: AppVersion,
+    dismissedVersion: String?,
+    force: Boolean
+): UpdateCheckState = when {
+    SemVer.isOlder(current, remote.minSupportedVersion) ->
+        UpdateCheckState.UpdateAvailable(UpdateInfo.fromDomain(current, remote))
+    SemVer.isNewer(remote.latestVersion, current) &&
+        (force || dismissedVersion != remote.latestVersion) ->
+        UpdateCheckState.UpdateAvailable(UpdateInfo.fromDomain(current, remote))
+    else -> UpdateCheckState.UpToDate(current)
 }

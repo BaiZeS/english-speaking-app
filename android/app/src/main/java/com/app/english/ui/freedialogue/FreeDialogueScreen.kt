@@ -184,7 +184,8 @@ private fun FreeDialogueContent(
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Text(
-                    state.suggestedReply,
+                    // P8·2c: 没有参考回答也照常能录 —— 这里只是渲染层兜底文案。
+                    state.suggestedReply.ifBlank { "（本轮没有参考回答，直接开口说就好）" },
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(top = 8.dp)
                 )
@@ -271,7 +272,13 @@ private fun MessageBubble(message: FreeDialogueMessage) {
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                message.text,
+                // P8·2d: 占位提示只活在这里 (渲染层)。协议层的 text 保持
+                // 诚实空串, 历史回传模型时被识别失败的回合就是空。
+                if (message.isUser && !message.hasTranscript) {
+                    "（这句没有识别到文字）"
+                } else {
+                    message.text
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.padding(top = 4.dp)
             )

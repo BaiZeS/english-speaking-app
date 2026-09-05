@@ -159,7 +159,8 @@ private fun HistoryRow(item: HistoryItem, onClick: () -> Unit) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Lesson ${item.lessonId} · ${item.lineId}",
+                        // P8·2f (§5.7): 情景课行显示中文课名; 无 label (旧后端) 回退旧版。
+                        text = item.label.ifBlank { "Lesson ${item.lessonId} · ${item.lineId}" },
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(

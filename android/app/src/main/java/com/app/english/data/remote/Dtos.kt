@@ -164,6 +164,10 @@ data class HistoryItemDto(
     @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
     @SerialName("line_id") val lineId: String,
+    // P8·2f (§5.7): "lesson" | "scene_course"; 旧后端没有这两个键 -> 默认值兜底。
+    val kind: String = "lesson",
+    // 人读标题: 情景课行 = 「课名 · 实战对话」, 课本行 = line_id。空 = 后端未升级。
+    val label: String = "",
     @SerialName("score_total") val scoreTotal: Double,
     @SerialName("score_pronunciation") val scorePronunciation: Double,
     @SerialName("score_fluency") val scoreFluency: Double,
@@ -234,6 +238,8 @@ data class LessonProgressDto(
 data class WeakestLessonDto(
     @SerialName("book") val book: String = "nce1",
     @SerialName("lesson_id") val lessonId: Int,
+    // P8·2b: 服务端给的人读标题 (「书名 · 第N课」/「课名 · 实战对话」), 可选键。
+    val label: String = "",
     @SerialName("best_score") val bestScore: Double,
     @SerialName("avg_score") val avgScore: Double,
     val attempts: Int

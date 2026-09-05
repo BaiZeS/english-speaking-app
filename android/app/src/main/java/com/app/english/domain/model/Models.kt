@@ -50,6 +50,10 @@ data class HistoryItem(
     val book: String = "nce1",
     val lessonId: Int,
     val lineId: String,
+    // P8·2f: "lesson" | "scene_course" (旧后端默认 lesson)。
+    val kind: String = "lesson",
+    // 人读标题; 空串表示后端未升级, 渲染层回退旧版 "Lesson N · lineId"。
+    val label: String = "",
     val scoreTotal: Double,
     val scorePronunciation: Double,
     val scoreFluency: Double,
@@ -144,6 +148,8 @@ data class LessonProgress(
 data class WeakestLesson(
     val book: String = "nce1",
     val lessonId: Int,
+    // P8·2b: 服务端人读标题 (book|lesson 不再裸 id); 空 = 回退裸 id 渲染。
+    val label: String = "",
     val bestScore: Double,
     val avgScore: Double,
     val attempts: Int

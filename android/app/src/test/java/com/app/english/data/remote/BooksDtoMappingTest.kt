@@ -172,6 +172,31 @@ class BooksDtoMappingTest {
     }
 
     @Test
+    fun weakestLessonDto_decodesLabel_and_propagatesThroughMapper() {
+        // P8·2b: 新增可选 label; 旧后端不带该键时回退空串 (渲染层继续旧版裸 id)。
+        val withLabel = """
+            {
+              "book":"nce1","lesson_id":4,"label":"新概念英语 第一册 · 第4课",
+              "best_score":40.0,"avg_score":50.0,"attempts":2
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(WeakestLessonDto.serializer(), withLabel)
+        assertEquals("新概念英语 第一册 · 第4课", dto.label)
+        val weak = dto.toDomain()
+        assertEquals("新概念英语 第一册 · 第4课", weak.label)
+        assertEquals("nce1", weak.book)
+        assertEquals(4, weak.lessonId)
+
+        val legacy = """
+            {"book":"nce1","lesson_id":4,"best_score":40.0,"avg_score":50.0,"attempts":2}
+        """.trimIndent()
+        assertEquals(
+            "",
+            json.decodeFromString(WeakestLessonDto.serializer(), legacy).toDomain().label
+        )
+    }
+
+    @Test
     fun statsResponse_weakestLessonsDefaultsToEmpty() {
         // Older backend without the field should not crash; default to empty list.
         val payload = """

@@ -66,6 +66,8 @@ fun HistoryItemDto.toDomain(): HistoryItem = HistoryItem(
     book = book,
     lessonId = lessonId,
     lineId = lineId,
+    kind = kind,
+    label = label,
     scoreTotal = scoreTotal,
     scorePronunciation = scorePronunciation,
     scoreFluency = scoreFluency,
@@ -167,6 +169,7 @@ fun WeakestLessonDto.toDomain(): com.app.english.domain.model.WeakestLesson =
     com.app.english.domain.model.WeakestLesson(
         book = book,
         lessonId = lessonId,
+        label = label,
         bestScore = bestScore,
         avgScore = avgScore,
         attempts = attempts

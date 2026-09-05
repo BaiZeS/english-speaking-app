@@ -99,6 +99,32 @@ class DtoSerializationTest {
     }
 
     @Test
+    fun historyItem_decodesKindAndLabel_withBackwardDefaults() {
+        // P8·2f: 服务端 add-only 新字段; 旧 payload 必须落在安全默认值上。
+        val modern = """
+            {"id":"h2","book":"scenes","lesson_id":0,"line_id":"s1-a",
+             "kind":"scene_course","label":"点一杯拿铁 · 实战对话",
+             "score_total":80.0,"score_pronunciation":80.0,"score_fluency":80.0,
+             "score_completeness":80.0,"created_at":"2026-07-12T10:00:00"}
+        """.trimIndent()
+        val dto = json.decodeFromString(HistoryItemDto.serializer(), modern)
+        assertEquals("scene_course", dto.kind)
+        assertEquals("点一杯拿铁 · 实战对话", dto.label)
+        val domain = dto.toDomain()
+        assertEquals("scene_course", domain.kind)
+        assertEquals("点一杯拿铁 · 实战对话", domain.label)
+
+        val legacy = """
+            {"id":"h1","lesson_id":1,"line_id":"L1","score_total":80.0,
+             "score_pronunciation":80.0,"score_fluency":80.0,"score_completeness":80.0,
+             "created_at":"2026-07-12T10:00:00"}
+        """.trimIndent()
+        val legacyItem = json.decodeFromString(HistoryItemDto.serializer(), legacy).toDomain()
+        assertEquals("lesson", legacyItem.kind)
+        assertEquals("", legacyItem.label)
+    }
+
+    @Test
     fun historyWriteRequest_serializesAllFields() {
         val request = HistoryWriteRequestDto(
             deviceId = "dev-1",

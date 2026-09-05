@@ -33,7 +33,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
 
-data class FreeDialogueMessage(val role: String, val text: String, val isUser: Boolean)
+/**
+ * 聊天气泡模型。
+ *
+ * [text] 存**协议值** (用户回合 = 识别原文, 识别不到则为空串), 与发给
+ * /dialogue/turn 的 history 逐字一致 —— 中文占位提示只发生在渲染层
+ * ([FreeDialogueScreen] 按 [hasTranscript] 兜底显示), 不再回流给模型 (P8·2d)。
+ */
+data class FreeDialogueMessage(
+    val role: String,
+    val text: String,
+    val isUser: Boolean,
+    /** false = 用户回合没有识别到任何 transcript (text 为空)。 */
+    val hasTranscript: Boolean = true
+)
 
 data class FreeDialogueScore(val suggestedReply: String, val result: ScoreResult)
 
@@ -191,7 +204,9 @@ class FreeDialogueViewModel @Inject constructor(
 
     fun stopAndSubmit() {
         val current = _state.value
-        if (!current.isRecording || current.suggestedReply.isBlank()) return
+        // P8·2c: 只有「正在录音」才是提交前提。参考回答为空不再拦截 ——
+        // 评分 ref 走 scoringRefText() 的兜底 (最后一条 assistant 台词)。
+        if (!current.isRecording) return
         viewModelScope.launch {
             _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
@@ -204,36 +219,34 @@ class FreeDialogueViewModel @Inject constructor(
             try {
                 val base64 = withContext(Dispatchers.IO) { audioEncoder.encode(file) }
                 if (saved != null) file.delete()
+                val refText = scoringRefText(current)
                 val result = repository.score(
                     lessonId = lessonId,
                     lineId = lineId,
-                    refText = current.suggestedReply,
+                    refText = refText,
                     audioBase64 = base64,
                     mode = "free_dialogue"
                 )
                 collectMistakeWords(lineId, result)
-                val history = current.messages.map {
-                    DialogueMessageDto(
-                        role = if (it.isUser) "user" else "assistant",
-                        text = it.text
-                    )
-                } + DialogueMessageDto(role = "user", text = "")
+                val history =
+                    turnHistory(current.messages) + DialogueMessageDto(role = "user", text = "")
                 val next = repository.dialogueTurn(
                     current.sceneId,
                     history,
                     base64,
                     settingsStore.getSelectedModelId()
                 )
+                val recognized = next.recognizedText.orEmpty()
                 _state.update {
                     it.copy(
                         isSubmitting = false,
                         currentScore = result,
-                        scores = it.scores + FreeDialogueScore(current.suggestedReply, result),
+                        scores = it.scores + FreeDialogueScore(refText, result),
                         messages = it.messages + FreeDialogueMessage(
                             role = "user",
-                            text = next.recognizedText?.takeIf { it.isNotBlank() }
-                                ?: "（这句没有识别到文字）",
-                            isUser = true
+                            text = recognized,
+                            isUser = true,
+                            hasTranscript = recognized.isNotBlank()
                         ) + FreeDialogueMessage(
                             role = "assistant",
                             text = next.replyText,
@@ -329,3 +342,22 @@ class FreeDialogueViewModel @Inject constructor(
         const val FALLBACK_SCENE = "daily_conversation"
     }
 }
+
+/**
+ * P8·2c: 本轮评分的参考句。suggestedReply 有值就用它; 为空 (模型没给建议 /
+ * 生成回包缺字段) 时兜底最后一条 assistant 台词 —— 用户照样可以录音提交,
+ * 不再被空建议卡死。两者皆空时返回空串, 由 /score 422 诚实报错。
+ */
+internal fun scoringRefText(state: FreeDialogueUiState): String =
+    state.suggestedReply.ifBlank { state.messages.lastOrNull { !it.isUser }?.text.orEmpty() }
+
+/**
+ * P8·2d: /dialogue/turn 的历史构造。用户回合只会带**识别原文或空串**
+ * (text 即协议值, 见 [FreeDialogueMessage] 注释), UI 的中文占位提示永不
+ * 回流进模型上下文 —— 服务端 P3 起按结构 (末尾 user 回合) 判断, 老包的
+ * 「（本轮自由回答）」占位由后端兼容层处理, 新客户端不再生产任何中文哨兵。
+ */
+internal fun turnHistory(messages: List<FreeDialogueMessage>): List<DialogueMessageDto> =
+    messages.map {
+        DialogueMessageDto(role = if (it.isUser) "user" else "assistant", text = it.text)
+    }
