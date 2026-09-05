@@ -74,7 +74,7 @@ private fun AppInfoCard() {
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
             Text(
-                text = "情境化英语口语练习 · 跟读 + 对话 + AI 自由交流",
+                text = "情境化英语口语练习 · 课本跟读 + 情景实战 + AI 测评画像",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.padding(top = 6.dp)
@@ -91,11 +91,15 @@ private fun FeatureHighlights() {
                 text = "核心功能",
                 style = MaterialTheme.typography.titleMedium
             )
-            BulletPoint("三模式练习：跟读 / 角色对话 / 自由对话")
-            BulletPoint("真实讯飞 ISE 语音评测，逐词音素 + 总分")
-            BulletPoint("AI 自由对话可选百炼 Qwen / DeepSeek 等模型")
-            BulletPoint("Dashboard 统计：总练习量、平均分、连续天数、近 14 天趋势")
-            BulletPoint("App 自动更新：tag 即发版，客户端无需手动下载")
+            BulletPoint("课本四模式：跟读 / 角色对话 / 影子跟读 / 自由对话，多本书隔离")
+            BulletPoint("情景实战课：打基础四题型 → 任务制实战对话 → 通关复盘报告（总分 + 4 维 + 能力增量）")
+            BulletPoint("AI 定制课生成：一句话需求（如「下周英文项目汇报」）生成可玩情景课")
+            BulletPoint("CEFR 能力测评：约 5 分钟出 A1-C2 定级 + 四维雷达")
+            BulletPoint("能力画像与轨迹：四维雷达 + 近 7/30/90 天曲线（未配置的占位分数不掺进画像）")
+            BulletPoint("表达库 + 句子润色：润色金句收藏复习，任意句子「原句 vs 更地道说法」对照")
+            BulletPoint("真实讯飞 ISE 逐词音素评分 + 弱词专项训练（<70 分自动入本，≥85 分毕业）")
+            BulletPoint("练习统计：总练习量、平均分、连续天数、近 14 天趋势、弱课复习建议")
+            BulletPoint("OTA 自动更新：GitHub Releases 发布，旧版本正常提示、可稍后再说，不强制")
         }
     }
 }

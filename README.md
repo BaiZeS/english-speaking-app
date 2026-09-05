@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.0.0**（见 [CHANGELOG.md](CHANGELOG.md)）。
 
 ## 项目状态
 
@@ -26,6 +26,9 @@
 | 自由对话真实转写 | ✅ 讯飞 IAT 听写接入 `/dialogue/turn`：识别用户实际说的话，替换占位符并喂给 LLM（无凭据自动回退占位行为） |
 | 弱词专项训练 | ✅ 评分 <70 词自动入弱词本（Room），训练页：示范→跟读单词（ISE read_word）→≥85 毕业 |
 | 评分语速修复 | ✅ 语速按真实音频时长计算（原固定 4s 窗口）；/score 支持 category=read_word |
+| **v2.0 后端（P1–P4）** | ✅ 情景课内容层（8 门人工剧本 + 文件缓存读路径）、会话状态机（崩溃可恢复）、打基础四题型评分、任务制实战 + 单次 LLM 复盘报告、两级 AI 生成课（jobs 轮询）、CEFR 测评、EWMA 能力画像（stub 证据门控）、/polish、/expressions、/courses/progress |
+| **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
+| **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
 
 ## 仓库结构
 
@@ -65,10 +68,17 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 > MiMo TTS + 讯飞 ISE 已接入：配 `.env` 凭据后走真实合成 + 逐词评分；未配则自动 fallback 到 stub，仍可跑通跟读闭环。
 
 ### 3. Android 客户端
-APK 由 GitHub Actions 自动构建（最新绿色 run 见 Actions 页），下载路径：
-> Actions → 选择 workflow run → Artifacts → `app-debug`
 
-也可直接用仓库内本地副本 `apk/app-debug.apk`（gitignored，需手动同步到最新 run）。
+发布通道（诚实版，v2.0.0 起）：
+
+- **正式 OTA**：在 GitHub 上发 **Release**（tag `v2.0.0`，挂 APK asset）后，
+  旧客户端打开 App 即可经 `/app/version` 检测到新版本并应用内下载安装；
+  提示可「稍后再说」，**不强制**（仅当服务端显式配置 `APP_MIN_SUPPORTED_VERSION`
+  才会进入不可跳过分支）。
+- **调试包**：Actions → 最新绿色 `Android CI` run → Artifacts → `app-debug`
+  （仅 debug 签名，过期 90 天，别当分发渠道）。
+- 仓库里的 `apk/` 目录只是本机临时副本位（`*.apk` 已 gitignore、**无提交内容**），
+  不是下载入口。
 
 装机后：**模拟器**保持默认后端 URL `http://10.0.2.2:8000/api/v1/`；**真机**进 App「设置」页改成 `http://<电脑局域网IP>:8000/api/v1/`（支持运行时改，无需重新打包）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分。
 
