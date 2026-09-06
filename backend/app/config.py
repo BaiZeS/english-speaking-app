@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     mimo_tts_voices: str = Field(default="Mia,Chloe,Milo,Dean")
     # 合成音频文件的存放目录, 挂载到 /static
     tts_audio_dir: str = Field(default="static/tts")
+    # 自托管 APK 发布目录, 挂载到 /static/apk。服务器到 GitHub release-assets
+    # 实测仅 ~10-40KB/s (国际出口), 手机走 GitHub 下 21MB OTA 不可用; 配合
+    # APP_APK_URL/APP_LATEST_VERSION env (resolver 优先级 1) 让 OTA 走服务器
+    # 自己的高速公网直链。发布动作见 scripts/publish_apk.sh。
+    apk_dir: str = Field(default="static/apk")
 
     # ====== OpenAI / 阿里 (备选) ======
     openai_api_key: str = Field(default="")
