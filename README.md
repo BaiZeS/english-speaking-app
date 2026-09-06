@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.0.0**（见 [CHANGELOG.md](CHANGELOG.md)）。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.1.0**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
 
 ## 项目状态
 
@@ -29,6 +29,7 @@
 | **v2.0 后端（P1–P4）** | ✅ 情景课内容层（8 门人工剧本 + 文件缓存读路径）、会话状态机（崩溃可恢复）、打基础四题型评分、任务制实战 + 单次 LLM 复盘报告、两级 AI 生成课（jobs 轮询）、CEFR 测评、EWMA 能力画像（stub 证据门控）、/polish、/expressions、/courses/progress |
 | **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
 | **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
+| **v2.1.0 生产中继（OTA 通道）** | ✅ release 包内置地址切 `:5173`（versionCode 8）；`/static/apk` 自托管分发 + `publish_apk.sh` 一条命令完成发版收尾（GitHub 出口仅 ~10-40KB/s，自托管走服务器出口）；`:8000` 桥退役；运维护栏脚本 + 双实例日志 + 冒烟命令全套（docs/operations.md）|
 
 ## 仓库结构
 
@@ -44,8 +45,8 @@
 
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
-- **AI 服务**：MiMo TTS（语音合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ OpenAI/阿里（备选 LLM）
-- **CI**：GitHub Actions（零环境开发，本机不装 Android SDK）
+- **AI 服务**：MiMo TTS（语音合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-max`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
+- **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
 
 ## 快速开始
 
@@ -91,8 +92,13 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - 仓库里的 `apk/` 目录只是本机临时副本位（`*.apk` 已 gitignore、**无提交内容**），
   不是下载入口。
 
-装机后：**模拟器**保持默认后端 URL `http://10.0.2.2:8000/api/v1/`；**真机**进 App「设置」页改成 `http://<电脑局域网IP>:8000/api/v1/`（支持运行时改，无需重新打包）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分。
+装机后：**开发机自测**用 debug 包（内置 `http://10.0.2.2:8000/api/v1/`，模拟器）或真机「设置」页改成开发机局域网 IP；**生产设备**装 release 包（v2.1.0 起内置 `http://118.89.58.84:5173/api/v1/`，开箱即用）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分（未配凭据时返回带 `source=stub` 的占位分并在界面警示）。
 
 ## 文档
 
-- [设计文档](docs/superpowers/specs/2026-07-11-english-speaking-app-design.md)
+- [**用户使用指南**（领导向：测评→日常练习循环→生成课→表达库）](docs/usage-guide.md)
+- [**运维与发版 SOP**（部署拓扑 / deploy 脚本 / tag+publish 流程 / 密钥启用 / 冒烟命令）](docs/operations.md)
+- [CHANGELOG](CHANGELOG.md) · [后端 README](backend/README.md) · [Android README](android/README.md)
+- [设计文档（2026-07-11 历史稿，文末附 v2.1.0 实现增补）](docs/superpowers/specs/2026-07-11-english-speaking-app-design.md)
+- [L1 MVP 实施计划（已归档）](docs/superpowers/plans/2026-07-11-backend-l1-mvp.md) · [MiMo-TTS 迁移交付报告](docs/compose/spec/mimo-tts-migration.md)
+- v2.0 大版本计划与九阶段执行纪要：`.mimocode/plans/1788164431817-eager-cactus.md` + `.mimocode/tasks/`（本仓开发过程中的计划/报告留档，gitignored，不随仓库分发）

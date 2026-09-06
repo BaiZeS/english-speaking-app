@@ -109,3 +109,9 @@ Additional MiMo English voices available: `Milo` (male), `Dean` (male).
 - [x] T7: Update test_tts.py for MiMo provider — acceptance: endpoint tests pass (covers: S2)
 - [x] T8: Update Android default voice and About screen — acceptance: Mia is default, About says MiMo TTS (covers: S2)
 - [x] T9: Update README.md and backend/README.md — acceptance: docs reference MiMo TTS setup (covers: S2)
+
+## 后续增补（v2.1.0，2026-09-06 归档于此）
+
+1. **stub 音频修复**：无 `MIMO_API_KEY` 时原 stub 返回 `STUB_TTS::` 伪字节 + 不存在的 `.m4a` URL（客户端播放 404 无响应）；v2.1.0 起改返回**真实 400ms 静音 WAV**（新增 `app/services/wav.py`），`source=stub` 标记与「未配凭据」警示、影子跟读 stub 守卫全部保留 → 无凭据环境可完整联调。
+2. **自托管 OTA**：本机至 `release-assets.githubusercontent.com` 实测 11-40KB/s，21MB APK 走 GitHub 对大陆手机不可用 → `/static/apk` 挂载 + `scripts/publish_apk.sh <tag>`（拉包 → 自托管 → 写 `.env` `APP_LATEST_VERSION`/`APP_APK_URL` → 重启自检 source=env）。**push tag 后必须跑此脚本**。
+3. 拓扑/SOP 见 `docs/operations.md`，使用路径见 `docs/usage-guide.md`。

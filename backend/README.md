@@ -80,15 +80,34 @@ docker compose up -d        # 起 postgres + api 容器
 > 注意：`api` 服务会 `build .`（需 Dockerfile）。本地开发推荐用上面的 `uv run` 方式，更快、改代码即时生效。
 
 
-### 自由对话 LLM（可选，配了走真实生成）
+### 自由对话 / AI 链路 LLM（v2.0 主引擎，强烈建议配置）
 
-未配置 LLM 时, /dialogue/* 走内置 deterministic fallback (4 个场景的开场白 + 建议回答);
-配置后会自动调用 OpenAI 兼容端点生成开场与每一轮回答. 默认指向阿里云百炼 Maas:
+`/dialogue/*`（自由对话）、`/sessions/*/mission`（实战对话）、`/polish`（润色）、打基础三题型判分、
+`/scenes/generate`（生成课两段）、`/assessment/*/complete`（测评判级）全部走 **阿里云百炼
+OpenAI 兼容端点**；未配置时各处自动降级（deterministic fallback / heuristic 判分 +
+`source=stub` 警示，绝不被当作真实证据）。在 `backend/.env` 填：
 
+```
+# 阿里云百炼 MaaS（OpenAI 兼容 /compatible-mode/v1）
+LLM_BASE_URL=https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=sk-...
+LLM_DEFAULT_MODEL=                # 留空=走白名单序; 本机生产填 qwen3.8-max
+                                  # (2026-08 实测 qwen-plus/turbo/max/deepseek-v3 免费额度耗尽 403,
+                                  #  仅 qwen3.8-max / qwen3.7-plus 可用; 免费档 ~3 tok/s,
+                                  #  两段全量生成 5-10 分钟属预期)
+LLM_ALLOWED_MODELS=               # 逗号分隔白名单 (限定客户端可选范围)
+LLM_EXTRA_MODELS_JSON=            # JSON 数组, 追加自建代理模型
+```
 
+> 判分/生成/画像证据恒用服务端默认模型（不对客户端开放，保证口径一致）；自由对话/润色
+> 文本允许在上面的模型白名单内由客户端指定。`GET /api/v1/llm/models` 拉清单，设置页选择。
 
-前端会从 GET /api/v1/llm/models 拉取模型清单, 用户在设置页选择具体 model_id,
-下次自由对话请求会透传到后端. 后端调用失败会自动降级回 stub, 不会让 APK 流程中断.
+### 生产部署（部署机 = 本仓运行机）
+
+- 主实例：**端口 5173**（云防火墙唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。
+- 生产库：docker postgres 容器内 `english_prod_5173`（与开发库 `english_dev` 隔离，`DATABASE_URL` env 覆盖切换）。
+- 起停/迁移：`/home/ubuntu/english-backend-deploy.sh {start|stop|restart|status|migrate}`（prod 连接串内置）；日志 `~/english-backend-5173.log`。
+- OTA/发版：见仓库根 README「发布通道」+ `docs/operations.md`（push tag → GitHub Release → `scripts/publish_apk.sh <tag>` 自托管直发）。
 
 ### App 自动更新
 
@@ -153,6 +172,18 @@ backend/
 | GET | /api/v1/llm/models | 自由对话可选模型目录（由后端 LLM 配置决定）| ✓ |
 | GET | /api/v1/app/version | App 自动更新元数据 (latest/min 版本 + APK URL + 是否强制 + source=env\|github\|default) | ✓ |
 
+**v2.0 新增**（明细契约见各 router 源码与 `.mimocode/tasks/T*/` 报告，示例 curl 见 docs/operations.md 冒烟清单）：
+
+| Method | Path | 用途 |
+|---|---|---|
+| GET | `/scenes` `/scenes/{id}` `/scenes/{id}/script` | 情景课画廊/详情/剧本（8 门人工 + DB 生成课合并，DB 优先） |
+| GET/DELETE | `/scenes/{id}` 生成物 · POST `/scenes/generate` · GET `/scenes/jobs/{job}` | 目标一句话→两段生成任务（jobs 轮询）/ 删除自产课 |
+| POST | `/sessions` · `/sessions/{id}/step` `/skip-step` `/mission` `/hint` `/finish-mission` · GET `/sessions` `/sessions/{id}` | 任务通关闭环状态机（崩溃恢复、幂等、乐观锁） |
+| GET | `/ability?days=7\|30\|90` | 能力画像（EWMA + 雷达 + 轨迹；stub 证据零写入） |
+| GET/POST | `/assessment` `/assessment/{id}/start` `/answer` `/complete` | CEFR 7 题测评（批量 LLM 判级，题库 `data/assessment/bank.json`） |
+| POST/GET/DELETE | `/polish` · `/expressions` | 语法润色 + 个人表达库（去重/TOCTOU/`source` 全保留） |
+| GET | `/courses/progress` | 通关进度物化视图（attempts/cleared/best_total） |
+
 
 ## 测试
 
@@ -164,8 +195,11 @@ mypy app
 ```
 
 
-## 三种练习流程
+## 练习流程一览（v2.1.0）
 
-- **跟读模式**：后端课程台词按角色轮次交错后，客户端去掉角色标签，逐句展示最近五句；每句沿用 `/tts` + `/score`。
+- **跟读模式**：后端课程台词按角色轮次交错后，客户端去掉角色标签，逐句展示最近五句；每句沿用 `/tts` + `/score`（≥60 过关）。
 - **对话模式**：客户端将课程的角色 A/B 交错成完整对话，仅把角色 B 设为用户目标；点击「播放角色 A」后录制并评分角色 B。
-- **自由对话模式**：先调用 `/dialogue/generate` 获得 AI 开场和建议回答；用户自由录音后用建议回答作为评分参考，再调用 `/dialogue/turn` 获取下一轮。未配置 LLM 时使用内置场景 fallback，保证 APK 流程可联调。
+- **影子跟读**：整课连播 + 全程录音（回声消除），按句切片逐句评分聚合成整课报告；录音可回放对比。
+- **自由对话模式**（旧入口，保留）：`/dialogue/generate` 开场 + 建议回答；`/dialogue/turn` 下一轮 + 润色对照（v2.0 起同一次 LLM 调用返回判分与润色，识别文本直喂上下文）。未配置 LLM 时内置场景 fallback 保证 APK 流程可跑。
+- **任务通关情景课**（v2.0 主打）：`/sessions` 状态机驱动「打基础四题型（跟读/复述/翻译/造句）→ 实战对话（任务清单：required 全达成才通关，AI 人设追问、提示可开关但计入代价）→ 复盘报告（总分+四维+亮点/改进+原话 vs 更好说法+能力增量）」。无凭据环境按诚实降级链路走通（source 标记 + 画像零写入）。
+- **AI 生成课 / CEFR 测评 / 表达库 / 弱词训练**：见上方端点表；生成课走两段式 jobs，测评判级单次批量 LLM。

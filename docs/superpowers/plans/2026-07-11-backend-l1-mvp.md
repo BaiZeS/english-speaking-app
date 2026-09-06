@@ -1,5 +1,11 @@
 # Backend L1 MVP Implementation Plan
 
+> **【历史归档，v2.1.0 时点】** 本计划对应 v1.x L1 阶段：正文保留原貌（checkbox 未回填，实际进度以
+> git 历史/CI 为准）。与现状的两处大差异：① Redis/TTS 缓存面已在 v2.0 P8 整体移除（改磁盘缓存）；
+> ② v2.0 起以「对标可栗口语」大版本扩展（实战课/测评/画像/生成课/表达库），后续计划见
+> `.mimocode/plans/1788164431817-eager-cactus.md` + `.mimocode/tasks/T1–T9` 报告；
+> 现行部署与发版看 `docs/operations.md`，功能现状看 `CHANGELOG.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the FastAPI backend that fully supports the L1 read-along scenario (K12 mode + 新概念英语第一册 跟读), with stable API contracts for all 9 endpoints (7 L1 implementations + 2 L2 stubs).

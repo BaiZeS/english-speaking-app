@@ -1,16 +1,19 @@
 # Changelog
 
-## v2.1.0 — 2026-09-06 · 生产 :5173 通道
+## v2.1.0 — 2026-09-06 · 生产 :5173 通道 + 自托管 OTA
 
 ### 用户视角
 - 直连新部署的生产后端（端口 5173）：v2.1.0 起安装即用，不再需要在设置里手工改服务器地址。
+- App 内更新的下载安装改走服务器自托管直链（GitHub 资源站在国内实测仅 ~10-40KB/s，21MB 更新包等不起），OTA 速度到服务器公网出口水平。
 
-### 工程摘要
+### 工程摘要（生产链 commit `25d05a3` + 运维链 `0444e47`，均双 CI 绿）
 - `BACKEND_BASE_URL`（release）→ `http://118.89.58.84:5173/api/v1/`；debug 仍指模拟器回环 `10.0.2.2:8000`。
-- `release.yml`：发行说明由「取提交标题」改为 `git describe` 的纯 tag（防止标题含版本号词致 `EnglishAssistant-<版本>.apk` 改名漂移）。
-- 版本号 → versionCode 8 / versionName 2.1.0；生产主实例 `:5173` + 桥接 `:8000` 并行，旧包远程 OTA 的公网 8000 映射/手动装包过渡见 README「发布通道」。
+- 版本号 → versionCode 8 / versionName 2.1.0；`:8000` 桥接退役（云防火墙仅映射 5173，旧包过渡 = 一次性 GitHub 直链装 v2.1.0，见 README「发布通道」）。
+- `release.yml` 保持 `GITHUB_REF_NAME` 纯 tag 派生 asset 名（防提交标题污染资产命名——本次发版实锤的竞态教训见 docs/operations.md「发版 SOP」）。
+- `/static/apk` 挂载 + `backend/scripts/publish_apk.sh <tag>`：拉 GitHub asset → 自托管 → 写 `.env` 的 `APP_LATEST_VERSION`/`APP_APK_URL`（resolver 优先级 1）→ 重启 → source=env 自检。
+- 运维护栏脚本 `~/english-backend-deploy.sh {start|stop|restart|status|migrate}`（生产库 `english_prod_5173`，与 dev 库隔离）。
 
-## v2.0.0 — 2026-07-19 · 大版本：对标可栗口语的情景实战闭环
+## v2.0.0 — 2026-09-06 · 大版本：对标可栗口语的情景实战闭环
 
 ### 用户视角（这次更新你能玩到什么）
 
