@@ -16,8 +16,8 @@ android {
         applicationId = "com.app.english"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "2.0.0"
+        versionCode = 8
+        versionName = "2.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -47,10 +47,11 @@ android {
             )
             // Production builds point at the public backend host (HTTP for now;
             // cleartext is permitted via AndroidManifest usesCleartextTraffic).
+            // v2.1.0: backend deployed on :5173 (cloud firewall opens this port).
             buildConfigField(
                 "String",
                 "BACKEND_BASE_URL",
-                "\"http://118.89.58.84:8000/api/v1/\"",
+                "\"http://118.89.58.84:5173/api/v1/\"",
             )
         }
     }

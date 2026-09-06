@@ -75,6 +75,13 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
   旧客户端打开 App 即可经 `/app/version` 检测到新版本并应用内下载安装；
   提示可「稍后再说」，**不强制**（仅当服务端显式配置 `APP_MIN_SUPPORTED_VERSION`
   才会进入不可跳过分支）。
+- **生产后端部署**：主实例公网 `http://118.89.58.84:5173/api/v1/`（库为本机
+  docker postgres 的专用库 `english_prod_5173`，起停见 `~/english-backend-deploy.sh`）。
+  v2.1.0 起 release 包内置 URL 即指 :5173，真机开箱即用。
+  同机另有 `:8000` 桥接实例（同码同库，服务 ≤2.0.0 旧包内置地址），但云防火墙
+  当前未映射 8000——旧包若要远程 OTA，需二选一：① 在防火墙控制台加 TCP:8000
+  映射到本机；② 直接给旧设备装一次 v2.1.0 APK（GitHub Releases 直链），此后
+  升级走 :5173 全自动。
 - **调试包**：Actions → 最新绿色 `Android CI` run → Artifacts → `app-debug`
   （仅 debug 签名，过期 90 天，别当分发渠道）。
 - 仓库里的 `apk/` 目录只是本机临时副本位（`*.apk` 已 gitignore、**无提交内容**），
