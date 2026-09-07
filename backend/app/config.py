@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     # ====== 数据库 ======
+    # 真实串放 backend/.env (gitignored); 默认值是占位符, 不带可用凭据.
     database_url: str = Field(
-        default="postgresql+asyncpg://english:english@localhost:5432/english_dev"
+        default="postgresql+asyncpg://english:CHANGE_ME@localhost:5432/english_dev"
     )
 
     # ====== 讯飞 ISE (语音评测, 保留) ======

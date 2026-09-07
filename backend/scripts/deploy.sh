@@ -16,7 +16,14 @@ LOG_DIR="$BACKEND_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG5173="$LOG_DIR/english-backend-5173.log"
 LOG8000="$LOG_DIR/english-backend-8000.log"
-PROD_DB_URL="postgresql+asyncpg://english:english@127.0.0.1:5432/english_prod_5173"
+# 生产连接串: backend/.deploy.env (gitignored, 口令 2026-09-07 起不再入 git)。
+# 优先级: 进程环境变量 PROD_DB_URL > .deploy.env。
+if [ -z "${PROD_DB_URL:-}" ] && [ -f "$BACKEND_DIR/.deploy.env" ]; then
+  PROD_DB_URL="$(grep -m1 '^PROD_DB_URL=' "$BACKEND_DIR/.deploy.env" | cut -d= -f2-)"
+fi
+if [ -z "${PROD_DB_URL:-}" ]; then
+  echo "FATAL: PROD_DB_URL 未配置 — 在 $BACKEND_DIR/.deploy.env 写入 (参考 backend/README 生产部署节)"; exit 1
+fi
 
 # 环境消毒: .env 是配置唯一事实源。启动前把与 .env 同名的环境变量从子进程
 # 剥离（pydantic-settings 优先级 进程env > .env，shell 里的陈旧 export 会遮蔽新配置）。

@@ -10,7 +10,7 @@
 | 生产库 | docker 容器 `english-postgres`（宿主 127.0.0.1:5432，user=english）→ 库 **`english_prod_5173`**（与开发库 `english_dev`、迁移链测试隔离）|
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
 | 进程方式 | 裸 uvicorn（nohup + `</dev/null` + disown，**勿用 setsid**——本盒杀手实证），由 `backend/scripts/deploy.sh` 管理（启动前自动剥离与 .env 同名的陈旧环境变量，.env 为唯一事实源）；日志 `backend/logs/english-backend-5173.log`（gitignored） |
-| 密钥 | 均在 `backend/.env`（gitignored，不入 git）。实测现状：百炼 LLM 已配（仅 `qwen3.8-max`/`qwen3.7-plus` 有额度，免费档 ~3 tok/s）；讯飞 ISE/IAT 与 MiMo-TTS key 留空 → 走真实占位分/stub 声链路，画像与 AI 分不受污染（门控内置）|
+| 密钥 | 均在 `backend/.env` + `backend/.deploy.env`（生产库连接串）（gitignored，不入 git）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状：百炼 LLM 已配（仅 `qwen3.8-max`/`qwen3.7-plus` 有额度，免费档 ~3 tok/s）；讯飞 ISE/IAT 与 MiMo-TTS key 留空 → 走真实占位分/stub 声链路，画像与 AI 分不受污染（门控内置）|
 | OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存 |
 
 ## 2. 日常操作

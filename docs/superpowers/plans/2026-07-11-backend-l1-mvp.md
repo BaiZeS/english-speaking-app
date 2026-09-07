@@ -716,9 +716,10 @@ Run:
 cd backend
 docker compose up -d postgres
 sleep 3
-DATABASE_URL=postgresql+asyncpg://english:english@localhost:5432/english_dev alembic upgrade head
-DATABASE_URL=postgresql+asyncpg://english:english@localhost:5432/english_dev alembic downgrade base
-DATABASE_URL=postgresql+asyncpg://english:english@localhost:5432/english_dev alembic upgrade head
+# 口令已于 2026-09-07 轮换并移出 git；本地值见 backend/.env（gitignored）
+DATABASE_URL=postgresql+asyncpg://english:CHANGE_ME@localhost:5432/english_dev alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://english:CHANGE_ME@localhost:5432/english_dev alembic downgrade base
+DATABASE_URL=postgresql+asyncpg://english:CHANGE_ME@localhost:5432/english_dev alembic upgrade head
 ```
 Expected: upgrade and downgrade both succeed; no errors.
 

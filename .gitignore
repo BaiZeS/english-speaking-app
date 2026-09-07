@@ -20,6 +20,7 @@ venv/
 env/
 .env
 .env.local
+.deploy.env
 .pytest_cache/
 .coverage
 htmlcov/
