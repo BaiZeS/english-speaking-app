@@ -81,7 +81,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
   提示可「稍后再说」，**不强制**（仅当显式配置 `APP_MIN_SUPPORTED_VERSION`
   才进入不可跳过分支）。
 - **生产后端部署**：主实例公网 `http://118.89.58.84:5173/api/v1/`（库为本机
-  docker postgres 的专用库 `english_prod_5173`，起停见 `~/english-backend-deploy.sh`）。
+  docker postgres 的专用库 `english_prod_5173`，起停见 `backend/scripts/deploy.sh`）。
   v2.1.0 起 release 包内置 URL 即指 :5173，真机开箱即用。
   `:8000` 桥接已停止（云防火墙未映射公网，旧包外网不可达、也无必要）——
   旧包（≤2.0.0，内置 :8000）过渡 = 从 GitHub Release 直链手动安装 v2.1.0

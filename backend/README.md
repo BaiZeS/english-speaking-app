@@ -106,7 +106,7 @@ LLM_EXTRA_MODELS_JSON=            # JSON 数组, 追加自建代理模型
 
 - 主实例：**端口 5173**（云防火墙唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。
 - 生产库：docker postgres 容器内 `english_prod_5173`（与开发库 `english_dev` 隔离，`DATABASE_URL` env 覆盖切换）。
-- 起停/迁移：`/home/ubuntu/english-backend-deploy.sh {start|stop|restart|status|migrate}`（prod 连接串内置）；日志 `~/english-backend-5173.log`。
+- 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate}`（prod 连接串内置；启动前自动剥离与 .env 同名的陈旧环境变量，.env 为唯一事实源）；日志 `backend/logs/english-backend-5173.log`（gitignored）。
 - OTA/发版：见仓库根 README「发布通道」+ `docs/operations.md`（push tag → GitHub Release → `scripts/publish_apk.sh <tag>` 自托管直发）。
 
 ### App 自动更新

@@ -39,7 +39,7 @@ set_env APP_LATEST_VERSION "${VER}"
 set_env APP_APK_URL "${BASE}/static/apk/${ASSET}"
 
 echo ">> restarting prod backend..."
-DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-/home/ubuntu/english-backend-deploy.sh}"
+DEPLOY_SCRIPT="${DEPLOY_SCRIPT:-${REPO_DIR}/scripts/deploy.sh}"
 bash "$DEPLOY_SCRIPT" restart
 sleep 2
 
