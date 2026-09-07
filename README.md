@@ -45,7 +45,7 @@
 
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
-- **AI 服务**：MiMo TTS（语音合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-max`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
+- **AI 服务**：MiMo TTS（语音合成，已启用真合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-flash`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
 - **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
 
 ## 快速开始

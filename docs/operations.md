@@ -10,7 +10,7 @@
 | 生产库 | docker 容器 `english-postgres`（宿主 127.0.0.1:5432，user=english）→ 库 **`english_prod_5173`**（与开发库 `english_dev`、迁移链测试隔离）|
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
 | 进程方式 | 裸 uvicorn（nohup + `</dev/null` + disown，**勿用 setsid**——本盒杀手实证），由 `backend/scripts/deploy.sh` 管理（启动前自动剥离与 .env 同名的陈旧环境变量，.env 为唯一事实源）；日志 `backend/logs/english-backend-5173.log`（gitignored） |
-| 密钥 | 均在 `backend/.env` + `backend/.deploy.env`（生产库连接串）（gitignored，不入 git）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状：百炼 LLM 已配（仅 `qwen3.8-max`/`qwen3.7-plus` 有额度，免费档 ~3 tok/s）；讯飞 ISE/IAT 与 MiMo-TTS key 留空 → 走真实占位分/stub 声链路，画像与 AI 分不受污染（门控内置）|
+| 密钥 | 均在 `backend/.env` + `backend/.deploy.env`（生产库连接串）（gitignored，不入 git）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填（格式校验通过，真机逐词评分冒烟未跑）|
 | OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存 |
 
 ## 2. 日常操作
@@ -48,10 +48,10 @@ cd backend && bash scripts/publish_apk.sh v2.1.1
 
 | 服务 | 填 env 键 | 解锁 |
 |---|---|---|
-| 讯飞 ISE | `XUNFEI_APP_ID/API_KEY/API_SECRET` | 跟读/影子/弱词真实逐词音素分（`source=xunfei`；日志 `xunfei ise ok` 为硬证，**单看分数不可信**）|
+| 讯飞 ISE | `XUNFEI_APP_ID/API_KEY/API_SECRET`（09-07 已填，格式校验过；真机逐词分冒烟待跑）| 跟读/影子/弱词真实逐词音素分（`source=xunfei`；日志 `xunfei ise ok` 为硬证，**单看分数不可信**）|
 | 讯飞 IAT | 同上 | 实战/自由对话真实听写（无则文本输入为主路径）|
-| MiMo-TTS | `MIMO_API_KEY`（本盒必须 `MIMO_TTS_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1`）| 示范声真合成 |
-| 百炼 LLM | `LLM_BASE_URL/LLM_API_KEY/LLM_DEFAULT_MODEL=qwen3.8-max` | 已配 ✓ |
+| MiMo-TTS | `MIMO_API_KEY`（**线路绑定，域名不互换**：`sk-` 平台 key ⇄ `https://api.xiaomimimo.com/v1`；`tp-` token-plan key ⇄ `https://token-plan-cn.xiaomimimo.com/v1`；本盒现为 sk-/api 线路）| 示范声真合成 ✓（09-07 实测 200）|
+| 百炼 LLM | `LLM_BASE_URL/LLM_API_KEY`；现役 `LLM_DEFAULT_MODEL=qwen3.8-flash` + `LLM_ALLOWED_MODELS=qwen3.8-flash,deepseek-v4-flash-0731` | 已配 ✓（09-07 实测两模型 chat 200；模型下拉经 `LLM_EXTRA_MODELS_JSON` 下发恢复）|
 
 ## 5. 冒烟与验证集（发版/迁移后跑）
 
@@ -62,6 +62,10 @@ curl -s $BASE/api/v1/app/version                              # latest=当前发
 curl -s -r 0-1023 -o /dev/null -w '%{http_code}' $BASE/static/apk/EnglishAssistant-<ver>.apk  # 206
 curl -s "$BASE/api/v1/scenes?category=workplace" | head -c200          # 含职场课
 curl -s "$BASE/api/v1/stats?device_id=smoke-0906"                       # 合法 JSON（空态即可）
+curl -s "$BASE/api/v1/llm/models"                                       # models 含 .env 白名单两模型 + default_model
+curl -s "$BASE/api/v1/tts?text=Hello&voice=Mia" -o /tmp/t.out -w '%{http_code} %{size_download}B\n'  # 200 + wav 头（RIFF）= TTS 真合成通
+# key 排查对照组（区分"调用姿势错"vs"key 无效"——09-07 实测：两线路 512 种姿势的 401 与假 key 逐字节一致）:
+# curl -s https://api.xiaomimimo.com/v1/models -H 'api-key: tp-fakekey000' | head -c 60
 # 完整通关冒烟（生成一条真实练习痕迹）:
 # curl 序列 POST /sessions{scene_id:scene_ordering_coffee}→ /step ×6(text) →
 #   /mission ×3 → /finish-mission 看 ReviewReport dims; GET /courses/progress 应现 attempts≥1
@@ -77,7 +81,9 @@ curl -s "$BASE/api/v1/stats?device_id=smoke-0906"                       # 合法
 - 本盒工具超时与进程杀手：长跑任务一律 `nohup ... </dev/null & disown`；`pkill -f` 一律 `zcode[-]cli`/`uvicorn.*` 方括号自匹配免疫写法。
 - GitHub 直链测速：本盒→`release-assets.githubusercontent.com` 11-40KB/s，手机只会更差——OTA 永远走自托管；大文件拉取给 20-30min 耐心或 `--continue-at -` 续传。
 - Room 版本冻结：新表只建在 `EnglishContentDatabase`（v1 独立 DB），`AppDatabase` 保持 v3——删旧实体不 bump 会在 v2.6 老装上炸（已在 P8 用冻壳规避）；升级 Room ≥2.7 前不要动 HistoryCacheEntity 壳。
-- LLM 免费额度：单次生成两段各 240s+，全课 5-10min；判级/润色 6-60s；偶发超时全部按设计诚实降级（不卡流程）。
+- LLM 额度与降级：全课生成 5-10min / 判级润色 6-60s 属预期；偶发超时全部按设计诚实降级（不卡流程）。换 key/换模型后必做：`/llm/models` 若返回空列表 = 新模型不在代码内置目录且 `LLM_EXTRA_MODELS_JSON` 未填——判分不受影响（恒用 `LLM_DEFAULT_MODEL`），但客户端下拉框会空。
+- **陈旧环境变量遮蔽 `.env`**（09-07 血案，耗 1h+）：pydantic-settings 优先级 = 进程 env > `.env`。本机曾长期在 `~/.bashrc:172` export 旧 `MIMO_API_KEY`，用户更新 `.env` 换 key 后被 bashrc 旧值静默遮蔽——表现酷似"上游拒 valid key"。已修复：`deploy.sh` 启动前自动剥离与 `.env` 同名变量（`.env` 唯一事实源）；轮换任何被 shell export 过的 key 时，记得同步改 `~/.bashrc`。
+- **MiMo key 分线路且互不通用**：`tp-`=token-plan 订阅（只认 `token-plan-cn.xiaomimimo.com`），`sk-`=平台 REST API（只认 `api.xiaomimimo.com`）。key 被上游作废前会先从 429(欠费/额度) 变 401(吊销)——401 别先怀疑代码。
 
 ## 7. 文档索引
 

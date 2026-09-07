@@ -1,5 +1,17 @@
 # Changelog
 
+## 运维与凭据变更 — 2026-09-07（无客户端版本变更，真机无需重新下载）
+
+### 用户可感知
+- **TTS 真声上线**：示范朗读走 MiMo-V2.5-TTS 真合成（此前为 stub 占位/静音链路）；LLM 现役模型为 `qwen3.8-flash`（服务端默认）+ `deepseek-v4-flash-0731`，App 设置页模型下拉框已恢复可选（经 `/llm/models` 动态下发，重装无需）。
+- 讯飞 ISE/IAT key 已配置；真机逐词评分冒烟待验收（未过门前仍走诚实占位分，不入画像）。
+
+### 工程摘要
+- 运维脚本 `~/english-backend-deploy.sh` → **`backend/scripts/deploy.sh`**（docs 全量改口）；日志迁 `backend/logs/`；修相对 `$0` 内部 `cd` 后 restart 必炸的 bug。
+- **环境消毒**：deploy.sh 启动前剥离与 `.env` 同名的进程环境变量——pydantic-settings 优先级为 进程 env > `.env`，`~/.bashrc` 的陈旧 `MIMO_API_KEY` export 曾静默遮蔽用户换好的 key 1h+。
+- **安全轮换**：postgres `english` 角色口令已换并全链路验证；tracked 文件默认凭证清除（config 默认值 / compose / `.env.example` / 归档计划文档 → `CHANGE_ME` 占位）；生产 DSN 移入 gitignored `backend/.deploy.env`。git 历史中旧口令保持不动（已失效）。
+- MiMo key 线路教训入档：`tp-`/`sk-` 两线路域名不互换；401 排查用假 key 对照（docs/operations.md §5/§6）。
+
 ## v2.1.0 — 2026-09-06 · 生产 :5173 通道 + 自托管 OTA
 
 ### 用户视角

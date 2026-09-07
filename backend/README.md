@@ -91,12 +91,12 @@ OpenAI 兼容端点**；未配置时各处自动降级（deterministic fallback 
 # 阿里云百炼 MaaS（OpenAI 兼容 /compatible-mode/v1）
 LLM_BASE_URL=https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
 LLM_API_KEY=sk-...
-LLM_DEFAULT_MODEL=                # 留空=走白名单序; 本机生产填 qwen3.8-max
-                                  # (2026-08 实测 qwen-plus/turbo/max/deepseek-v3 免费额度耗尽 403,
-                                  #  仅 qwen3.8-max / qwen3.7-plus 可用; 免费档 ~3 tok/s,
-                                  #  两段全量生成 5-10 分钟属预期)
-LLM_ALLOWED_MODELS=               # 逗号分隔白名单 (限定客户端可选范围)
-LLM_EXTRA_MODELS_JSON=            # JSON 数组, 追加自建代理模型
+LLM_DEFAULT_MODEL=                # 留空=走白名单序; 本机生产填 qwen3.8-flash (09-07 现役;
+                                  #  历史: 08 月免费档仅 qwen3.8-max/3.7-plus 可用, ~3 tok/s;
+                                  #  现 key 两模型实测 200: qwen3.8-flash + deepseek-v4-flash-0731)
+LLM_ALLOWED_MODELS=               # 逗号分隔白名单 (限定客户端可选范围; 不在内置目录的
+                                  #  新模型需配 LLM_EXTRA_MODELS_JSON 才会出现在下拉框)
+LLM_EXTRA_MODELS_JSON=            # JSON 数组, 追加自建代理模型 (本盒 09-07 起已填两现役模型)
 ```
 
 > 判分/生成/画像证据恒用服务端默认模型（不对客户端开放，保证口径一致）；自由对话/润色
