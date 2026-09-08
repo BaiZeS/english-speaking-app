@@ -70,7 +70,7 @@ XUNFEI_API_SECRET=...
 - **MiMo TTS**：OpenAI 兼容接口, 24kHz WAV, 流式 PCM16 合成, 按 (text, voice) 落盘缓存 (`static/tts/`, 同文本复用, 省配额). [文档](https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5)
 - **ISE 评分**：提交 PCM（16kHz L16 mono）后走语音评测，返回 0-100 的 total/pronunciation/fluency/completeness + 每词 `word_details`（含 `score` 与 `ipa` 音素）。原始评分 1-5 → 映射到 0-100。
 
-### 备选：Docker Compose 一键起全部
+### 备选：Docker Compose 开发栈一键起（≠ 发布栈，见「生产部署」）
 
 ```bash
 docker compose up -d        # 起 postgres + api 容器
@@ -102,11 +102,25 @@ LLM_EXTRA_MODELS_JSON=            # JSON 数组, 追加自建代理模型 (本�
 > 判分/生成/画像证据恒用服务端默认模型（不对客户端开放，保证口径一致）；自由对话/润色
 > 文本允许在上面的模型白名单内由客户端指定。`GET /api/v1/llm/models` 拉清单，设置页选择。
 
-### 生产部署（部署机 = 本仓运行机）
+### 生产部署（发布栈 = Docker Compose 一键起，适用本机与任意服务器）
 
-- 主实例：**端口 5173**（云防火墙唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。
-- 生产库：docker postgres 容器内 `english_prod_5173`（与开发库 `english_dev` 隔离，`DATABASE_URL` env 覆盖切换）。
-- 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate}`（prod 连接串读 `backend/.deploy.env`，gitignored，口令不落 git；启动前自动剥离与 .env 同名的陈旧环境变量，.env 为唯一事实源）；日志 `backend/logs/english-backend-5173.log`（gitignored）。
+```bash
+cd backend
+cp .env.example .env      # 填 POSTGRES_PASSWORD(必填) + 各服务密钥; release 建议 ENV=production DEBUG=false
+mkdir -p static/tts static/apk   # 预建 bind 源目录——docker 对缺失目录自动建 root:root，
+                                 # 之后 host 用户跑 publish_apk.sh 会 EACCES
+docker compose -f docker-compose.prod.yml up -d --build   # 空库自动全链迁移
+curl -s localhost:${API_PORT:-5173}/api/v1/health
+bash scripts/publish_apk.sh v2.1.0   # static/apk 不在 git → OTA 直链这一步补种
+                                     # （非 118.89.58.84 机器带 PUBLISH_APK_BASE_URL=<公网地址>）
+```
+
+- 主实例：**端口 5173**（`.env API_PORT` 可配；云防火墙当前唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。
+- 生产库：同栈 `postgres:16-alpine`（容器 `english-postgres-prod`，库 `english_prod_5173`，卷 `english-prod-pgdata`——**切换后严禁对本项目 `down -v`**）。**不发布宿主 5432**：宿主 127.0.0.1:5432 永远是开发栈；运维 psql/备份一律 `docker exec english-postgres-prod psql -U english ...`。
+- 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate|logs}`——底层全是 docker compose。语义要点：`start/restart`=`up -d --build`（restart 另加强制 recreate）。**compose 原生 restart 不重读 .env、不换镜像**——改 `.env`（publish_apk 写 APP_*）后只有 recreate 才生效，脚本已统一。`start-legacy`/`stop-legacy` 是旧"裸 uvicorn + `.deploy.env`"拓扑的回滚逃生口。
+- 环境变量优先级：`--build` 构建与容器 env 均以 `backend/.env` 为唯一事实源（deploy.sh 启动前自动剥离同名 shell export，见 operations.md §6 血案）。
+- 本台机器首次（裸进程→compose 一次性切换 + 迁库）：`scripts/cutover_to_compose.sh`（停服在前、权威 dump 在后、逐表对账；旧库容器保留冷备）。
+- 日志：`docker logs english-api-prod`（json-file 10m×5 轮转）；旧 `backend/logs/*.log` 仅 start-legacy 回滚时使用。
 - OTA/发版：见仓库根 README「发布通道」+ `docs/operations.md`（push tag → GitHub Release → `scripts/publish_apk.sh <tag>` 自托管直发）。
 
 ### App 自动更新
@@ -152,8 +166,12 @@ backend/
 ├── tests/
 ├── data/                 # 语料 JSON
 ├── pyproject.toml
-├── Dockerfile
-└── docker-compose.yml
+├── Dockerfile                 # 开发镜像（源码挂载 + reload）
+├── Dockerfile.prod            # 发布镜像（锁定依赖，entrypoint 自动迁移）
+├── docker-compose.yml         # 开发栈（postgres + 热重载 api）
+├── docker-compose.prod.yml    # 发布栈（项目名 english-prod，卷钉名隔离）
+├── scripts/                   # deploy/cutover/publish_apk + 容器 entrypoint
+└── ...
 ```
 
 ## API 端点

@@ -6,24 +6,27 @@
 
 | 项 | 值 |
 |---|---|
-| 生产 API | uvicorn `.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 5173`（release 包内置 `http://118.89.58.84:5173/api/v1/`）|
-| 生产库 | docker 容器 `english-postgres`（宿主 127.0.0.1:5432，user=english）→ 库 **`english_prod_5173`**（与开发库 `english_dev`、迁移链测试隔离）|
+| 生产 API | **docker compose 发布栈**：容器 `english-api-prod`（`backend/docker-compose.prod.yml`，宿主端口 `${API_PORT:-5173}`→容器 8000；release 包内置 `http://118.89.58.84:5173/api/v1/`）|
+| 生产库 | 栈内 `postgres:16-alpine`（容器 `english-postgres-prod`，卷 `english-prod-pgdata`，库 **`english_prod_5173`**；**不发布宿主端口**）。宿主 127.0.0.1:5432 = 开发栈 `english-postgres`（库 `english_dev` + 旧生产库冷备）——**运维 SQL/备份一律 `docker exec english-postgres-prod psql -U english ...`** |
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
-| 进程方式 | 裸 uvicorn（nohup + `</dev/null` + disown，**勿用 setsid**——本盒杀手实证），由 `backend/scripts/deploy.sh` 管理（启动前自动剥离与 .env 同名的陈旧环境变量，.env 为唯一事实源）；日志 `backend/logs/english-backend-5173.log`（gitignored） |
-| 密钥 | 均在 `backend/.env` + `backend/.deploy.env`（生产库连接串）（gitignored，不入 git）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填（格式校验通过，真机逐词评分冒烟未跑）|
-| OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存 |
+| 进程方式 | `docker compose up -d` + `restart: unless-stopped`（随 docker daemon 自动拉起——裸进程时代没有的增益）；由 `backend/scripts/deploy.sh` 统一管理（每条 compose 命令前自动剥离与 .env 同名的陈旧环境变量，.env 唯一事实源）。回滚逃生口 `deploy.sh start-legacy` = 旧裸 uvicorn 拓扑（nohup + `</dev/null` + disown，**勿用 setsid**——本盒杀手实证，依赖保留的 `.deploy.env`）；日志 `docker logs english-api-prod`（json-file 10m×5），旧 `backend/logs/*.log` 仅 legacy 回滚时使用 |
+| 密钥 | 均在 `backend/.env`（gitignored，不入 git；发布栈的 `DATABASE_URL` 由 compose 服务名自动派生，`.deploy.env` 仅为 `start-legacy` 回滚保留）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填（格式校验通过，真机逐词评分冒烟未跑）|
+| OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存。**两目录 bind 进发布容器**（`/app/static/*`），宿主路径即唯一实体——host 侧 publish_apk.sh 写完 + `deploy.sh restart`（recreate）即生效；新机器该目录空，OTA 需跑 publish_apk.sh 补种 |
 
 ## 2. 日常操作
 
 ```bash
-S=backend/scripts/deploy.sh   # 仓库根目录下（原 ~/english-backend-deploy.sh 已收拢进项目）
-bash $S status     # :5173 UP(health)
-bash $S restart    # 发配置后必重启（uvicorn 启动读一次 env）
-bash $S migrate    # alembic upgrade head（生产库）
-bash $S stop       # 全停
+S=backend/scripts/deploy.sh   # 仓库根目录下（底层 = docker compose -f docker-compose.prod.yml）
+bash $S status     # 栈容器状态 + :5173 health
+bash $S start      # up -d --build（拉新代码/新配置，含 migrate 语义——entrypoint 自动跑）
+bash $S restart    # up -d --build --force-recreate api。**改 .env 后必用它**：
+                   #   compose 原生 restart 不重读 env_file、不换镜像（静默失效陷阱）
+bash $S stop       # 只停 api 容器（postgres 继续跑；全栈 down 请手动 compose down，勿加 -v）
+bash $S migrate    # 一次性 alembic upgrade head（compose run 独立容器执行）
+bash $S logs 200   # 最近 n 行服务日志（= docker logs english-api-prod）
 ```
 
-改 `.env`（换密钥/模型/APP_* 三兄弟）后：`bash $S restart`，`curl -s http://localhost:5173/api/v1/health` + 看对应端点即验生效。
+改 `.env`（换密钥/模型/APP_* 三兄弟）后：`bash $S restart`，`curl -s http://localhost:5173/api/v1/health` + 看对应端点即验生效。生产库口令轮换是两步活（卷首初始化口令 + `ALTER USER`），见 §6。数据卷 `english-prod-pgdata` = 唯一生产数据，**严禁对 compose 项目 `down -v`**。
 
 ## 3. 发版 SOP（Android）
 
@@ -71,6 +74,13 @@ curl -s "$BASE/api/v1/tts?text=Hello&voice=Mia" -o /tmp/t.out -w '%{http_code} %
 #   /mission ×3 → /finish-mission 看 ReviewReport dims; GET /courses/progress 应现 attempts≥1
 ```
 
+```bash
+# DB 层核查与备份（发布栈库在 english-postgres-prod 容器，不发布宿主端口——127.0.0.1:5432 是开发库）:
+docker exec english-postgres-prod psql -U english -d english_prod_5173 -c 'SELECT version_num FROM alembic_version'
+docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f /tmp/bk.dump \
+  && docker cp english-postgres-prod:/tmp/bk.dump backend/logs/backup-$(date -u +%F).dump
+```
+
 后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 526 测试，sqlite；CI 含 PG16）。Android 回归：三连（见第 3 节①）。
 
 ## 6. 已知边界 / 坑位（血泪清单）
@@ -84,6 +94,12 @@ curl -s "$BASE/api/v1/tts?text=Hello&voice=Mia" -o /tmp/t.out -w '%{http_code} %
 - LLM 额度与降级：全课生成 5-10min / 判级润色 6-60s 属预期；偶发超时全部按设计诚实降级（不卡流程）。换 key/换模型后必做：`/llm/models` 若返回空列表 = 新模型不在代码内置目录且 `LLM_EXTRA_MODELS_JSON` 未填——判分不受影响（恒用 `LLM_DEFAULT_MODEL`），但客户端下拉框会空。
 - **陈旧环境变量遮蔽 `.env`**（09-07 血案，耗 1h+）：pydantic-settings 优先级 = 进程 env > `.env`。本机曾长期在 `~/.bashrc:172` export 旧 `MIMO_API_KEY`，用户更新 `.env` 换 key 后被 bashrc 旧值静默遮蔽——表现酷似"上游拒 valid key"。已修复：`deploy.sh` 启动前自动剥离与 `.env` 同名变量（`.env` 唯一事实源）；轮换任何被 shell export 过的 key 时，记得同步改 `~/.bashrc`。
 - **MiMo key 分线路且互不通用**：`tp-`=token-plan 订阅（只认 `token-plan-cn.xiaomimimo.com`），`sk-`=平台 REST API（只认 `api.xiaomimimo.com`）。key 被上游作废前会先从 429(欠费/额度) 变 401(吊销)——401 别先怀疑代码。
+- **（09-07 容器化后新增）`docker compose restart` 不重读 .env、不换镜像**：改配置后手动 `compose restart` = 白改，必须走 `deploy.sh restart`（内部 `up -d --build --force-recreate`）或直接 `compose up -d --force-recreate`。
+- **宿主 5432 上也有一个同名 `english_prod_5173`**（切换前的冻结冷备）：直连 127.0.0.1:5432 查/改会命中过时副本毫无察觉。一切生产 DB 操作钉死 `docker exec english-postgres-prod ...`。
+- **`POSTGRES_PASSWORD` 只在数据卷首次初始化生效**：改 `.env` + restart 不改库口令。轮换 = 容器内 `ALTER USER` + 改 `.env` 两步（少一步 = 应用连不上或假象生效）。
+- **`down -v` 禁区**：`english-prod-pgdata` = 唯一生产数据卷。`compose down` 安全（数据留存），`down -v` 删库；仅允许在切换前的金丝雀阶段用 -v 清测试卷。
+- **`/docs`、`/redoc` 随 `ENV=production` 关闭**（`/openapi.json` 仍在）；接口契约以 CI 与 openapi 为准。回退 start-legacy 时宿主 `.env` 若仍 development 会重新暴露——注意环境差异别误判"功能回归"。
+- **开发/发布共用一份 `backend/.env`**：release 栈把它当进程 env 全表注入。翻 `ENV=production` 会同时关掉本机裸开发实例的 /docs、改 `LLM_DEFAULT_MODEL` 两边同时生效——本机已以生产为先，开发临时用 `docker compose -f docker-compose.yml up` 或当场覆盖。
 
 ## 7. 文档索引
 

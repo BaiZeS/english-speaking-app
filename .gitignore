@@ -69,3 +69,6 @@ yarn-error.log*
 backend/package-lock.json
 # devkit codex-executor handoff 产物 (本地任务交接, 不入库)
 outputs/
+
+# 切换前冷备 dump（可能含业务数据，绝不入库）
+*.dump

@@ -1,0 +1,18 @@
+# 构建上下文瘦身：源码/依赖之外都不进 tar（venv + static + logs 占大头）
+.venv/
+__pycache__/
+*.py[co]
+logs/
+static/
+tests/
+.env
+.env.*
+.deploy.env
+docker-compose.yml
+docker-compose.prod.yml
+Dockerfile
+Dockerfile.prod
+scripts/deploy.sh
+scripts/publish_apk.sh
+scripts/cutover_to_compose.sh
+alembic.sh

@@ -67,6 +67,11 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 > `--host 0.0.0.0` 必须加，模拟器（`10.0.2.2`）/ 真机（局域网 IP）才能连上。
 > MiMo TTS + 讯飞 ISE 已接入：配 `.env` 凭据后走真实合成 + 逐词评分；未配则自动 fallback 到 stub，仍可跑通跟读闭环。
+>
+> **发布版（任意服务器一键起）**：`cd backend && cp .env.example .env`（填口令/密钥）
+> `&& mkdir -p static/tts static/apk && docker compose -f docker-compose.prod.yml up -d --build`
+> ——api + postgres 全栈、空库自动全链迁移。详见 [`backend/README.md`](backend/README.md)「生产部署」与
+> [`docs/operations.md`](docs/operations.md)。
 
 ### 3. Android 客户端
 
@@ -80,9 +85,11 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
   要约 10-30 分钟。旧客户端打开 App 即可检测到新版本并下载安装；
   提示可「稍后再说」，**不强制**（仅当显式配置 `APP_MIN_SUPPORTED_VERSION`
   才进入不可跳过分支）。
-- **生产后端部署**：主实例公网 `http://118.89.58.84:5173/api/v1/`（库为本机
-  docker postgres 的专用库 `english_prod_5173`，起停见 `backend/scripts/deploy.sh`）。
-  v2.1.0 起 release 包内置 URL 即指 :5173，真机开箱即用。
+- **生产后端部署**：主实例公网 `http://118.89.58.84:5173/api/v1/`，运行于
+  `backend/docker-compose.prod.yml` 发布栈（容器 `english-api-prod` +
+  `english-postgres-prod`，库 `english_prod_5173`@独立卷 `english-prod-pgdata`；
+  起停/迁移/日志见 `backend/scripts/deploy.sh`）。v2.1.0 起 release 包内置 URL
+  即指 :5173，真机开箱即用。
   `:8000` 桥接已停止（云防火墙未映射公网，旧包外网不可达、也无必要）——
   旧包（≤2.0.0，内置 :8000）过渡 = 从 GitHub Release 直链手动安装 v2.1.0
   一次，此后其自身经 :5173 全自动 OTA：

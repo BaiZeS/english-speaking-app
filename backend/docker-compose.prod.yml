@@ -1,0 +1,63 @@
+# 发布/生产栈：一条命令起 API + Postgres（entrypoint 自动迁移）
+#   用法（本目录）: 填好 .env → docker compose -f docker-compose.prod.yml up -d --build
+#   日常运维入口:   scripts/deploy.sh {start|stop|restart|status|migrate|logs}
+# 与开发栈（docker-compose.yml / english-postgres / backend_postgres_data）互不干扰：
+# 容器名、网络、卷（english-prod-pgdata 显式钉名）全部隔离。
+name: english-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: english-postgres-prod
+    environment:
+      POSTGRES_USER: english
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?backend/.env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-english_prod_5173}
+    # 刻意不发布宿主端口：宿主 127.0.0.1:5432 是开发栈的库。
+    # 运维 psql/备份一律: docker exec english-postgres-prod psql -U english ...
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U english -d ${POSTGRES_DB:-english_prod_5173}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        # 国内机器在 .env 填镜像站（本机现值=https://mirrors.cloud.tencent.com/pypi/simple/）
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: english-assistant-api:${RELEASE_TAG:-local}
+    container_name: english-api-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # compose 插值优先级：environment > env_file —— .env 里给裸进程用的
+      # localhost DATABASE_URL 在这里被服务名地址覆盖。
+      DATABASE_URL: postgresql+asyncpg://english:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-english_prod_5173}
+    env_file:
+      - .env
+    ports:
+      - "${API_PORT:-5173}:8000"
+    volumes:
+      # 运行时仅有的两块可写状态（loguru 走 stderr，评分的 PCM 走 /tmp）
+      - ./static/tts:/app/static/tts
+      - ./static/apk:/app/static/apk
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  pgdata:
+    # 显式钉卷名：即便有人 -p backend 误用本文件，也绝不会挂到开发卷
+    # backend_postgres_data 上。切换完成后此卷 = 唯一生产数据，严禁 down -v。
+    name: english-prod-pgdata

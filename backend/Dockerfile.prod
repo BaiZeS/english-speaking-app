@@ -1,0 +1,41 @@
+# 生产/发布镜像：锁定依赖、无热重载、启动即自动迁移（见 docker-compose.prod.yml）
+# 依赖装 pip 而非 uv sync：uv.lock 锁的是 pythonhosted 绝对 URL，镜像站变量对
+# frozen 安装无效（国内 exit ~2KB/s 实测）；pip 走 index 相对路径，镜像站全程生效。
+# requirements-docker.txt 由 lock 导出：
+#   cd backend && uv export --frozen --no-hashes --no-emit-project --no-dev -o requirements-docker.txt
+# （升级依赖 = 改 pyproject → uv lock → 重导出此文件，三个动作放同一次提交）
+FROM python:3.11-slim
+
+# curl 供 HEALTHCHECK 用（slim 基础镜像不带）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 构建期源可换（默认 pypi.org 保持海外机器开箱可用；国内机器 .env 填镜像站，
+# compose 透传 ${PIP_INDEX_URL}）
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+
+WORKDIR /app
+
+# 依赖先装（层缓存友好：锁文件不变则秒过）
+COPY requirements-docker.txt ./
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# PYTHONPATH=/app 必须保留：不做 editable 安装，alembic console script 的
+# sys.path 不含 cwd，env.py 的 ``from app.config import settings`` 需要它。
+ENV PYTHONPATH=/app
+
+COPY alembic.ini ./
+COPY app ./app
+COPY data ./data
+COPY scripts/docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
+    CMD curl -fsS http://localhost:8000/api/v1/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/entrypoint.sh"]
