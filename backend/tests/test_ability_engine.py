@@ -17,7 +17,7 @@ conftest 的内存 sqlite (``Base.metadata.create_all`` 含全部表)。
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -267,19 +267,26 @@ def test_band_clamp_and_resolve_level() -> None:
 
 
 def test_bucket_events_only_trusted_and_in_window() -> None:
-    now = datetime.now(UTC)
+    # 锚定各日 UTC 正午: 用 "now - N 小时" 构造会产生跨午夜盲区 —— UTC 01:00~04:00
+    # 之间 now-3h 与 now-25h 落在同一日, "两个桶" 断言必挂 (2026-09-08 01:1xZ CI
+    # 红即此因, 与当次改动无关)。
+    today = datetime.now(UTC).date()
+
+    def at(day_offset: int) -> datetime:
+        return datetime.combine(today - timedelta(days=day_offset), time(12), tzinfo=UTC)
+
     rows = [
-        (now - timedelta(hours=3), "grammar", 60.0, 1.0),
-        (now - timedelta(hours=4), "grammar", 80.0, 1.0),
-        (now - timedelta(hours=5), "pronunciation", 95.0, 0.0),  # stub -> 不入轨迹
-        (now - timedelta(days=1, hours=1), "vocabulary", 70.0, 1.0),
-        (now - timedelta(days=40), "grammar", 50.0, 1.0),  # 90d 窗口内/7d 外
+        (at(0), "grammar", 60.0, 1.0),
+        (at(0), "grammar", 80.0, 1.0),
+        (at(0), "pronunciation", 95.0, 0.0),  # stub -> 不入轨迹
+        (at(1), "vocabulary", 70.0, 1.0),
+        (at(40), "grammar", 50.0, 1.0),  # 90d 窗口内/7d 外
     ]
     points = bucket_events(rows, days=7)
     assert len(points) == 2
-    today = next(p for p in points if p.date == now.date().isoformat())
-    assert today.grammar == pytest.approx(70.0) and today.events == 2
-    assert today.pronunciation is None and today.vocabulary is None
+    now_p = next(p for p in points if p.date == today.isoformat())
+    assert now_p.grammar == pytest.approx(70.0) and now_p.events == 2
+    assert now_p.pronunciation is None and now_p.vocabulary is None
     wide = bucket_events(rows, days=90)
     assert len(wide) == 3 and wide[0].grammar == pytest.approx(50.0)
 
