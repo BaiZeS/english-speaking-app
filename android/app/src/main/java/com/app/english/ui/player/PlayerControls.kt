@@ -69,6 +69,11 @@ fun ReferenceButton(
 /**
  * Single button that toggles between "start recording", "stop & submit",
  * and "re-record after a low score" depending on the current state.
+ *
+ * Deliberately one Button node whose label/color are expressions: the old
+ * three-branch `when` swapped entire Button call sites when isRecording/
+ * isSubmitting flipped, which destroyed the in-flight interactionSource and
+ * silently swallowed the press that caused the flip (fast tap-to-tap).
  */
 @Composable
 fun RecordButton(
@@ -81,29 +86,36 @@ fun RecordButton(
     onStopAndSubmit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when {
-        isSubmitting -> Button(
-            onClick = {},
-            modifier = modifier.fillMaxWidth(),
-            enabled = false
-        ) { Text("评分中...") }
-        isRecording -> Button(
-            onClick = onStopAndSubmit,
-            modifier = modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("停止录音并评分")
-        }
-        else -> Button(
-            onClick = { if (micGranted) onStartRecording() else onRequestPermission() },
-            modifier = modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.Mic, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (hasScore) "重录" else "开始录音")
-        }
+    Button(
+        onClick = {
+            if (isRecording) {
+                onStopAndSubmit()
+            } else {
+                if (micGranted) onStartRecording() else onRequestPermission()
+            }
+        },
+        enabled = !isSubmitting,
+        modifier = modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isRecording) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+        )
+    ) {
+        Icon(
+            imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+            contentDescription = null
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when {
+                isSubmitting -> "评分中..."
+                isRecording -> "停止录音并评分"
+                else -> if (hasScore) "重录" else "开始录音"
+            }
+        )
     }
 }
 

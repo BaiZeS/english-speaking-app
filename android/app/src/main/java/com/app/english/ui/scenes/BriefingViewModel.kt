@@ -52,6 +52,9 @@ class BriefingViewModel @Inject constructor(
     private val _isRecording = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
+    private val _micLevel = MutableStateFlow(0f)
+    val micLevel: StateFlow<Float> = _micLevel.asStateFlow()
+
     private val _isPlayingRef = MutableStateFlow(false)
     val isPlayingRef: StateFlow<Boolean> = _isPlayingRef.asStateFlow()
 
@@ -63,6 +66,9 @@ class BriefingViewModel @Inject constructor(
 
     init {
         restore()
+        viewModelScope.launch {
+            audioRecorder.levelFlow.collect { level -> _micLevel.value = level }
+        }
     }
 
     /** 崩溃恢复: 按 GET /sessions/{id} 的服务端状态机渲染, 不自算进度。 */
@@ -99,12 +105,19 @@ class BriefingViewModel @Inject constructor(
 
     fun startRecording() {
         if (_isRecording.value || _state.value.isSubmitting) return
-        try {
-            audioRecorder.start()
-            _isRecording.value = true
-            _state.update { it.copy(error = null) }
-        } catch (e: Exception) {
-            _state.update { it.copy(error = "录音启动失败：${e.message}") }
+        // 乐观翻位同 Mission: DOWN 当帧进入录音态, 硬件构造在 IO 协程里完成。
+        _isRecording.value = true
+        _micLevel.value = 0f
+        viewModelScope.launch {
+            try {
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopRecordingAndSubmit
+                )
+            } catch (e: Exception) {
+                _isRecording.value = false
+                _state.update { it.copy(error = "录音启动失败：${e.message}") }
+            }
         }
     }
 
@@ -112,6 +125,7 @@ class BriefingViewModel @Inject constructor(
         if (!_isRecording.value) return
         val step = _state.value.currentStep?.id ?: return
         _isRecording.value = false
+        _micLevel.value = 0f
         viewModelScope.launch {
             val file = audioRecorder.stop()
             if (file == null) {
@@ -125,6 +139,11 @@ class BriefingViewModel @Inject constructor(
                 file.delete()
             }
         }
+    }
+
+    /** 生命周期兜底: ON_STOP 时走停+提交(宁发不丢)。 */
+    fun stopRecordingIfActive() {
+        if (_isRecording.value) stopRecordingAndSubmit()
     }
 
     fun skipCurrent() {

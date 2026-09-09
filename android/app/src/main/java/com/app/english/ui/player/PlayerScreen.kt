@@ -39,6 +39,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingLevelIndicator
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -62,6 +63,8 @@ fun PlayerScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     LaunchedEffect(state.finished) {
         if (state.finished) onFinish()

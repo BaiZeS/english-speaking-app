@@ -72,6 +72,8 @@ data class MissionUiState(
     val hint: HintData? = null,
     val hintWarnsScore: Boolean = false,
     val finished: Boolean = false,
+    /** 录音期间的麦克风电平(0..1, 已 dBFS 映射+平滑), 由 AudioRecorder.levelFlow 喂。 */
+    val micLevel: Float = 0f,
     /** 一闪而过的提示(新任务达成 reason / 收藏结果)。 */
     val snackbar: String? = null,
     val error: String? = null
@@ -107,6 +109,11 @@ class MissionViewModel @Inject constructor(
 
     init {
         restore()
+        viewModelScope.launch {
+            audioRecorder.levelFlow.collect { level ->
+                _state.update { it.copy(micLevel = level) }
+            }
+        }
     }
 
     /** 恢复: 打基础没打完就退回; 否则按快照重绘气泡与清单。 */
@@ -172,17 +179,26 @@ class MissionViewModel @Inject constructor(
 
     fun startRecording() {
         if (_state.value.isRecording || _state.value.isSubmitting) return
-        try {
-            audioRecorder.start()
-            _state.update { it.copy(isRecording = true, error = null) }
-        } catch (e: Exception) {
-            _state.update { it.copy(error = "录音启动失败：${e.message}") }
+        // 乐观翻位: 按住放手的同一帧就把录音态立起来, 硬件启动挪到 IO 协程里,
+        // 主线程不再阻塞 AudioRecord 构造(旧写法既卡手感, 又给了双击过守卫的窗口)。
+        _state.update { it.copy(isRecording = true, micLevel = 0f, error = null) }
+        viewModelScope.launch {
+            try {
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopRecordingAndSend
+                )
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                }
+            }
         }
     }
 
     fun stopRecordingAndSend() {
         if (!_state.value.isRecording) return
-        _state.update { it.copy(isRecording = false) }
+        _state.update { it.copy(isRecording = false, micLevel = 0f) }
         viewModelScope.launch {
             val file = audioRecorder.stop()
             if (file == null) {
@@ -196,6 +212,11 @@ class MissionViewModel @Inject constructor(
                 file.delete()
             }
         }
+    }
+
+    /** 生命周期兜底: ON_STOP 时走停+发送(宁发不丢)。 */
+    fun stopRecordingIfActive() {
+        if (_state.value.isRecording) stopRecordingAndSend()
     }
 
     private suspend fun sendTurn(text: String?, audioB64: String?) {

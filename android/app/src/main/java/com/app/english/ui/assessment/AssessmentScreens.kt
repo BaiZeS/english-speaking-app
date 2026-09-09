@@ -52,6 +52,7 @@ import com.app.english.domain.model.AssessmentJudgement
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RadarChart
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.toRadarValue
 import com.app.english.ui.me.AbilityAxes
 import com.app.english.ui.player.PermissionHint
@@ -216,6 +217,8 @@ fun AssessmentScreen(
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
     var answerDraft by remember { mutableStateOf("") }
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     // 判级完成 -> 结果页(判级结果经 holder 交接, 路由不带载荷)。
     LaunchedEffect(state.phase) {

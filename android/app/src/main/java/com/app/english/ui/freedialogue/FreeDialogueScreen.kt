@@ -55,6 +55,7 @@ import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -71,6 +72,8 @@ fun FreeDialogueScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     LaunchedEffect(state.finished) {
         if (state.finished) onFinish()
@@ -203,37 +206,45 @@ private fun FreeDialogueContent(
             }
         }
 
-        when {
-            state.isSubmitting -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("评分并生成下一轮对话...")
-                }
+        if (state.isSubmitting) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("评分并生成下一轮对话...")
             }
-            state.isRecording -> {
-                Button(
-                    onClick = onStopAndSubmit,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Icon(Icons.Filled.Stop, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("停止回答并评分")
+        }
+        // Single Button node across states: the old three-branch `when` swapped
+        // widgets mid-gesture and swallowed fast taps (see PlayerControls.RecordButton).
+        Button(
+            onClick = {
+                if (state.isRecording) {
+                    onStopAndSubmit()
+                } else {
+                    if (micGranted) onStartRecording() else onRequestPermission()
                 }
-            }
-            else -> {
-                Button(
-                    onClick = { if (micGranted) onStartRecording() else onRequestPermission() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Mic, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (state.currentScore == null) "开始回答" else "回答下一轮")
+            },
+            enabled = !state.isSubmitting,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (state.isRecording) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.primary
                 }
-            }
+            )
+        ) {
+            Icon(
+                imageVector = if (state.isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+                contentDescription = null
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                when {
+                    state.isSubmitting -> "评分中..."
+                    state.isRecording -> "停止回答并评分"
+                    else -> if (state.currentScore == null) "开始回答" else "回答下一轮"
+                }
+            )
         }
 
         state.currentScore?.let { FreeScoreCard(it) }

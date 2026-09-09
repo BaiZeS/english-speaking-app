@@ -144,11 +144,18 @@ class AssessmentViewModel @Inject constructor(
 
     fun startRecording() {
         if (_flow.value.phase != AssessmentPhase.ANSWERING || _flow.value.audioBlocked) return
-        try {
-            audioRecorder.start()
-            _isRecording.value = true
-        } catch (e: Exception) {
-            _flow.update { it.copy(error = "录音启动失败：${e.message}") }
+        if (_isRecording.value) return
+        _isRecording.value = true
+        viewModelScope.launch {
+            try {
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopRecordingAndSubmit
+                )
+            } catch (e: Exception) {
+                _isRecording.value = false
+                _flow.update { it.copy(error = "录音启动失败：${e.message}") }
+            }
         }
     }
 
@@ -229,10 +236,17 @@ class AssessmentViewModel @Inject constructor(
 
     fun consumeError() = _flow.update { reduceAssessment(it, AssessmentEvent.ErrorShown) }
 
+    /** ON_STOP safety net: finish the live take (send, don't lose it). */
+    fun stopRecordingIfActive() {
+        if (_isRecording.value) stopRecordingAndSubmit()
+    }
+
     override fun onCleared() {
         super.onCleared()
         audioPlayer.release()
-        audioRecorder.cancel()
+        // Gate the cancel: the recorder is a singleton now, so clearing this screen
+        // must not tear down some other screen's live take.
+        if (_isRecording.value) audioRecorder.cancel()
         _isRecording.value = false
     }
 }

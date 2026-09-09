@@ -339,21 +339,29 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun startRecording() {
-        _state.update { it.copy(micLevel = 0f) }
         if (_state.value.isRecording || _state.value.isSubmitting) return
+        // Optimistic flip so the button reacts on the same frame and a fast
+        // second tap hits the guard above instead of racing an async update.
+        // hasRetaken must be judged while currentScore is still set.
+        _state.update {
+            it.copy(
+                isRecording = true,
+                micLevel = 0f,
+                hasRetaken = it.hasRetaken || it.currentScore != null,
+                currentScore = null,
+                error = null
+            )
+        }
         viewModelScope.launch {
             try {
-                audioRecorder.start()
-                _state.update {
-                    it.copy(
-                        isRecording = true,
-                        currentScore = null,
-                        error = null,
-                        hasRetaken = it.hasRetaken || it.currentScore != null
-                    )
-                }
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopAndSubmit
+                )
             } catch (e: Exception) {
-                _state.update { it.copy(error = "录音启动失败：${e.message}") }
+                _state.update {
+                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                }
             }
         }
     }
@@ -362,7 +370,7 @@ class PlayerViewModel @Inject constructor(
         if (!_state.value.isRecording) return
         val line = _state.value.currentLine ?: return
         viewModelScope.launch {
-            _state.update { it.copy(isRecording = false, isSubmitting = true) }
+            _state.update { it.copy(isRecording = false, isSubmitting = true, micLevel = 0f) }
             val file = audioRecorder.stop()
             if (file == null) {
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
@@ -392,6 +400,16 @@ class PlayerViewModel @Inject constructor(
             } catch (e: Exception) {
                 _state.update { it.copy(isSubmitting = false, error = "评分失败：${e.message}") }
             }
+        }
+    }
+
+    /** 生命周期兜底: ON_STOP 时走各家停+提交路径(宁发不丢)。 */
+    fun stopRecordingIfActive() {
+        if (!_state.value.isRecording) return
+        if (mode == PlayerMode.SHADOW) {
+            viewModelScope.launch { finishShadowRecording() }
+        } else {
+            stopAndSubmit()
         }
     }
 
@@ -525,22 +543,29 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch { finishShadowRecording() }
     }
 
-    private fun beginShadowPlayback(references: List<TtsAudio>) {
+    private suspend fun beginShadowPlayback(references: List<TtsAudio>) {
         val lines = _state.value.lines
         shadowDurationMs = references.map { it.durationMs.toLong() }
         shadowBoundaryMs = shadowBoundaries(shadowDurationMs, SHADOW_GAP_MS)
+        _state.update { it.copy(isRecording = true, micLevel = 0f) }
         try {
+            // Shadow is one continuous take over the whole passage: no 30s cap
+            // (the run legitimately runs longer); it ends via onComplete/stopShadow.
             audioRecorder.start(echoCancel = true)
         } catch (e: Exception) {
             _state.update {
-                it.copy(isPreparingShadow = false, error = "录音启动失败：${e.message}")
+                it.copy(
+                    isRecording = false,
+                    isPreparingShadow = false,
+                    micLevel = 0f,
+                    error = "录音启动失败：${e.message}"
+                )
             }
             return
         }
         _state.update {
             it.copy(
                 isPreparingShadow = false,
-                isRecording = true,
                 shadowCurrentIndex = 0,
                 shadowScoredCount = 0,
                 shadowScoreTotal = lines.size,

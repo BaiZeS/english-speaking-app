@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.data.local.MistakeWordEntity
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.LoadingState
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.components.ScoreBadge
 import com.app.english.ui.player.PermissionHint
@@ -68,6 +69,8 @@ fun MistakeDrillScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     LaunchedEffect(state.error) {
         state.error?.let { message ->
@@ -190,6 +193,12 @@ private fun DrillContent(
     }
 }
 
+/**
+ * Tap-toggle record button, kept as ONE Button node: the old three-branch
+ * `when` swapped Button call sites on isRecording/isSubmitting flips and
+ * destroyed the in-flight press (and its interactionSource) — a swallow-your-
+ * tap source. Same fold as PlayerControls.RecordButton.
+ */
 @Composable
 private fun DrillRecordButton(
     isRecording: Boolean,
@@ -200,29 +209,36 @@ private fun DrillRecordButton(
     onStartRecording: () -> Unit,
     onStopAndScore: () -> Unit
 ) {
-    when {
-        isSubmitting -> Button(
-            onClick = {},
-            modifier = Modifier.fillMaxWidth(),
-            enabled = false
-        ) { Text("评分中...") }
-        isRecording -> Button(
-            onClick = onStopAndScore,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("停止录音并评分")
-        }
-        else -> Button(
-            onClick = { if (micGranted) onStartRecording() else onRequestPermission() },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.Mic, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(if (hasScore) "重录" else "录音跟读")
-        }
+    Button(
+        onClick = {
+            if (isRecording) {
+                onStopAndScore()
+            } else {
+                if (micGranted) onStartRecording() else onRequestPermission()
+            }
+        },
+        enabled = !isSubmitting,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isRecording) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+        )
+    ) {
+        Icon(
+            imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
+            contentDescription = null
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when {
+                isSubmitting -> "评分中..."
+                isRecording -> "停止录音并评分"
+                else -> if (hasScore) "重录" else "录音跟读"
+            }
+        )
     }
 }
 

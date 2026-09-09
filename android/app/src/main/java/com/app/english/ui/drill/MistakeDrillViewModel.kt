@@ -103,14 +103,19 @@ class MistakeDrillViewModel @Inject constructor(
     }
 
     fun startRecording() {
-        _state.update { it.copy(micLevel = 0f) }
         if (_state.value.isRecording || _state.value.isSubmitting) return
+        // 乐观翻位: 录音态在点击同一帧立住, 慢的硬件启动在协程里追。
+        _state.update { it.copy(isRecording = true, micLevel = 0f, lastScore = null, error = null) }
         viewModelScope.launch {
             try {
-                audioRecorder.start()
-                _state.update { it.copy(isRecording = true, lastScore = null, error = null) }
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopAndScore
+                )
             } catch (e: Exception) {
-                _state.update { it.copy(error = "录音启动失败：${e.message}") }
+                _state.update {
+                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                }
             }
         }
     }
@@ -120,7 +125,7 @@ class MistakeDrillViewModel @Inject constructor(
         val word = current.currentWord ?: return
         if (!current.isRecording) return
         viewModelScope.launch {
-            _state.update { it.copy(isRecording = false, isSubmitting = true) }
+            _state.update { it.copy(isRecording = false, isSubmitting = true, micLevel = 0f) }
             val file = audioRecorder.stop()
             if (file == null) {
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
@@ -208,6 +213,11 @@ class MistakeDrillViewModel @Inject constructor(
     fun dismissError() = _state.update { it.copy(error = null) }
 
     fun dismissGraduated() = _state.update { it.copy(graduatedWord = null) }
+
+    /** 生命周期兜底: ON_STOP 时停+评分(宁发不丢)。 */
+    fun stopRecordingIfActive() {
+        if (_state.value.isRecording) stopAndScore()
+    }
 
     override fun onCleared() {
         super.onCleared()

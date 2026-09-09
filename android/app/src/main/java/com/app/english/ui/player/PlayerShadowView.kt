@@ -145,7 +145,11 @@ fun ShadowTranscript(
     }
 }
 
-/** Start / stop toggle for a shadowing run, disabled while preparing/scoring. */
+/**
+ * Start / stop toggle for a shadowing run, disabled while preparing/scoring.
+ * One Button node so a state flip can't recreate — and thereby cancel — an
+ * in-flight press the way the old three-branch `when` could.
+ */
 @Composable
 private fun ShadowControlButton(
     state: PlayerUiState,
@@ -155,29 +159,38 @@ private fun ShadowControlButton(
     onStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when {
-        state.isPreparingShadow || state.isSubmitting -> Button(
-            onClick = {},
-            modifier = modifier.fillMaxWidth(),
-            enabled = false
-        ) { Text(if (state.isSubmitting) "评分中..." else "准备中...") }
-        state.isRecording -> Button(
-            onClick = onStop,
-            modifier = modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-        ) {
-            Icon(Icons.Filled.Stop, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("停止并评分")
-        }
-        else -> Button(
-            onClick = { if (micGranted) onStart() else onRequestPermission() },
-            modifier = modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.PlayArrow, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("开始影子跟读")
-        }
+    val busy = state.isPreparingShadow || state.isSubmitting
+    Button(
+        onClick = {
+            if (state.isRecording) {
+                onStop()
+            } else {
+                if (micGranted) onStart() else onRequestPermission()
+            }
+        },
+        enabled = !busy,
+        modifier = modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (state.isRecording) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.primary
+            }
+        )
+    ) {
+        Icon(
+            imageVector = if (state.isRecording) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+            contentDescription = null
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            when {
+                state.isSubmitting -> "评分中..."
+                state.isPreparingShadow -> "准备中..."
+                state.isRecording -> "停止并评分"
+                else -> "开始影子跟读"
+            }
+        )
     }
 }
 

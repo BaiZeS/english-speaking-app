@@ -1,5 +1,6 @@
 package com.app.english.ui.scenes
 
+import android.Manifest
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,14 +17,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,13 +40,19 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.DrillGradeResult
 import com.app.english.domain.model.FoundationStepSpec
+import com.app.english.ui.components.HoldToTalkButton
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.theme.Spacings
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 
 /**
  * 打基础页(计划 §6.4): 顶部 step 进度点(f1..fN) + 按题型换卡片 +
  * 底部跳过。60 分以下不拦(可重录), 只用警示色; 跳过额度用完前置禁用。
  */
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun BriefingScreen(
     onBack: () -> Unit,
@@ -58,8 +62,12 @@ fun BriefingScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
+    val micLevel by viewModel.micLevel.collectAsStateWithLifecycle()
     val isPlayingRef by viewModel.isPlayingRef.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
+    val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     Column(
         modifier = modifier
@@ -82,6 +90,9 @@ fun BriefingScreen(
             spec = viewModel.currentSpec(),
             state = state,
             isRecording = isRecording,
+            micLevel = micLevel,
+            micGranted = micPermission.status.isGranted,
+            onRequestPermission = { micPermission.launchPermissionRequest() },
             isPlayingRef = isPlayingRef,
             draft = draft,
             onDraftChange = {
@@ -182,6 +193,9 @@ private fun StepCard(
     spec: FoundationStepSpec?,
     state: BriefingUiState,
     isRecording: Boolean,
+    micLevel: Float,
+    micGranted: Boolean,
+    onRequestPermission: () -> Unit,
     isPlayingRef: Boolean,
     draft: String,
     onDraftChange: (String) -> Unit,
@@ -232,6 +246,9 @@ private fun StepCard(
             RecordButtonRow(
                 isRecording = isRecording,
                 isSubmitting = state.isSubmitting,
+                micLevel = micLevel,
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
                 onStartRecord = onStartRecord,
                 onStopRecord = onStopRecord
             )
@@ -386,32 +403,23 @@ private fun MakeSentenceBody(
 private fun RecordButtonRow(
     isRecording: Boolean,
     isSubmitting: Boolean,
+    micLevel: Float,
+    micGranted: Boolean,
+    onRequestPermission: () -> Unit,
     onStartRecord: () -> Unit,
     onStopRecord: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacings.s1)) {
-        RecordingLevelIndicator(level = if (isRecording) 0.7f else 0f, active = isRecording)
+        RecordingLevelIndicator(level = micLevel, active = isRecording)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            FilledIconButton(
-                onClick = if (isRecording) onStopRecord else onStartRecord,
+            HoldToTalkButton(
+                isRecording = isRecording,
                 enabled = !isSubmitting,
-                modifier = Modifier.size(72.dp),
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (isRecording) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    }
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Mic,
-                    contentDescription = if (isRecording) "停止录音" else "开始录音",
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
+                onStart = onStartRecord,
+                onStop = onStopRecord
+            )
             Spacer1()
             Text(
                 text = when {

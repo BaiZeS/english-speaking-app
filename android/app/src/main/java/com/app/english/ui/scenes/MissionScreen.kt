@@ -1,5 +1,6 @@
 package com.app.english.ui.scenes
 
+import android.Manifest
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,20 +15,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
@@ -48,14 +45,20 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.TaskChip
+import com.app.english.ui.components.HoldToTalkButton
+import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.theme.Spacings
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
 
 /**
  * 实战对话页(计划 §6.4, 聊天软件式): 顶部任务 chips 横滑 + 气泡流(AI 点按播
  * TTS / 用户气泡下嵌润色) + HUD + 底部大录音键与「要提示」。退出确认 ->
  * finish-mission -> 复盘页。
  */
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun MissionScreen(
     onBack: () -> Unit,
@@ -68,6 +71,9 @@ fun MissionScreen(
     var showExitDialog by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
+
+    RecordingGuard(viewModel::stopRecordingIfActive)
 
     LaunchedEffect(state.bubbles.size) {
         if (state.bubbles.isNotEmpty()) {
@@ -126,6 +132,9 @@ fun MissionScreen(
                     input = input,
                     isRecording = state.isRecording,
                     isSubmitting = state.isSubmitting,
+                    micLevel = state.micLevel,
+                    micGranted = micPermission.status.isGranted,
+                    onRequestPermission = { micPermission.launchPermissionRequest() },
                     suggestion = state.suggestion,
                     onInputChange = {
                         input = it
@@ -407,6 +416,9 @@ private fun InputBar(
     input: String,
     isRecording: Boolean,
     isSubmitting: Boolean,
+    micLevel: Float,
+    micGranted: Boolean,
+    onRequestPermission: () -> Unit,
     suggestion: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -419,14 +431,14 @@ private fun InputBar(
             .padding(Spacings.s2),
         verticalArrangement = Arrangement.spacedBy(Spacings.s1)
     ) {
-        if (suggestion.isNotBlank() && !isRecording) {
+        if (suggestion.isNotBlank()) {
             Text(
                 text = "试试这么说：$suggestion",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        RecordingLevelIndicator(level = if (isRecording) 0.7f else 0f, active = isRecording)
+        RecordingLevelIndicator(level = micLevel, active = isRecording)
         Row(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(Spacings.s1)
@@ -435,28 +447,19 @@ private fun InputBar(
                 value = input,
                 onValueChange = onInputChange,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("打字, 或按右边话筒说话") },
+                placeholder = { Text("打字, 或按住右边话筒说话") },
                 maxLines = 3
             )
-            FilledIconButton(
-                onClick = if (isRecording) onStopRecord else onStartRecord,
+            HoldToTalkButton(
+                isRecording = isRecording,
                 enabled = !isSubmitting,
-                shape = CircleShape,
-                modifier = Modifier.size(56.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (isRecording) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    }
-                )
-            ) {
-                Icon(
-                    Icons.Filled.Mic,
-                    contentDescription = if (isRecording) "停止录音" else "开始录音",
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
-            }
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
+                onStart = onStartRecord,
+                onStop = onStopRecord,
+                buttonSize = 56.dp,
+                iconSize = 26.dp
+            )
             IconButton(onClick = onSend, enabled = input.isNotBlank() && !isSubmitting) {
                 Icon(
                     Icons.Filled.Send,

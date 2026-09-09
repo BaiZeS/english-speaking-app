@@ -19,9 +19,12 @@ object AudioModule {
     fun provideAudioEncoder(): AudioEncoder = AudioEncoder()
 
     @Provides
+    @Singleton
     fun provideAudioRecorder(@ApplicationContext context: Context): AudioRecorder =
         AudioRecorder(context)
 
+    // TODO(audio): same scoping bug as provideAudioRecorder had — each injected
+    // AudioPlayer is a fresh instance. Left as-is; not on the recording path.
     @Provides
     fun provideAudioPlayer(@ApplicationContext context: Context): AudioPlayer = AudioPlayer(context)
 }

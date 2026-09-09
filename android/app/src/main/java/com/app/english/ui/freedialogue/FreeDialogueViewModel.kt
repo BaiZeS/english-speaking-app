@@ -192,12 +192,15 @@ class FreeDialogueViewModel @Inject constructor(
 
     fun startRecording() {
         if (_state.value.isRecording || _state.value.isSubmitting) return
+        _state.update { it.copy(isRecording = true, currentScore = null, error = null) }
         viewModelScope.launch {
             try {
-                audioRecorder.start()
-                _state.update { it.copy(isRecording = true, currentScore = null, error = null) }
+                audioRecorder.start(
+                    maxDurationMs = AudioRecorder.MAX_TAKE_MS,
+                    onAutoStop = ::stopAndSubmit
+                )
             } catch (e: Exception) {
-                _state.update { it.copy(error = "录音启动失败：${e.message}") }
+                _state.update { it.copy(isRecording = false, error = "录音启动失败：${e.message}") }
             }
         }
     }
@@ -330,6 +333,11 @@ class FreeDialogueViewModel @Inject constructor(
     }
 
     fun dismissError() = _state.update { it.copy(error = null) }
+
+    /** 生命周期兜底: ON_STOP 时停+提交(宁发不丢)。 */
+    fun stopRecordingIfActive() {
+        if (_state.value.isRecording) stopAndSubmit()
+    }
 
     override fun onCleared() {
         super.onCleared()
