@@ -1,5 +1,17 @@
 # Changelog
 
+## 讯飞发音评测链路上线 — 2026-09-08（无客户端版本变更，真机无需重新下载）
+
+### 用户可感知
+- **发音评测真分上线**：实战/自由对话语音轮不再「超时」或发音被跳过——ISE 语音评测与 IAT 听写全链路真火冒烟通过（日志硬证 `xunfei ise ok` / `xunfei iat ok`）。单词重练（弱词，read_word）此前因协议节点头缺失被引擎 48195 静默拒掉，本次一并修复。
+
+### 工程摘要（真火证据 `/tmp/ise-smoke-*`；冒烟脚本 `backend/scripts/smoke_xunfei_ise.py`）
+- **根因（全部实测定位）**：① ISE/IAT 按 40ms/1280B 实时节奏发音频 → 整链 ≈ 语音时长×2 + LLM（最坏 2×20s 重试）> 手机 30s readTimeout（=「超时」）；② `read_word` 裸文本报 48195 SRecWrite，需 `ent=en_vip/tte=utf-8/'\uFEFF'+[content]|[word] 节点头`（流式版新口径）；③ 参考文本含 `( ) [ ] {` 引擎不出终帧挂到超时；④ 失败静默回退 stub → 发音证据丢弃（=「跳过」）。
+- 修复：3200B/10ms 快速节奏（18s 音频 19.1s→2.4s）；`settings.xunfei_{ise,iat}_timeout_s`（8s）服务层硬顶 + `recv_task` finally 收口；单帧音频 `aus=8`（旧代码永不结束的真 bug）；`sanitize_ref_text` 剔括号；回退日志带上讯飞 code/message/category/字节数。
+- 端点预算：mission 轮 ISE(证据)∥LLM(判分) 并行 gather + `judge_turn(hard_timeout_s=15)`（超时走既有 heuristic 降级）；dialogue 轮 anchored ISE 与 chat 并行、chat 25→12s；mission 每轮 `mission turn perf iat_ms=/pair_ms=/anchored=` 一行业绩日志。最坏 8+15 < 30s。
+- 分制澄清：实测 word 分 1-5（×20 映射**正确**，流式版仍是 5 分制，`ise_xml.py` 不动）。
+- 测试 +3（节点包装/括号剔除/单帧收口）；全量 514 passed；仅剩 14 个既有无关失败（app_version 9 / llm 4 / dialogue_polish 模型环境 1，改动前后一致红，另案处理）。
+
 ## 运维与凭据变更 — 2026-09-07（无客户端版本变更，真机无需重新下载）
 
 ### 用户可感知

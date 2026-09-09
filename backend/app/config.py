@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     xunfei_app_id: str = Field(default="")
     xunfei_api_key: str = Field(default="")
     xunfei_api_secret: str = Field(default="")
+    # ISE/IAT 单次调用硬上限 (秒): 快速节奏 3200B/10ms 下 18s 音频 ≈2.6s 发完,
+    # 冒烟实测终帧 ~1s 内返回; 上限必须远小于移动端 30s readTimeout,
+    # 让失败在服务层兜住而不是拖死整个 HTTP 请求 (见 docs/operations.md §6)。
+    xunfei_ise_timeout_s: float = Field(default=8.0)
+    xunfei_iat_timeout_s: float = Field(default=8.0)
 
     # ====== MiMo TTS ======
     mimo_api_key: str = Field(default="")

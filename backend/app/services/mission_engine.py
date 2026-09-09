@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -347,9 +348,9 @@ def fallback_turn(
     turn_index: int,
     user_text: str,
     tasks_state: Sequence[Mapping[str, Any]],
-    failure: LlmUnavailableError,
+    failure: Exception,
 ) -> tuple[MissionTurnJudgement, GradeSource, str]:
-    """LLM 不可用时的**确定性降级** (honest: source=heuristic, llm_source=stub).
+    """LLM 不可用/整轮超预算时的**确定性降级** (honest: source=heuristic, llm_source=stub).
 
     * reply/suggestion: 走参考剧本的下一行 (A 说 / B 示范) —— 剧本就是 T2 人工
       校对的"应该怎么说", 拿来撑住对话不冷场, 不冒充生成;
@@ -396,19 +397,28 @@ async def judge_turn(
     turns: Sequence[Mapping[str, Any]],
     user_text: str,
     turn_index: int,
+    hard_timeout_s: float | None = None,
 ) -> tuple[MissionTurnJudgement, GradeSource, str | None]:
     """实战单轮的综合 LLM 调用 (1 次; 坏 JSON 回喂重试 1 次; 再坏走降级).
 
     返回 ``(judgement, source, llm_source)``; 判分模型 = 服务端默认
     (:func:`app.services.drill_grader._resolve_judge_model`), 不吃客户端 ``model_id``。
+
+    ``hard_timeout_s``: 整轮 (含内置重试) 硬预算 —— 内层单次 timeout 是 20s,
+    坏 JSON 重试一遍最坏 40s; 移动端 OkHttp readTimeout 30s, 不封顶就是结构性
+    "评分失败: timeout"。超时不报错而是走既有 heuristic 降级 (宁缺勿滥)。
     """
     try:
-        judgement = await _judge(
+        judge_call = _judge(
             MissionTurnJudgement,
             turn_prompt(course, tasks_state, turns, user_text),
             max_tokens=TURN_MAX_TOKENS,
         )
-    except LlmUnavailableError as exc:
+        if hard_timeout_s is None:
+            judgement = await judge_call
+        else:
+            judgement = await asyncio.wait_for(judge_call, timeout=hard_timeout_s)
+    except (LlmUnavailableError, TimeoutError) as exc:
         return fallback_turn(course, turn_index, user_text, tasks_state, exc)
     return judgement, "llm", _resolve_judge_model()
 

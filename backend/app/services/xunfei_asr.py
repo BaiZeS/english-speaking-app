@@ -5,6 +5,15 @@
 
 输入 audio 须为 PCM L16 16kHz 单声道裸字节 (Android AudioRecord 直录).
 缺凭证或调用失败时回退 StubASRProvider.
+
+参数与节奏以 scripts/smoke_xunfei_ise.py 的实火冒烟为准 (2026-09-08):
+- streaming 版要求 ent=en_vip / tte=utf-8 / '\ufeff' BOM + [content]/[word]
+  节点头, 且节点头对 read_word 是功能性的 (裸文本 read_word 实测报 48195
+  SRecWrite error, 节点包装后正常);
+- read_sentence 参考文本含 ( ) [ ] 时引擎不报错也不出终帧 (实测挂到
+  server read timeout), 必须预先剔除;
+- 帧 ≤19200B (base64 后 ≤26000, 20000B 实测被协议层拒), 预录音频可远快于
+  实时发送: 3200B/10ms 下 17.9s 音频 2.6s 发完并拿到终帧, 逐词分不受影响.
 """
 
 from __future__ import annotations
@@ -14,6 +23,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 from datetime import UTC, datetime
 from email.utils import format_datetime
 from urllib.parse import urlencode
@@ -31,8 +41,12 @@ _ISE_HOST = "ise-api.xfyun.cn"
 _ISE_PATH = "/v2/open-ise"
 _ISE_URL = f"wss://{_ISE_HOST}{_ISE_PATH}"
 
-# 1280B = 40ms @ 16kHz 16bit mono (文档推荐)
-_FRAME_BYTES = 1280
+# 3200B = 100ms 音频 @ 16kHz 16bit mono; 实测远快于实时发包安全 (上限 19200B).
+_FRAME_BYTES = 3200
+_FRAME_PACE_S = 0.01
+
+# 实测 ( ) [ ] 会让句子引擎静默挂死 (不出终帧), 只能剔除兜底.
+_REF_FORBIDDEN_RE = re.compile(r"[()\[\]{}]")
 
 
 def _build_auth_url() -> str:
@@ -56,6 +70,17 @@ def _build_auth_url() -> str:
     return f"{_ISE_URL}?{params}"
 
 
+def sanitize_ref_text(ref_text: str) -> str:
+    """剔除 ISE 句子引擎不接受的括号类字符 (替换为空格, 不粘连单词)."""
+    return _REF_FORBIDDEN_RE.sub(" ", ref_text)
+
+
+def _ssb_text(ref_text: str, category: str) -> str:
+    """流式版 text 字段: '\ufeff'+ 必要节点 + 换行 + 参考文本 (剔除禁用字符)."""
+    node = "[word]" if category == "read_word" else "[content]"
+    return f"﻿{node}\n{sanitize_ref_text(ref_text)}"
+
+
 def _build_ssb_frame(ref_text: str, category: str) -> dict[str, object]:
     """第一帧: 建会话 (cmd=ssb), 不含音频.
 
@@ -68,9 +93,10 @@ def _build_ssb_frame(ref_text: str, category: str) -> dict[str, object]:
             "auf": "audio/L16;rate=16000",
             "category": category,
             "cmd": "ssb",
-            "ent": "en",
+            "ent": "en_vip",
             "sub": "ise",
-            "text": ref_text,
+            "text": _ssb_text(ref_text, category),
+            "tte": "utf-8",
             "ttp_skip": True,
         },
         "data": {"status": 0},
@@ -78,7 +104,7 @@ def _build_ssb_frame(ref_text: str, category: str) -> dict[str, object]:
 
 
 def _audio_frames(pcm: bytes) -> list[bytes]:
-    """PCM 切成 1280B 帧."""
+    """PCM 切成 _FRAME_BYTES 帧."""
     return [pcm[i : i + _FRAME_BYTES] for i in range(0, len(pcm), _FRAME_BYTES)]
 
 
@@ -97,9 +123,17 @@ class XunfeiASRProvider:
             return await self._stub.recognize(audio, ref_text, category=category)
 
         try:
-            xml = await self._evaluate(audio, ref_text, category)
+            xml = await asyncio.wait_for(
+                self._evaluate(audio, ref_text, category),
+                timeout=settings.xunfei_ise_timeout_s,
+            )
         except Exception as e:
-            logger.error("xunfei ise call failed, falling back to stub: {}", e)
+            logger.error(
+                "xunfei ise call failed, falling back to stub | category={} pcm_bytes={} err={}",
+                category,
+                len(audio),
+                e,
+            )
             return await self._stub.recognize(audio, ref_text, category=category)
 
         recognized, word_scores = parse_ise_xml(xml)
@@ -113,7 +147,11 @@ class XunfeiASRProvider:
         return AsrResult(recognized=recognized, word_scores=word_scores, source="xunfei")
 
     async def _evaluate(self, pcm: bytes, ref_text: str, category: str) -> str:
-        """流式发送 PCM 到 ISE, 返回累加后的结果 XML 字符串."""
+        """流式发送 PCM 到 ISE, 返回累加后的结果 XML 字符串.
+
+        整体时长由 recognize 外层的 settings.xunfei_ise_timeout_s 硬顶;
+        这里只负责建会话、发帧、收结果.
+        """
         frames = _audio_frames(pcm)
         if not frames:
             return ""
@@ -122,7 +160,7 @@ class XunfeiASRProvider:
         error: str | None = None
         done = asyncio.Event()
 
-        async with websockets.connect(_build_auth_url()) as ws:
+        async with websockets.connect(_build_auth_url(), open_timeout=5.0) as ws:
 
             async def receiver() -> None:
                 nonlocal result_xml, error
@@ -148,32 +186,37 @@ class XunfeiASRProvider:
                     done.set()
 
             recv_task = asyncio.create_task(receiver())
-
-            # 1. ssb 建会话 (无音频)
-            await ws.send(json.dumps(_build_ssb_frame(ref_text, category)))
-            # 2. auw 音频帧: aus 1=首, 2=中, 4=末; data.status 1=中, 2=末
-            for idx, chunk in enumerate(frames):
-                if idx == 0:
-                    aus, status = 1, 1
-                elif idx == len(frames) - 1:
-                    aus, status = 4, 2
-                else:
-                    aus, status = 2, 1
-                await ws.send(
-                    json.dumps(
-                        {
-                            "business": {"cmd": "auw", "aus": aus},
-                            "data": {
-                                "status": status,
-                                "data": base64.b64encode(chunk).decode("utf-8"),
-                            },
-                        }
+            try:
+                # 1. ssb 建会话 (无音频)
+                await ws.send(json.dumps(_build_ssb_frame(ref_text, category), ensure_ascii=False))
+                # 2. auw 音频帧: aus 8=一次性 (单帧), 1=首, 2=中, 4=末;
+                #    data.status 1=中, 2=末
+                n = len(frames)
+                for idx, chunk in enumerate(frames):
+                    if n == 1:
+                        aus, status = 8, 2
+                    elif idx == 0:
+                        aus, status = 1, 1
+                    elif idx == n - 1:
+                        aus, status = 4, 2
+                    else:
+                        aus, status = 2, 1
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "business": {"cmd": "auw", "aus": aus},
+                                "data": {
+                                    "status": status,
+                                    "data": base64.b64encode(chunk).decode("utf-8"),
+                                },
+                            }
+                        )
                     )
-                )
-                await asyncio.sleep(0.04)  # 40ms pacing (文档建议)
-
-            await asyncio.wait_for(done.wait(), timeout=30)
-            recv_task.cancel()
+                    if idx != n - 1:
+                        await asyncio.sleep(_FRAME_PACE_S)
+                await done.wait()
+            finally:
+                recv_task.cancel()
 
         if error:
             raise RuntimeError(error)

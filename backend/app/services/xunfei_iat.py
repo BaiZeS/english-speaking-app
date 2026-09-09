@@ -41,8 +41,11 @@ _IAT_HOST = "iat-api.xfyun.cn"
 _IAT_PATH = "/v2/iat"
 _IAT_URL = f"wss://{_IAT_HOST}{_IAT_PATH}"
 
-# 1280B = 40ms @ 16kHz 16bit mono (文档推荐)
-_FRAME_BYTES = 1280
+# 3200B = 100ms 音频 @ 16kHz 16bit mono. 预录音频可远快于实时发送
+# (ISE 冒烟实证 3200-19200B 大步帧安全、评分不受影响; 1280B/40ms 实时
+# 节奏会把一次转写拖成整段音频时长, 顶爆移动端 30s readTimeout).
+_FRAME_BYTES = 3200
+_FRAME_PACE_S = 0.01
 
 
 def _build_auth_url() -> str:
@@ -161,7 +164,7 @@ class XunfeiIatProvider:
         error: str | None = None
         done = asyncio.Event()
 
-        async with websockets.connect(_build_auth_url()) as ws:
+        async with websockets.connect(_build_auth_url(), open_timeout=5.0) as ws:
 
             async def receiver() -> None:
                 nonlocal error
@@ -186,29 +189,35 @@ class XunfeiIatProvider:
                     done.set()
 
             recv_task = asyncio.create_task(receiver())
-
-            # 1. 首帧: 建会话 + 首块音频 (status=0; 单帧音频直接 status=2)
-            await ws.send(json.dumps(_build_first_frame(frames[0], last=len(frames) == 1)))
-            await asyncio.sleep(0.04)  # 40ms pacing (文档建议)
-            # 2. 后续音频帧: data.status 1=中间帧, 2=末帧; 每帧必带 format/encoding
-            for idx, chunk in enumerate(frames[1:], start=1):
-                status = 2 if idx == len(frames) - 1 else 1
-                await ws.send(
-                    json.dumps(
-                        {
-                            "data": {
-                                "status": status,
-                                "format": "audio/L16;rate=16000",
-                                "encoding": "raw",
-                                "audio": base64.b64encode(chunk).decode("utf-8"),
+            try:
+                # 1. 首帧: 建会话 + 首块音频 (status=0; 单帧音频直接 status=2)
+                await ws.send(json.dumps(_build_first_frame(frames[0], last=len(frames) == 1)))
+                await asyncio.sleep(_FRAME_PACE_S)
+                # 2. 后续音频帧: data.status 1=中间帧, 2=末帧; 每帧必带 format/encoding
+                for idx, chunk in enumerate(frames[1:], start=1):
+                    status = 2 if idx == len(frames) - 1 else 1
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "data": {
+                                    "status": status,
+                                    "format": "audio/L16;rate=16000",
+                                    "encoding": "raw",
+                                    "audio": base64.b64encode(chunk).decode("utf-8"),
+                                }
                             }
-                        }
+                        )
                     )
-                )
-                await asyncio.sleep(0.04)  # 40ms pacing (文档建议)
+                    if idx != len(frames) - 1:
+                        await asyncio.sleep(_FRAME_PACE_S)
 
-            await asyncio.wait_for(done.wait(), timeout=30)
-            recv_task.cancel()
+                try:
+                    await asyncio.wait_for(done.wait(), timeout=settings.xunfei_iat_timeout_s)
+                except TimeoutError:
+                    if not error:
+                        error = f"iat wait timeout {settings.xunfei_iat_timeout_s}s"
+            finally:
+                recv_task.cancel()
 
         if error:
             raise RuntimeError(error)

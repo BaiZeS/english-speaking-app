@@ -57,7 +57,7 @@ class _FakeWS:
 
 
 @asynccontextmanager
-async def _fake_connect(_url: str) -> AsyncIterator[_FakeWS]:
+async def _fake_connect(_url: str, **_kw: object) -> AsyncIterator[_FakeWS]:
     ws = _FakeWS()
     yield ws
 
@@ -94,16 +94,33 @@ async def test_recognize_parses_real_xml(
     assert res.word_scores[0].ipa == "hh ax"
 
 
-def test_ssb_frame_defaults_to_read_sentence() -> None:
+def test_ssb_frame_read_sentence_wraps_content_node_with_bom() -> None:
+    """流式版 text 必带 '\ufeff' + [content] 节点 (2026-09-08 冒烟: read_word 裸文本 48195;
+    ent 也须为 en_vip, 普通版 en 已下线)."""
     frame = _build_ssb_frame("hello world", "read_sentence")
-    assert frame["business"]["category"] == "read_sentence"
-    assert frame["business"]["text"] == "hello world"
+    business = frame["business"]
+    assert business["category"] == "read_sentence"
+    assert business["ent"] == "en_vip"
+    assert business["tte"] == "utf-8"
+    assert business["text"] == "﻿[content]\nhello world"
 
 
-def test_ssb_frame_supports_read_word() -> None:
-    """单词重练: ssb 帧 category 须为 read_word (ISE 按单词评测)."""
+def test_ssb_frame_read_word_uses_word_node() -> None:
+    """单词重练: category=read_word, 节点头换成 [word] (ISE 按单词评测)."""
     frame = _build_ssb_frame("schedule", "read_word")
-    assert frame["business"]["category"] == "read_word"
+    business = frame["business"]
+    assert business["category"] == "read_word"
+    assert business["text"] == "﻿[word]\nschedule"
+
+
+def test_ssb_frame_strips_parentheses_that_hang_the_engine() -> None:
+    """实测: 参考文本含 ( ) [ ] 会让句子引擎不出终帧 (挂到超时), 必须剔除为空格."""
+    text = _build_ssb_frame("see a (big) play [now] {x}", "read_sentence")["business"]["text"]
+    body = text.split("\n", 1)[1]  # 节点头本身带 [content], 只检查正文行
+    assert "(" not in body and ")" not in body
+    assert "[" not in body and "]" not in body
+    assert "{" not in body and "}" not in body
+    assert "big" in body and "play" in body, "单词本身保留, 只换掉括号为空格"
 
 
 @pytest.mark.asyncio
@@ -112,7 +129,7 @@ async def test_recognize_forwards_category_to_ise(monkeypatch: pytest.MonkeyPatc
     sockets: list[_FakeWS] = []
 
     @asynccontextmanager
-    async def capturing_connect(_url: str) -> AsyncIterator[_FakeWS]:
+    async def capturing_connect(_url: str, **_kw: object) -> AsyncIterator[_FakeWS]:
         ws = _FakeWS()
         sockets.append(ws)
         yield ws
@@ -129,3 +146,27 @@ async def test_recognize_forwards_category_to_ise(monkeypatch: pytest.MonkeyPatc
     ssb = json.loads(sockets[0].sent[0])
     assert ssb["business"]["cmd"] == "ssb"
     assert ssb["business"]["category"] == "read_word"
+
+
+@pytest.mark.asyncio
+async def test_single_frame_audio_closes_stream_oneshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """单帧音频 (≤_FRAME_BYTES) 必须 aus=8+status=2 一次收口 —— 旧代码发 aus=1/status=1,
+    服务端永远等不到结束标识 (冒烟前发现的真 bug)."""
+    sockets: list[_FakeWS] = []
+
+    @asynccontextmanager
+    async def capturing_connect(_url: str, **_kw: object) -> AsyncIterator[_FakeWS]:
+        ws = _FakeWS()
+        sockets.append(ws)
+        yield ws
+
+    monkeypatch.setattr("app.services.xunfei_asr.websockets.connect", capturing_connect)
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_app_id", "f15f995b")
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_api_key", "fake_key")
+    monkeypatch.setattr("app.services.xunfei_asr.settings.xunfei_api_secret", "fake_secret")
+
+    res = await XunfeiASRProvider().recognize(b"\x00" * 512, "schedule", category="read_word")
+    assert res.source == "xunfei"
+    only_audio = json.loads(sockets[0].sent[1])
+    assert only_audio["business"] == {"cmd": "auw", "aus": 8}
+    assert only_audio["data"]["status"] == 2

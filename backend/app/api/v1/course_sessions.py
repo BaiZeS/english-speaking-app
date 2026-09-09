@@ -39,7 +39,9 @@ B 的局.
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import time
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -72,6 +74,16 @@ from app.services.drill_grader import (
 from app.services.mission_engine import MissionTaskView, Polish, ReviewReport
 
 router = APIRouter(tags=["course-sessions"])
+
+# ====== 语音轮次硬预算 (移动端 OkHttp readTimeout=30s, NetworkModule.kt) ======
+# 冒烟实测 (scripts/smoke_xunfei_ise.py, 2026-09-08): 快速节奏下 ISE/IAT 单轮
+# 正常 ~2-3s (18s 音频), 但引擎慢/挂死时无上限会拖穿整个 HTTP 请求 ——
+# ISE (= 转写锚定发音证据) 与 LLM 判分都只依赖本句 transcript, 彼此无关,
+# 并行后加和封顶: iat(8) + max(ise 8, llm 15) < 30; 超时/失败 = 诚实降级
+# (证据缺位, 绝不冒充)。
+ISE_TURN_BUDGET_S = 8.0
+IAT_TURN_BUDGET_S = 8.0
+LLM_TURN_BUDGET_S = 15.0
 
 # ====== 状态机常量 ======
 
@@ -1290,6 +1302,7 @@ async def submit_mission_turn(
     audio_bytes = decode_audio(req.audio_b64 or b"")
     user_text = (req.text or "").strip()
     input_kind = "text"
+    iat_ms = 0
     if not user_text:
         if not audio_bytes:
             raise AppError(
@@ -1297,11 +1310,20 @@ async def submit_mission_turn(
                 "mission turn needs audio_b64 or text",
                 "MISSION_INPUT_REQUIRED",
             )
-        transcript = (await transcribe_audio(audio_bytes) or "").strip()
+        _t_iat = time.monotonic()
+        try:
+            transcript = (
+                await asyncio.wait_for(transcribe_audio(audio_bytes), timeout=IAT_TURN_BUDGET_S)
+                or ""
+            ).strip()
+        except TimeoutError:
+            logger.warning("mission iat budget exceeded | budget_s={}", IAT_TURN_BUDGET_S)
+            transcript = ""
+        iat_ms = round((time.monotonic() - _t_iat) * 1000)
         if not transcript:
             raise AppError(
                 400,
-                "音频无法转写 (讯飞 IAT 未配置), 请改用 text 作答",
+                "音频无法转写 (讯飞 IAT 未配置或超时), 请改用 text 作答",
                 "TRANSCRIPT_UNAVAILABLE",
             )
         user_text = transcript[:ANSWER_MAX_CHARS]
@@ -1311,10 +1333,40 @@ async def submit_mission_turn(
     turns = cast("list[dict[str, Any]]", mission.get("turns") or [])
     turn_index = _as_int(mission.get("turn_count")) + 1
 
-    # 自由产出的发音证据 (转写锚定 ISE; 没配讯飞 -> None, 绝不拿回声 95 分冒充):
-    anchored = await mission_engine.anchored_pronunciation(audio_bytes, user_text)
-    judgement, score_source, llm_source = await mission_engine.judge_turn(
-        course, tasks_state, turns, user_text, turn_index
+    # 自由产出的发音证据 (转写锚定 ISE; 没配讯飞 -> None, 绝不拿回声 95 分冒充)。
+    # ISE 与 LLM 判分并行 (预算见模块常量): 判分不可失败 (judge_turn 自带 heuristic
+    # 降级), 发音证据失败/超时 -> None = 本轮维度缺位 (诚实)。
+    _t_pair = time.monotonic()
+    ise_task = asyncio.ensure_future(
+        asyncio.wait_for(
+            mission_engine.anchored_pronunciation(audio_bytes, user_text),
+            timeout=ISE_TURN_BUDGET_S,
+        )
+    )
+    try:
+        judgement, score_source, llm_source = await mission_engine.judge_turn(
+            course,
+            tasks_state,
+            turns,
+            user_text,
+            turn_index,
+            hard_timeout_s=LLM_TURN_BUDGET_S,
+        )
+    except Exception:
+        ise_task.cancel()  # 本轮作废时不留孤儿会话
+        raise
+    try:
+        anchored = await ise_task
+    except Exception as exc:  # 宁缺勿滥: 证据缺失不阻断本轮
+        logger.warning("mission anchored ise dropped | err={}", exc)
+        anchored = None
+    pair_ms = round((time.monotonic() - _t_pair) * 1000)
+    logger.info(
+        "mission turn perf | input={} iat_ms={} pair_ms={} anchored={}",
+        input_kind,
+        iat_ms,
+        pair_ms,
+        anchored is not None,
     )
     newly_done_raw = mission_engine.merge_task_progress(
         tasks_state, judgement.task_progress, turn_index=turn_index

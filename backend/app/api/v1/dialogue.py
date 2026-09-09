@@ -27,9 +27,11 @@ v2.0 P3 扩展 (§5.5-4 / §5.6 / §5.7 / §四 魔法字符串):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import json
+import time
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends
@@ -55,6 +57,15 @@ from app.services.xunfei_iat import XunfeiIatProvider
 
 router = APIRouter(tags=["dialogue"])
 _iat = XunfeiIatProvider()
+
+#: 语音轮硬预算 (OkHttp readTimeout=30s, android di/NetworkModule.kt:40): 每次语音
+#: 调用服务层已由 settings.xunfei_{ise,iat}_timeout_s (8s) 硬顶, 这里再包一层防发帧
+#: 走偏; 发音证据 (转写锚定 ISE) 与 chat 并行 (只依赖 transcript, 互不相干),
+#: 最坏 iat(8) + max(chat 12, ise 8.5) + 落库 ≈ 20.5s < 30。
+#: 2026-09-08 冒烟 (scripts/smoke_xunfei_ise.py): 3200B 快速节奏下 18s 语音 ~2.5s 发完.
+_VOICE_CALL_BUDGET_S = 8.0
+_LLM_TURN_BUDGET_S = 12.0
+_ISE_TASK_BUDGET_S = 8.5
 
 #: **LEGACY (v1.4.0 协议)**: 旧客户端把"当前这句话"的 user 回合填成这个占位文本.
 #: P3 起服务端不再依赖它做任何判断 (结构规则: 末尾 user 回合 = 当前输入), 这里只
@@ -222,10 +233,25 @@ async def turn(
     # 身份在调用 LLM **之前**解析: 错误的 user_id 要 404, 不能被下面的降级兜成 200.
     user = await _identity_user(db, req)
     audio_bytes = _decode_user_audio(req.user_audio_b64)
-    recognized_text = await _iat.transcribe(audio_bytes)
+    _t_iat = time.monotonic()
+    try:
+        recognized_text = await asyncio.wait_for(
+            _iat.transcribe(audio_bytes), timeout=_VOICE_CALL_BUDGET_S
+        )
+    except TimeoutError:
+        logger.warning("dialogue iat budget exceeded | budget_s={}", _VOICE_CALL_BUDGET_S)
+        recognized_text = None
+    iat_ms = round((time.monotonic() - _t_iat) * 1000)
     history = _apply_recognized_text(req.history, recognized_text)
+    logger.debug("dialogue turn perf | iat_ms={}", iat_ms)
     provider = get_llm_provider()
+    anchored_task: asyncio.Task[mission_engine.AnchoredPronunciation | None] | None = None
     if cast(bool, getattr(provider, "is_configured", False)):
+        # 发音证据只依赖转写文本, 与 chat 无依赖 -> 提前起跑, persist 前收账 (并行省一整段延迟).
+        if user is not None and audio_bytes and recognized_text:
+            anchored_task = asyncio.create_task(
+                mission_engine.anchored_pronunciation(audio_bytes, recognized_text)
+            )
         try:
             model = _resolve_model(req.model_id)
             messages = [
@@ -237,7 +263,7 @@ async def turn(
                 messages=messages,
                 temperature=0.6,
                 max_tokens=400,
-                timeout=25.0,
+                timeout=_LLM_TURN_BUDGET_S,
             )
             parsed = _parse_llm_json(completion.content)
             # ``_parse_llm_json`` 保证 reply/suggestion 键存在; reply 兜底在解析器里
@@ -246,6 +272,15 @@ async def turn(
             polish = mission_engine.coerce_polish(parsed.get("polish"))
             grammar = mission_engine.coerce_score(parsed.get("grammar_score"))
             vocabulary = mission_engine.coerce_score(parsed.get("vocabulary_score"))
+            anchored: mission_engine.AnchoredPronunciation | None = None
+            if anchored_task is not None:
+                try:
+                    anchored = await asyncio.wait_for(anchored_task, timeout=_ISE_TASK_BUDGET_S)
+                except TimeoutError:
+                    logger.warning(
+                        "dialogue anchored ise budget exceeded | budget_s={}",
+                        _ISE_TASK_BUDGET_S,
+                    )
             events = await _persist_turn_evidence(
                 db,
                 user=user,
@@ -253,8 +288,7 @@ async def turn(
                 model=model,
                 grammar=grammar,
                 vocabulary=vocabulary,
-                audio_bytes=audio_bytes,
-                recognized=recognized_text,
+                anchored=anchored,
                 polish=polish,
             )
             return DialogueTurnResponse(
@@ -270,6 +304,8 @@ async def turn(
                 llm_source=model,
             )
         except Exception as exc:
+            if anchored_task is not None and not anchored_task.done():
+                anchored_task.cancel()  # chat 挂掉的轮次不再要发音证据
             logger.warning("LLM turn failed; using stub. scene={} err={}", req.scene_id, exc)
 
     user_turns = sum(1 for item in history if item.get("role") == "user")
@@ -357,15 +393,15 @@ async def _persist_turn_evidence(
     model: str,
     grammar: float | None,
     vocabulary: float | None,
-    audio_bytes: bytes,
-    recognized: str | None,
+    anchored: mission_engine.AnchoredPronunciation | None,
     polish: Polish | None,
 ) -> list[AbilityEvidence]:
     """带身份时把自由对话轮写进 §5.6 画像管线; 不带身份 = 直接回空列表.
 
     判分完整性 (§5.7 + T3 先例): **客户端自选模型不等于可选判分口径** —— 只有当
     本轮走的就是服务端默认模型时, 语法/词汇分才进画像 (别的模型来的分只回给 UI,
-    不进 EWMA)。发音/流利证据来自转写锚定 ISE (讯飞未配置 = 不产出)。
+    不进 EWMA)。发音/流利证据来自转写锚定 ISE, 由调用方与 chat 并行算好后传入
+    (讯飞未配置 / 失败 / 超预算 = None, 宁缺勿滥)。
     """
     if user is None:
         return []
@@ -389,9 +425,6 @@ async def _persist_turn_evidence(
             "scores stay out of the ability profile",
             model,
         )
-    anchored = None
-    if audio_bytes and recognized:
-        anchored = await mission_engine.anchored_pronunciation(audio_bytes, recognized)
     if anchored is not None:
         events.append(
             AbilityEvidence(

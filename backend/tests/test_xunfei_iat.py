@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from app.services import xunfei_iat
 from app.services.xunfei_iat import (
     XunfeiIatProvider,
     finalize_wpgs,
@@ -127,7 +128,7 @@ def _make_fake_connect(
     opened: list[_FakeWS] = []
 
     @asynccontextmanager
-    async def fake_connect(_url: str) -> AsyncIterator[_FakeWS]:
+    async def fake_connect(_url: str, **_kw: object) -> AsyncIterator[_FakeWS]:
         ws = _FakeWS(responses)
         opened.append(ws)
         yield ws
@@ -156,7 +157,8 @@ async def test_transcribe_streams_frames_and_merges_results(
     monkeypatch.setattr("app.services.xunfei_iat.websockets.connect", fake_connect)
     _set_fake_credentials(monkeypatch)
 
-    pcm = b"\x00" * 5120  # 4 帧
+    fb = xunfei_iat._FRAME_BYTES  # 帧大小是节奏常量, 断言跟着常量走 (2026-09 快速节奏改造)
+    pcm = b"\x00" * fb * 4  # 4 帧
     text = await XunfeiIatProvider().transcribe(pcm)
 
     assert text == "I would like coffee"
@@ -173,7 +175,7 @@ async def test_transcribe_streams_frames_and_merges_results(
     assert first["data"]["status"] == 0
     assert first["data"]["format"] == "audio/L16;rate=16000"
     assert first["data"]["encoding"] == "raw"
-    assert base64.b64decode(first["data"]["audio"]) == pcm[0:1280]
+    assert base64.b64decode(first["data"]["audio"]) == pcm[0:fb]
     for idx in range(1, 4):
         frame = json.loads(ws.sent[idx])
         assert "business" not in frame  # IAT 音频帧不带 business
@@ -181,7 +183,7 @@ async def test_transcribe_streams_frames_and_merges_results(
         assert frame["data"]["status"] == expected_status
         assert frame["data"]["format"] == "audio/L16;rate=16000"
         assert frame["data"]["encoding"] == "raw"
-        assert base64.b64decode(frame["data"]["audio"]) == pcm[idx * 1280 : (idx + 1) * 1280]
+        assert base64.b64decode(frame["data"]["audio"]) == pcm[idx * fb : (idx + 1) * fb]
 
 
 @pytest.mark.asyncio
