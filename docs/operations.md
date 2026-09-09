@@ -86,7 +86,7 @@ docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f
   && docker cp english-postgres-prod:/tmp/bk.dump backend/logs/backup-$(date -u +%F).dump
 ```
 
-后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 526 测试，sqlite；CI 含 PG16）。Android 回归：三连（见第 3 节①）。
+后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **528 全绿**，sqlite；CI 含 PG16）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①）。
 
 ## 6. 已知边界 / 坑位（血泪清单）
 

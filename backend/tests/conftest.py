@@ -11,26 +11,49 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
-from app.config import settings
+from app.config import Settings, settings
 from app.db.base import Base
 from app.db.session import get_engine, get_sessionmaker
 from app.main import app
 
+# 部署可调字段: 生产机 backend/.env (env-first OTA、LLM 白名单/目录) 或 shell
+# export 会把部署值漏进共享的 settings 单例, 必须逐用例强制回代码默认值.
+# 新增此类字段一律加进清单 (**只增不减**); 需要非默认值的用例在测试体内自行
+# monkeypatch (运行于 autouse 之后), 彼此不冲突.
+_HERMETIC_CREDENTIAL_FIELDS = (
+    "mimo_api_key",
+    "xunfei_app_id",
+    "xunfei_api_key",
+    "xunfei_api_secret",
+    "llm_api_key",
+    "openai_api_key",
+    "aliyun_dashscope_key",
+)
+_HERMETIC_TUNING_FIELDS = (
+    "app_latest_version",
+    "app_apk_url",
+    "app_release_notes",
+    "app_min_supported_version",
+    "app_github_repo",
+    "app_github_token",
+    "app_github_asset_name",
+    "app_github_asset_glob",
+    "llm_base_url",
+    "llm_default_model",
+    "llm_allowed_models",
+    "llm_extra_models_json",
+)
+_HERMETIC_DEFAULTS = {
+    field: Settings.model_fields[field].default
+    for field in (*_HERMETIC_CREDENTIAL_FIELDS, *_HERMETIC_TUNING_FIELDS)
+}
+
 
 @pytest.fixture(autouse=True)
-def _hermetic_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """强制 stub 路径: 开发机 shell 可能带真实凭据 (如 ~/.bashrc 的 MIMO_API_KEY),
-    测试不得依赖也不得触达外部服务. 需要凭据的用例在测试内自行 monkeypatch 覆盖."""
-    for field in (
-        "mimo_api_key",
-        "xunfei_app_id",
-        "xunfei_api_key",
-        "xunfei_api_secret",
-        "llm_api_key",
-        "openai_api_key",
-        "aliyun_dashscope_key",
-    ):
-        monkeypatch.setattr(settings, field, "", raising=False)
+def _hermetic_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """强制 stub + 清盒路径: 测试不得依赖本机部署配置, 也不得触达外部服务."""
+    for field, default in _HERMETIC_DEFAULTS.items():
+        monkeypatch.setattr(settings, field, default, raising=False)
 
 
 @pytest_asyncio.fixture(autouse=True)

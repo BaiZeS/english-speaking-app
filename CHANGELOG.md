@@ -1,5 +1,12 @@
 # Changelog
 
+## 测试基线归零 — 2026-09-08（无客户端版本变更，真机无需重新下载）
+
+### 工程摘要
+- 既有 14 个「基线红」（`test_app_version_resolver`×9 / `test_llm_provider`×2 / `test_llm_endpoints`×2 / `test_dialogue_polish`×1）确诊为**部署配置泄漏**，非代码缺陷：生产机 `backend/.env` 经 `Settings(env_file=".env")` 把 env-first OTA 与 LLM 白名单/目录等调优字段灌进测试共享的 settings 单例（同码在无 .env 的 CI 全绿、stash 隔离前后同红为证）。
+- 修复 = `tests/conftest.py` 清盒 fixture 升级为 `_hermetic_settings`：凭据之外，再把 12 个调优字段逐用例强制回代码默认值（清单只增不减，见文件内注释约定）。零产品代码改动。
+- 基线：**528 passed / 0 failed**——本机带 .env、shell 故意投毒（`APP_LATEST_VERSION=9.9.9` + LLM 白名单全量注入）均全绿；operations.md「基线 526 测试」口径同步更新。
+
 ## 讯飞发音评测链路上线 — 2026-09-08（无客户端版本变更，真机无需重新下载）
 
 ### 用户可感知
