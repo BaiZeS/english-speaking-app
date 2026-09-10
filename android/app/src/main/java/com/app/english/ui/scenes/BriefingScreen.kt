@@ -40,6 +40,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.DrillGradeResult
 import com.app.english.domain.model.FoundationStepSpec
+import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.HoldToTalkButton
 import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingLevelIndicator
@@ -85,40 +86,52 @@ fun BriefingScreen(
             )
         }
         ProgressDots(state)
-        state.error?.let { message -> ErrorBanner(message, viewModel::dismissError) }
-        StepCard(
-            spec = viewModel.currentSpec(),
-            state = state,
-            isRecording = isRecording,
-            micLevel = micLevel,
-            micGranted = micPermission.status.isGranted,
-            onRequestPermission = { micPermission.launchPermissionRequest() },
-            isPlayingRef = isPlayingRef,
-            draft = draft,
-            onDraftChange = {
-                draft = it
-                viewModel.updateDraft(it)
-            },
-            onPlayReference = viewModel::playReference,
-            onStartRecord = viewModel::startRecording,
-            onStopRecord = viewModel::stopRecordingAndSubmit,
-            onSubmitText = viewModel::submitText
-        )
-        if (state.unlockedMission) {
-            Button(
+        // 快照没到手时由下面的 ErrorState 承担(带「重试」), 不再叠一条只能「知道了」
+        // 的横幅 —— 同一个错误说两遍, 且其中一遍没有出路。
+        state.error
+            ?.takeUnless { state.needsSnapshotRetry }
+            ?.let { message -> ErrorBanner(message, viewModel::dismissError) }
+        if (state.needsSnapshotRetry) {
+            // 快照压根没到手: 这一屏无事可做, 给「重试」而不是永远亮着的题目卡。
+            ErrorState(
+                message = state.emptyStepsExplanation,
+                onRetry = viewModel::restore
+            )
+        } else {
+            StepCard(
+                spec = viewModel.currentSpec(),
+                state = state,
+                isRecording = isRecording,
+                micLevel = micLevel,
+                micGranted = micPermission.status.isGranted,
+                onRequestPermission = { micPermission.launchPermissionRequest() },
+                isPlayingRef = isPlayingRef,
+                draft = draft,
+                onDraftChange = {
+                    draft = it
+                    viewModel.updateDraft(it)
+                },
+                onPlayReference = viewModel::playReference,
+                onStartRecord = viewModel::startRecording,
+                onStopRecord = viewModel::stopRecordingAndSubmit,
+                onSubmitText = viewModel::submitText
+            )
+        }
+        when {
+            state.unlockedMission -> Button(
                 onClick = { onOpenMission(viewModel.sessionId) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
             ) { Text("打基础完成, 进入实战对话") }
-        } else {
-            OutlinedButton(
+
+            // 清单还没到手就不渲染这一行: 以前它会在加载失败时永久宣称
+            // "跳过额度已用完", 而同屏右上角还印着 "跳过额度 2/2"。
+            state.showsSkipRow -> OutlinedButton(
                 onClick = viewModel::skipCurrent,
                 enabled = state.canSkip,
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (state.canSkip) "跳过这一步" else "跳过额度已用完")
-            }
+            ) { Text(state.skipLabel) }
         }
     }
 }
@@ -217,7 +230,7 @@ private fun StepCard(
         ) {
             if (spec == null) {
                 Text(
-                    text = if (state.steps.isEmpty()) "正在恢复会话…" else "全部步骤已完成",
+                    text = state.emptyStepsExplanation,
                     style = MaterialTheme.typography.bodyMedium
                 )
                 return@Column

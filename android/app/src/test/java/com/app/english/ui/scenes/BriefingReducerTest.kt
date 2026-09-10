@@ -117,4 +117,99 @@ class BriefingReducerTest {
         assertEquals(-1, next.currentIndex)
         assertNull(next.currentStep)
     }
+
+    // ---- 跳过键文案: 一个原因一句话 -----------------------------------------
+
+    /**
+     * 用户报告的第三个症状的回归锁: 松手开始评分的那一刻, 屏幕底部曾宣称
+     * "跳过额度已用完", 而同屏右上角还印着 "跳过额度 2/2"。
+     */
+    @Test
+    fun gradingDoesNotClaimQuotaExhausted() {
+        val grading = progress(skipsRemaining = 2).toUiState().copy(isSubmitting = true)
+        assertEquals(SkipAffordance.Grading, grading.skipAffordance)
+        assertFalse(grading.canSkip)
+        assertEquals("评分中…", grading.skipLabel)
+        // 额度本身一点没动 —— 误报的自证。
+        assertEquals(2, grading.skipsRemaining)
+    }
+
+    @Test
+    fun quotaExhaustedIsTheOnlyStateThatSaysSo() {
+        val exhausted = progress(skipsRemaining = 0).toUiState()
+        assertEquals(SkipAffordance.NoQuota, exhausted.skipAffordance)
+        assertFalse(exhausted.canSkip)
+        assertEquals("跳过额度已用完 (每场 2 次)", exhausted.skipLabel)
+    }
+
+    @Test
+    fun enabledIsTheOnlyStateThatOffersSkipping() {
+        val ready = progress(skipsRemaining = 1).toUiState()
+        assertEquals(SkipAffordance.Enabled, ready.skipAffordance)
+        assertTrue(ready.canSkip)
+        assertEquals("跳过这一步", ready.skipLabel)
+        assertTrue(ready.showsSkipRow)
+    }
+
+    @Test
+    fun allStepsDoneSaysCompletedNotQuotaExhausted() {
+        val done = progress(statuses = listOf("passed", "passed")).toUiState()
+        assertEquals(SkipAffordance.NothingToSkip, done.skipAffordance)
+        assertFalse(done.canSkip)
+        assertEquals("全部步骤已完成", done.skipLabel)
+    }
+
+    @Test
+    fun emptyChecklistHidesTheRowInsteadOfInventingAReason() {
+        val empty = BriefingUiState()
+        assertEquals(SkipAffordance.Restoring, empty.skipAffordance)
+        assertFalse(empty.showsSkipRow)
+        // 未加载态不得对外宣称还有额度可用。
+        assertEquals(0, empty.skipsRemaining)
+    }
+
+    // ---- 空快照三态: 加载中 / 加载失败 / 已完成 ------------------------------
+
+    @Test
+    fun emptyStepsWhileLoadingSaysRestoring() {
+        val state = BriefingUiState(isLoading = true)
+        assertEquals("正在恢复会话…", state.emptyStepsExplanation)
+        assertFalse(state.needsSnapshotRetry)
+    }
+
+    /**
+     * 加载失败此前也显示"正在恢复会话…", 于是那一屏**永远在恢复**, 且底部同时
+     * 误报额度用完。失败必须给出可重试的错误态。
+     */
+    @Test
+    fun failedLoadOffersRetryInsteadOfRestoringForever() {
+        val failed = reduceBriefing(
+            BriefingUiState(),
+            BriefingEvent.Failed("连不上服务器, 请检查网络或「设置」里的服务器地址。")
+        )
+        assertFalse(failed.isLoading)
+        assertTrue(failed.needsSnapshotRetry)
+        assertEquals("打基础清单没能加载出来", failed.emptyStepsExplanation)
+        assertFalse(failed.showsSkipRow)
+    }
+
+    @Test
+    fun restoringEventKeepsTheChecklistAndClearsTheError() {
+        val failed = reduceBriefing(
+            progress().toUiState(),
+            BriefingEvent.Failed("boom")
+        )
+        val retrying = reduceBriefing(failed, BriefingEvent.Restoring)
+        assertTrue(retrying.isLoading)
+        assertNull(retrying.error)
+        // 重试不该把已经拿到的清单抹掉。
+        assertEquals(3, retrying.steps.size)
+    }
+
+    @Test
+    fun completedChecklistIsNotMistakenForALoadFailure() {
+        val done = progress(statuses = listOf("passed", "passed")).toUiState()
+        assertEquals("全部步骤已完成", done.emptyStepsExplanation)
+        assertFalse(done.needsSnapshotRetry)
+    }
 }

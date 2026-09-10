@@ -7,7 +7,7 @@ import com.app.english.audio.AudioEncoder
 import com.app.english.audio.AudioPlayer
 import com.app.english.audio.AudioRecorder
 import com.app.english.data.local.SettingsStore
-import com.app.english.data.remote.backendErrorMessage
+import com.app.english.data.remote.sessionMessage
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.SessionRepository
 import com.app.english.domain.model.FoundationStepSpec
@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import retrofit2.HttpException
 
 /**
  * 打基础页(计划 §6.4 BriefingScreen): 服务端状态机驱动 —— 进页 GET 恢复快照,
@@ -74,13 +73,21 @@ class BriefingViewModel @Inject constructor(
     /** 崩溃恢复: 按 GET /sessions/{id} 的服务端状态机渲染, 不自算进度。 */
     fun restore() {
         viewModelScope.launch {
+            _state.update { reduceBriefing(it, BriefingEvent.Restoring) }
             try {
                 val loaded = sessionRepository.get(sessionId)
                 snapshot = loaded
                 _course.value = loaded.course
                 _state.value = loaded.briefing.toUiState()
             } catch (e: Exception) {
-                _state.update { it.copy(error = e.userMessage()) }
+                // Failed 顺带清 isLoading: "加载失败"与"仍在恢复"是两回事, 界面据此
+                // 给「重试」, 而不是一句永远亮着的"正在恢复会话…" + 底部误报额度。
+                _state.update {
+                    reduceBriefing(
+                        it,
+                        BriefingEvent.Failed(e.sessionMessage("加载打基础清单失败"))
+                    )
+                }
             }
         }
     }
@@ -197,8 +204,12 @@ class BriefingViewModel @Inject constructor(
     }
 }
 
-/** 后端 message(TRANSCRIPT_UNAVAILABLE 等码本身是中文)优先, 退回异常文本。 */
-internal fun Throwable.userMessage(): String = when (this) {
-    is HttpException -> backendErrorMessage() ?: "提交失败 (${code()})"
-    else -> message ?: "提交失败"
-}
+/**
+ * 提交类异常的中文文案。
+ *
+ * 曾经优先取后端 `message`, 而状态机 409 的 message 是英文
+ * (`"skip budget exhausted (2/2); finish the remaining steps"`), 读超时的异常
+ * message 更是裸单词 `"timeout"` —— 两者都直上过中文界面的红字区。现统一走
+ * [sessionMessage]: code 命中中文表 > 后端中文 message > 调用方兜底, 永不出英文。
+ */
+internal fun Throwable.userMessage(): String = sessionMessage(fallback = "提交失败")

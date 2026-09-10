@@ -9,6 +9,8 @@ import com.app.english.audio.AudioRecorder
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.remote.backendErrorCode
 import com.app.english.data.remote.backendErrorMessage
+import com.app.english.data.remote.sessionErrorCodeText
+import com.app.english.data.remote.sessionMessage
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.ExpressionRepository
 import com.app.english.data.repository.PolishCollectRequest
@@ -47,15 +49,20 @@ sealed interface MissionBubble {
     ) : MissionBubble
 }
 
-/** 409/400 等状态机错误的 Snackbar 文案(按后端 error.code 分支)。 */
-fun missionErrorCodeText(code: String?, fallback: String?): String = when (code) {
-    "MISSION_FINISHED" -> "本场已收工, 去看复盘报告吧"
-    "SESSION_CONCURRENT_UPDATE" -> "会话刚在别处被更新, 请退出后重新进入"
-    "SESSION_NOT_ACTIVE" -> "本场会话已结束"
+/**
+ * 409/400 等状态机错误的 Snackbar 文案。
+ *
+ * 通用码表在 [sessionErrorCodeText](按 code 命中中文 > 后端中文 message > 兜底,
+ * 永不出英文)。这里只覆盖**实战页语境下含义不同**的一条: `WRONG_STAGE` 在实战页
+ * 意味着"打基础还没走完", 在打基础页则是"按清单顺序来"。
+ */
+fun missionErrorCodeText(code: String?, backendMessage: String?): String = when (code) {
     "WRONG_STAGE" -> "请先完成打基础步骤"
-    "MISSION_INPUT_REQUIRED" -> "说点什么或打字再发送"
-    "TRANSCRIPT_UNAVAILABLE" -> "这段语音没能转写出文字, 试试打字发送"
-    else -> fallback ?: "发送失败, 请重试"
+    else -> sessionErrorCodeText(
+        code = code,
+        backendMessage = backendMessage,
+        fallback = "发送失败, 请重试"
+    )
 }
 
 data class MissionUiState(
@@ -349,7 +356,10 @@ class MissionViewModel @Inject constructor(
 
 private fun Throwable.missionMessage(): String = when (this) {
     is HttpException -> missionErrorCodeText(backendErrorCode(), backendErrorMessage())
-    else -> message ?: "发送失败, 请重试"
+    // 读超时的异常 message 是裸英文 "timeout", 此前被原样渲染成红字; 更要紧的是
+    // 超时**不代表服务端没做完** —— 收工的复盘报告往往已经落库, 所以文案引导去
+    // 复盘/历史里确认, 而不是让人反复重点「收工」(生产日志里那 4 连 409 即由此来)。
+    else -> sessionMessage(fallback = "发送失败, 请重试")
 }
 
 private const val BRIEFING_NOT_DONE = "实战还没解锁, 先把打基础清单走完"
