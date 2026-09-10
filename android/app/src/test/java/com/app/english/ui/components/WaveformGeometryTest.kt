@@ -168,7 +168,9 @@ class WaveformGeometryTest {
         assertTrue(
             waveformContentDescription(quiet, WaveformPresentation.LIVE).contains("还没拾到声音")
         )
-        assertTrue(waveformContentDescription(emptyList(), WaveformPresentation.LIVE).contains("暂无采样"))
+        assertTrue(
+            waveformContentDescription(emptyList(), WaveformPresentation.LIVE).contains("暂无采样")
+        )
     }
 
     private companion object {

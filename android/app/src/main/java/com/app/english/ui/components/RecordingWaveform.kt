@@ -137,14 +137,12 @@ private const val SAMPLE_INTERVAL_MS =
  * 无障碍描述写成纯函数: 这是屏幕上唯一每 40 ms 变一次的读屏文案, 语义说错比不播更糟
  * —— 停录之后还播报"正在录音"就是在撒谎。
  */
-fun waveformContentDescription(
-    samples: List<Float>,
-    presentation: WaveformPresentation
-): String = when {
-    presentation == WaveformPresentation.IDLE -> "麦克风波形, 空闲"
-    samples.isEmpty() -> "麦克风波形, 暂无采样"
-    presentation == WaveformPresentation.LIVE && WaveformGeometry.isSilentFrame(samples) ->
-        "正在录音, 还没拾到声音"
-    presentation == WaveformPresentation.LIVE -> "正在录音, 音量波形向左滚动"
-    else -> "刚刚这条录音的波形"
-}
+fun waveformContentDescription(samples: List<Float>, presentation: WaveformPresentation): String =
+    when {
+        presentation == WaveformPresentation.IDLE -> "麦克风波形, 空闲"
+        samples.isEmpty() -> "麦克风波形, 暂无采样"
+        presentation == WaveformPresentation.LIVE && WaveformGeometry.isSilentFrame(samples) ->
+            "正在录音, 还没拾到声音"
+        presentation == WaveformPresentation.LIVE -> "正在录音, 音量波形向左滚动"
+        else -> "刚刚这条录音的波形"
+    }

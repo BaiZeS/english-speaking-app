@@ -191,10 +191,7 @@ data class TapToTalkCopy(
  * 各 VM 只在开录时赋 [startedAtMs]、停录时不重置(重置要散在五条退出路径上, 漏一条
  * 就是一个静静往上累假的计时器), 所以这里用 [whileRecording] 一次性兜住。
  */
-data class TakeTimer(
-    val startedAtMs: Long? = null,
-    val capMs: Long? = null
-) {
+data class TakeTimer(val startedAtMs: Long? = null, val capMs: Long? = null) {
     /** 不在录的时候退化成"这条会不会自动发送"的静态提示, 而不是继续累加秒数。 */
     fun whileRecording(recording: Boolean): TakeTimer =
         if (recording) this else copy(startedAtMs = null)
