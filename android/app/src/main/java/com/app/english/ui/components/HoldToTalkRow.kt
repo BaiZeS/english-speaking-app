@@ -143,17 +143,21 @@ fun TapToTalkRow(row: TapToTalkRowUi, modifier: Modifier = Modifier) {
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(
-                imageVector = if (row.isRecording) Icons.Filled.Stop else row.labels.idleIcon,
+                imageVector = if (row.isRecording) Icons.Filled.Stop else row.display.idleIcon,
                 contentDescription = null
             )
             Spacer(Modifier.width(8.dp))
-            Text(row.labels.label(row.isRecording, row.isBusy))
+            Text(row.display.label(row.isRecording, row.isBusy))
         }
-        TakeElapsedText(timer = row.timer.whileRecording(row.isRecording))
+        val live = row.display.startedAtMs.takeIf { row.isRecording }
+        TakeElapsedText(startedAtMs = live, capMs = row.display.capMs)
     }
 }
 
-/** [TapToTalkRow] 的入参。 */
+/**
+ * [TapToTalkRow] 的入参。计时入参与话术合成一个 [display]: detekt 的
+ * `LongParameterList` 门槛是函数 8 / 构造器 9, 这一行的输入本来就已经贴边。
+ */
 class TapToTalkRowUi(
     val waveform: StateFlow<List<Float>>,
     val isRecording: Boolean,
@@ -163,19 +167,28 @@ class TapToTalkRowUi(
     val onRequestPermission: () -> Unit,
     val onStart: () -> Unit,
     val onStop: () -> Unit,
-    val timer: TakeTimer = TakeTimer(),
-    val labels: TapToTalkCopy = TapToTalkCopy()
+    val display: TapToTalkDisplay = TapToTalkDisplay()
 ) {
     /** 无权限时点一下只申请权限, 绝不进录音态(否则界面在演一场没开麦的录音)。 */
     fun onIdleTap() = if (micGranted) onStart() else onRequestPermission()
 }
 
-/** 点按面三态话术 + 空闲图标(影子跟读进场是"开始一整段", 不是"说一句话")。 */
-data class TapToTalkCopy(
+/**
+ * 点按面要展示的东西: 三态话术 + 空闲图标(影子跟读进场是"开始一整段", 不是"说一句话")
+ * + 计时入参。
+ *
+ * [startedAtMs] 是本次开录的墙钟毫秒, [capMs] 是**真的**传给 `AudioRecorder.start`
+ * 的上限(null = 这条不会自动发送)。各 VM 只在开录时赋 [startedAtMs]、停录时不重置
+ * (重置得散在五条退出路径上, 漏一条就是一个静静往上累假的计时器), 所以由
+ * [TapToTalkRow] 用 isRecording 一次性门控。
+ */
+data class TapToTalkDisplay(
     val idle: String = "点一下开始回答",
     val holding: String = "点一下结束并发送",
     val busy: String = "评分中…",
-    val idleIcon: ImageVector = Icons.Filled.Mic
+    val idleIcon: ImageVector = Icons.Filled.Mic,
+    val startedAtMs: Long? = null,
+    val capMs: Long? = null
 ) {
     fun label(isRecording: Boolean, isBusy: Boolean): String = when {
         isBusy -> busy
@@ -185,32 +198,18 @@ data class TapToTalkCopy(
 }
 
 /**
- * 点按面的计时入参: [startedAtMs] 是"本次开录的墙钟毫秒", [capMs] 是**真的**传给
- * `AudioRecorder.start` 的上限(null = 不会自动发送)。
- *
- * 各 VM 只在开录时赋 [startedAtMs]、停录时不重置(重置要散在五条退出路径上, 漏一条
- * 就是一个静静往上累假的计时器), 所以这里用 [whileRecording] 一次性兜住。
- */
-data class TakeTimer(val startedAtMs: Long? = null, val capMs: Long? = null) {
-    /** 不在录的时候退化成"这条会不会自动发送"的静态提示, 而不是继续累加秒数。 */
-    fun whileRecording(recording: Boolean): TakeTimer =
-        if (recording) this else copy(startedAtMs = null)
-}
-
-/**
  * 录音进行中的已用时; 空闲时退化成"这条会不会自动发送"的提示。
  *
- * 算术与文案全在 [RecordingTakeClock](纯 Kotlin + 注入 now, 有单测钉住边界),
- * 这里只负责按 [TICK_INTERVAL_MS] 掀一次重组 —— 组合项里不留任何时间减法, 免得又长出
- *  fifth 一份 `System.currentTimeMillis() - start` 的方言。
+ * 算术与文案全在 [RecordingTakeClock](纯 Kotlin + 注入 now, 有单测钉住边界), 这里只
+ * 负责按 [TICK_INTERVAL_MS] 掀一次重组 —— 组合项里不留任何时间减法, 免得各处又长出一
+ * 份 `System.currentTimeMillis() - start` 的方言。
  *
- * `capMs = null`(影子跟读没上限)时 [RecordingTakeClock.capHint] 返回 null, 空闲态
- * 什么都不画, 也永远不会出现"即将自动发送"这种吓唬。
+ * [capMs] 为 null(影子跟读没有上限)时 [RecordingTakeClock.capHint] 返回 null: 空闲态
+ * 什么都不画, 也永远不会出现"即将自动发送"那种吓唬。
  */
 @Composable
-fun TakeElapsedText(timer: TakeTimer, modifier: Modifier = Modifier) {
-    var nowMs by remember { mutableLongStateOf(0L) }
-    val startedAtMs = timer.startedAtMs
+fun TakeElapsedText(startedAtMs: Long?, capMs: Long?, modifier: Modifier = Modifier) {
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(startedAtMs) {
         if (startedAtMs != null) {
             while (true) {
@@ -221,15 +220,15 @@ fun TakeElapsedText(timer: TakeTimer, modifier: Modifier = Modifier) {
     }
     val elapsedMs = startedAtMs?.let { RecordingTakeClock.elapsedMs(it, nowMs) } ?: 0L
     val text = if (startedAtMs != null) {
-        RecordingTakeClock.takeElapsedLabel(startedAtMs, nowMs, timer.capMs)
+        RecordingTakeClock.takeElapsedLabel(startedAtMs, nowMs, capMs)
     } else {
-        RecordingTakeClock.capHint(timer.capMs)
+        RecordingTakeClock.capHint(capMs)
     }
     if (text == null) return
     Text(
         text = text,
         style = MaterialTheme.typography.labelMedium,
-        color = if (RecordingTakeClock.isNearCap(elapsedMs, timer.capMs)) {
+        color = if (RecordingTakeClock.isNearCap(elapsedMs, capMs)) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant

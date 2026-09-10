@@ -23,8 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.Line
-import com.app.english.ui.components.TakeTimer
-import com.app.english.ui.components.TapToTalkCopy
+import com.app.english.ui.components.TapToTalkDisplay
 import com.app.english.ui.components.TapToTalkRow
 import com.app.english.ui.components.TapToTalkRowUi
 import com.app.english.ui.theme.color
@@ -80,11 +79,9 @@ fun PlayerShadowView(
                 onRequestPermission = onRequestPermission,
                 onStart = onStart,
                 onStop = onStop,
-                timer = TakeTimer(
+                display = TapToTalkDisplay(
                     startedAtMs = state.recordingStartedAtMs,
-                    capMs = state.takeCapMs
-                ),
-                labels = TapToTalkCopy(
+                    capMs = state.takeCapMs,
                     idle = "点一下开始整段跟读",
                     holding = "点一下结束并评分",
                     busy = if (state.isPreparingShadow) "准备标准音中…" else "评分中…",

@@ -53,8 +53,7 @@ import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingGuard
-import com.app.english.ui.components.TakeTimer
-import com.app.english.ui.components.TapToTalkCopy
+import com.app.english.ui.components.TapToTalkDisplay
 import com.app.english.ui.components.TapToTalkRow
 import com.app.english.ui.components.TapToTalkRowUi
 import com.app.english.ui.theme.color
@@ -231,11 +230,9 @@ private fun FreeDialogueContent(
                 onRequestPermission = onRequestPermission,
                 onStart = onStartRecording,
                 onStop = onStopAndSubmit,
-                timer = TakeTimer(
+                display = TapToTalkDisplay(
                     startedAtMs = state.recordingStartedAtMs,
-                    capMs = state.takeCapMs
-                ),
-                labels = TapToTalkCopy(
+                    capMs = state.takeCapMs,
                     idle = if (state.currentScore == null) {
                         "点一下开始回答"
                     } else {
