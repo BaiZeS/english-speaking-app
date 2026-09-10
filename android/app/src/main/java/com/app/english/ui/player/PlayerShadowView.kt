@@ -11,12 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,8 +23,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.Line
-import com.app.english.ui.components.RecordingLevelIndicator
+import com.app.english.ui.components.TakeTimer
+import com.app.english.ui.components.TapToTalkCopy
+import com.app.english.ui.components.TapToTalkRow
+import com.app.english.ui.components.TapToTalkRowUi
 import com.app.english.ui.theme.color
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Composable fragments for the shadowing (整段影子跟读) practice mode.
@@ -43,6 +43,7 @@ import com.app.english.ui.theme.color
 @Composable
 fun PlayerShadowView(
     state: PlayerUiState,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onStart: () -> Unit,
@@ -65,17 +66,31 @@ fun PlayerShadowView(
             lineScores = state.lineScores
         )
         if (!micGranted) PermissionHint(onRequestPermission = onRequestPermission)
-        RecordingLevelIndicator(
-            level = state.micLevel,
-            active = state.isRecording,
-            modifier = Modifier.fillMaxWidth()
-        )
-        ShadowControlButton(
-            state = state,
-            micGranted = micGranted,
-            onRequestPermission = onRequestPermission,
-            onStart = onStart,
-            onStop = onStop
+        // 影子跟读按 D4 保留**点按**手势: 一整段课连续跟读动辄几十秒到几分钟, 没有
+        // 人能一直按住不松手。诚实的做法不是说"按住", 而是说"点一下开始"并把两样
+        // 证据摆出来: 会滚的波形 + 真的在走的计时器。
+        // capMs 取自 state —— 影子跟读开录时传的是 null(无上限), 所以
+        // RecordingTakeClock.capHint 给 null, 这一屏**不会**出现"即将自动发送"。
+        TapToTalkRow(
+            row = TapToTalkRowUi(
+                waveform = waveform,
+                isRecording = state.isRecording,
+                isBusy = state.isPreparingShadow || state.isSubmitting,
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
+                onStart = onStart,
+                onStop = onStop,
+                timer = TakeTimer(
+                    startedAtMs = state.recordingStartedAtMs,
+                    capMs = state.takeCapMs
+                ),
+                labels = TapToTalkCopy(
+                    idle = "点一下开始整段跟读",
+                    holding = "点一下结束并评分",
+                    busy = if (state.isPreparingShadow) "准备标准音中…" else "评分中…",
+                    idleIcon = Icons.Filled.PlayArrow
+                )
+            )
         )
         if (state.isPreparingShadow) {
             ShadowProgressRow("正在准备标准音...")
@@ -142,55 +157,6 @@ fun ShadowTranscript(
                 }
             }
         }
-    }
-}
-
-/**
- * Start / stop toggle for a shadowing run, disabled while preparing/scoring.
- * One Button node so a state flip can't recreate — and thereby cancel — an
- * in-flight press the way the old three-branch `when` could.
- */
-@Composable
-private fun ShadowControlButton(
-    state: PlayerUiState,
-    micGranted: Boolean,
-    onRequestPermission: () -> Unit,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val busy = state.isPreparingShadow || state.isSubmitting
-    Button(
-        onClick = {
-            if (state.isRecording) {
-                onStop()
-            } else {
-                if (micGranted) onStart() else onRequestPermission()
-            }
-        },
-        enabled = !busy,
-        modifier = modifier.fillMaxWidth(),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (state.isRecording) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
-        )
-    ) {
-        Icon(
-            imageVector = if (state.isRecording) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-            contentDescription = null
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                state.isSubmitting -> "评分中..."
-                state.isPreparingShadow -> "准备中..."
-                state.isRecording -> "停止并评分"
-                else -> "开始影子跟读"
-            }
-        )
     }
 }
 

@@ -16,8 +16,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -28,7 +26,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -50,6 +47,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.ABILITY_DIMENSIONS
 import com.app.english.domain.model.AssessmentJudgement
 import com.app.english.ui.components.ErrorState
+import com.app.english.ui.components.HoldToTalkCopy
+import com.app.english.ui.components.HoldToTalkRow
+import com.app.english.ui.components.HoldToTalkRowUi
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RadarChart
 import com.app.english.ui.components.RecordingGuard
@@ -60,6 +60,7 @@ import com.app.english.ui.theme.Spacings
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * CEFR 测评三屏(计划 §6.4): 引导 -> 做题(录音或文本) -> 判级结果。
@@ -267,6 +268,7 @@ fun AssessmentScreen(
 
             else -> QuestionBody(
                 state = state,
+                waveform = viewModel.waveform,
                 isRecording = isRecording,
                 micGranted = micPermission.status.isGranted,
                 onRequestMic = { micPermission.launchPermissionRequest() },
@@ -291,6 +293,7 @@ fun AssessmentScreen(
 @Composable
 private fun QuestionBody(
     state: AssessmentFlowState,
+    waveform: StateFlow<List<Float>>,
     isRecording: Boolean,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
@@ -337,6 +340,7 @@ private fun QuestionBody(
 
             else -> AnswerInput(
                 answerDraft = answerDraft,
+                waveform = waveform,
                 isRecording = isRecording,
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,
@@ -447,6 +451,7 @@ private fun TranscriptUnavailableCard() {
 @Composable
 private fun AnswerInput(
     answerDraft: String,
+    waveform: StateFlow<List<Float>>,
     isRecording: Boolean,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
@@ -467,42 +472,34 @@ private fun AnswerInput(
         if (!micGranted && !audioBlocked) {
             PermissionHint(onRequestPermission = onRequestMic)
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Spacings.s2)
+        // 语音作答: 长按面(测评朗读题每句都是短句 + 30s 上限)。这一页此前**根本没有**
+        // 录音条(计划 §2.6 E4), 所以这里是新增而不是修复: HoldToTalkRow 自带滚动的
+        // RecordingWaveform, 松开即提交由话术说清楚。
+        // 无权限时按下去只弹权限申请, 不进录音态(与弱词本同一套口径)。
+        if (!audioBlocked) {
+            HoldToTalkRow(
+                row = HoldToTalkRowUi(
+                    waveform = waveform,
+                    isRecording = isRecording,
+                    isBusy = false,
+                    micGranted = micGranted,
+                    onRequestPermission = onRequestMic,
+                    onStart = onStartRecord,
+                    onStop = onStopRecord,
+                    labels = HoldToTalkCopy(
+                        idle = "按住说话作答 · 松开发送",
+                        holding = "松开即提交本题",
+                        busy = "提交中…"
+                    )
+                )
+            )
+        }
+        Button(
+            onClick = onSubmitText,
+            enabled = answerDraft.isNotBlank() && !isRecording,
+            modifier = Modifier.fillMaxWidth().height(48.dp)
         ) {
-            if (!audioBlocked) {
-                OutlinedButton(
-                    // 无权限先申请权限, 有权限才真正开麦(与弱词训练同一套口径)。
-                    onClick = {
-                        when {
-                            isRecording -> onStopRecord()
-                            micGranted -> onStartRecord()
-                            else -> onRequestMic()
-                        }
-                    },
-                    modifier = Modifier.weight(1f).height(48.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                        contentDescription = if (isRecording) "停止并提交" else "语音作答"
-                    )
-                    Text(
-                        text = when {
-                            isRecording -> " 停止并提交"
-                            micGranted -> " 语音作答"
-                            else -> " 先授予录音权限"
-                        }
-                    )
-                }
-            }
-            Button(
-                onClick = onSubmitText,
-                enabled = answerDraft.isNotBlank(),
-                modifier = Modifier.weight(1f).height(48.dp)
-            ) {
-                Text("提交本题")
-            }
+            Text(if (audioBlocked) "提交本题" else "改用文本提交本题")
         }
     }
 }

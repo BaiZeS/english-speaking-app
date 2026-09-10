@@ -14,10 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,9 +40,11 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.data.local.MistakeWordEntity
 import com.app.english.domain.model.ScoreResult
+import com.app.english.ui.components.HoldToTalkCopy
+import com.app.english.ui.components.HoldToTalkRow
+import com.app.english.ui.components.HoldToTalkRowUi
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingGuard
-import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.components.ScoreBadge
 import com.app.english.ui.player.PermissionHint
 import com.app.english.ui.player.ReferenceButton
@@ -53,6 +52,7 @@ import com.app.english.ui.player.SubScoreRow
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Mistake/weak word drill: play the standard pronunciation, record the word,
@@ -108,6 +108,7 @@ fun MistakeDrillScreen(
             )
             else -> DrillContent(
                 state = state,
+                waveform = viewModel.waveform,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 onPlayDemo = viewModel::playDemo,
@@ -124,6 +125,7 @@ fun MistakeDrillScreen(
 @Composable
 private fun DrillContent(
     state: MistakeDrillUiState,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onPlayDemo: () -> Unit,
@@ -154,12 +156,8 @@ private fun DrillContent(
         if (!micGranted) {
             PermissionHint(onRequestPermission = onRequestPermission)
         }
-        RecordingLevelIndicator(
-            level = state.micLevel,
-            active = state.isRecording,
-            modifier = Modifier.fillMaxWidth()
-        )
         DrillRecordButton(
+            waveform = waveform,
             isRecording = state.isRecording,
             isSubmitting = state.isSubmitting,
             hasScore = state.lastScore != null,
@@ -194,13 +192,19 @@ private fun DrillContent(
 }
 
 /**
- * Tap-toggle record button, kept as ONE Button node: the old three-branch
- * `when` swapped Button call sites on isRecording/isSubmitting flips and
- * destroyed the in-flight press (and its interactionSource) — a swallow-your-
- * tap source. Same fold as PlayerControls.RecordButton.
+ * 弱词本的录音行: **长按**(计划 D4 —— 一个词是最短的短句, 按住比点按更少误录, 而且
+ * 松开即送评省一次点击)。
+ *
+ * 节点稳定性(旧注释把这条写反过一次, 现在的表述是准的):
+ *  - 不安全的是**在 `isRecording`/`isSubmitting` 的分支间换 Button 调用点**: 那会销毁
+ *    在途的 `interactionSource`, 把触发翻转的那次按压吃掉。[HoldToTalkRow] 只有一个
+ *    永不停启的 `pointerInput(Unit)` 节点, 录音态只落到兄弟文案/波形上, 所以不会复发。
+ *  - 安全的是按**构造期就固定的**入参(例如 PlayerScreen 按 PlayerMode 分派长按/点按) ——
+ *    一次按压期间它不可能翻转。
  */
 @Composable
 private fun DrillRecordButton(
+    waveform: StateFlow<List<Float>>,
     isRecording: Boolean,
     isSubmitting: Boolean,
     hasScore: Boolean,
@@ -209,37 +213,22 @@ private fun DrillRecordButton(
     onStartRecording: () -> Unit,
     onStopAndScore: () -> Unit
 ) {
-    Button(
-        onClick = {
-            if (isRecording) {
-                onStopAndScore()
-            } else {
-                if (micGranted) onStartRecording() else onRequestPermission()
-            }
-        },
-        enabled = !isSubmitting,
-        modifier = Modifier.fillMaxWidth(),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isRecording) {
-                MaterialTheme.colorScheme.error
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
+    HoldToTalkRow(
+        row = HoldToTalkRowUi(
+            waveform = waveform,
+            isRecording = isRecording,
+            isBusy = isSubmitting,
+            micGranted = micGranted,
+            onRequestPermission = onRequestPermission,
+            onStart = onStartRecording,
+            onStop = onStopAndScore,
+            labels = HoldToTalkCopy(
+                idle = if (hasScore) "按住重念 · 松开发送" else "按住念这个词 · 松开发送",
+                holding = "松开完成录音",
+                busy = "评分中…"
+            )
         )
-    ) {
-        Icon(
-            imageVector = if (isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-            contentDescription = null
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                isSubmitting -> "评分中..."
-                isRecording -> "停止录音并评分"
-                else -> if (hasScore) "重录" else "录音跟读"
-            }
-        )
-    }
+    )
 }
 
 @Composable

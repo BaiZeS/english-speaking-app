@@ -18,11 +18,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,10 +53,15 @@ import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingGuard
+import com.app.english.ui.components.TakeTimer
+import com.app.english.ui.components.TapToTalkCopy
+import com.app.english.ui.components.TapToTalkRow
+import com.app.english.ui.components.TapToTalkRowUi
 import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
 @Composable
@@ -125,6 +127,7 @@ fun FreeDialogueScreen(
             )
             else -> FreeDialogueContent(
                 state = state,
+                waveform = viewModel.waveform,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 onPlayAssistant = viewModel::playLatestAssistant,
@@ -140,6 +143,7 @@ fun FreeDialogueScreen(
 @Composable
 private fun FreeDialogueContent(
     state: FreeDialogueUiState,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onPlayAssistant: () -> Unit,
@@ -213,39 +217,35 @@ private fun FreeDialogueContent(
                 Text("评分并生成下一轮对话...")
             }
         }
-        // Single Button node across states: the old three-branch `when` swapped
-        // widgets mid-gesture and swallowed fast taps (see PlayerControls.RecordButton).
-        Button(
-            onClick = {
-                if (state.isRecording) {
-                    onStopAndSubmit()
-                } else {
-                    if (micGranted) onStartRecording() else onRequestPermission()
-                }
-            },
-            enabled = !state.isSubmitting,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (state.isRecording) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.primary
-                }
+        // 自由对话按 D4 保留**点按**(一轮回答可以说到 30 秒上限, 没人按得住), 换
+        // 文案诚实 + 真计时: 空闲写"30 秒后自动发送", 录中写"0:07"(最后 5 秒变
+        // "0:26 · 即将自动发送"并转警示色)。这一页此前既没有波形也没有计时, 于是
+        // "点了开始回答之后界面完全不动"就是用户报的那个观感。
+        // 手势节点仍然只有一个 Button(见 TapToTalkRow) —— 换控件才是旧的吞按压根因。
+        TapToTalkRow(
+            row = TapToTalkRowUi(
+                waveform = waveform,
+                isRecording = state.isRecording,
+                isBusy = state.isSubmitting,
+                micGranted = micGranted,
+                onRequestPermission = onRequestPermission,
+                onStart = onStartRecording,
+                onStop = onStopAndSubmit,
+                timer = TakeTimer(
+                    startedAtMs = state.recordingStartedAtMs,
+                    capMs = state.takeCapMs
+                ),
+                labels = TapToTalkCopy(
+                    idle = if (state.currentScore == null) {
+                        "点一下开始回答"
+                    } else {
+                        "点一下回答下一轮"
+                    },
+                    holding = "点一下结束并发送",
+                    busy = "评分中…"
+                )
             )
-        ) {
-            Icon(
-                imageVector = if (state.isRecording) Icons.Filled.Stop else Icons.Filled.Mic,
-                contentDescription = null
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                when {
-                    state.isSubmitting -> "评分中..."
-                    state.isRecording -> "停止回答并评分"
-                    else -> if (state.currentScore == null) "开始回答" else "回答下一轮"
-                }
-            )
-        }
+        )
 
         state.currentScore?.let { FreeScoreCard(it) }
 
