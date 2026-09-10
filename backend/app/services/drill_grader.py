@@ -94,8 +94,8 @@ LLM_MAX_TOKENS = 400
 #
 # 另一半契约 (语音轮 ISE/IAT + mission 轮 LLM) 写在 ``app/api/v1/course_sessions.py``
 # 顶部的 ``*_TURN_BUDGET_S`` 块 —— 改任何一边都要重新核对下面的求和。
-# 课程生成**故意不在**本契约内: 它是 202 + 轮询的后台作业 (``course_generator.
-# GEN_TIMEOUT_S`` = 240s/次), 30s 对它不成立, 给它加硬预算只会让整课骨架必然降级。
+# 课程生成**故意不在**本契约内: 它是 202 + 轮询的后台作业, 单次调用给 240s
+# (``course_generator.GEN_TIMEOUT_S``), 30s 对它不成立 —— 给它加硬预算等于让骨架段必然降级。
 #
 # 最坏求和 (契约要求 < 30s; 装不下的两行标了 (*) / (**) 并写明归属, 由
 # tests/test_latency_budget.py 钉死这张表):
