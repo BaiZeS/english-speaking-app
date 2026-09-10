@@ -42,6 +42,10 @@ _HERMETIC_TUNING_FIELDS = (
     "llm_default_model",
     "llm_allowed_models",
     "llm_extra_models_json",
+    # 讯飞单次调用硬顶: 同步路径的时延求和把它当"同请求内其它 await"算进预算
+    # (tests/test_latency_budget.py), 部署改大它不能让求和测试悄悄变绿/变红.
+    "xunfei_ise_timeout_s",
+    "xunfei_iat_timeout_s",
 )
 _HERMETIC_DEFAULTS = {
     field: Settings.model_fields[field].default
