@@ -41,13 +41,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.DrillGradeResult
 import com.app.english.domain.model.FoundationStepSpec
 import com.app.english.ui.components.ErrorState
-import com.app.english.ui.components.HoldToTalkButton
+import com.app.english.ui.components.HoldToTalkCopy
+import com.app.english.ui.components.HoldToTalkRow
+import com.app.english.ui.components.HoldToTalkRowUi
 import com.app.english.ui.components.RecordingGuard
-import com.app.english.ui.components.RecordingLevelIndicator
 import com.app.english.ui.theme.Spacings
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * 打基础页(计划 §6.4): 顶部 step 进度点(f1..fN) + 按题型换卡片 +
@@ -63,7 +65,6 @@ fun BriefingScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
-    val micLevel by viewModel.micLevel.collectAsStateWithLifecycle()
     val isPlayingRef by viewModel.isPlayingRef.collectAsStateWithLifecycle()
     var draft by remember { mutableStateOf("") }
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
@@ -102,7 +103,7 @@ fun BriefingScreen(
                 spec = viewModel.currentSpec(),
                 state = state,
                 isRecording = isRecording,
-                micLevel = micLevel,
+                waveform = viewModel.waveform,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 isPlayingRef = isPlayingRef,
@@ -206,7 +207,7 @@ private fun StepCard(
     spec: FoundationStepSpec?,
     state: BriefingUiState,
     isRecording: Boolean,
-    micLevel: Float,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     isPlayingRef: Boolean,
@@ -259,7 +260,7 @@ private fun StepCard(
             RecordButtonRow(
                 isRecording = isRecording,
                 isSubmitting = state.isSubmitting,
-                micLevel = micLevel,
+                waveform = waveform,
                 micGranted = micGranted,
                 onRequestPermission = onRequestPermission,
                 onStartRecord = onStartRecord,
@@ -412,44 +413,33 @@ private fun MakeSentenceBody(
     )
 }
 
+/**
+ * 打基础步的录音行 —— 就是共享的 [HoldToTalkRow], 只带这一屏自己的话术: 这一屏
+ * **同时**允许打字作答, 所以空闲文案必须把两条路都说出来(旧文案写"按住说话 / 或
+ * 打字作答"却配了个 onClick 点按按钮, 正是问题 1 的原文)。
+ */
 @Composable
 private fun RecordButtonRow(
     isRecording: Boolean,
     isSubmitting: Boolean,
-    micLevel: Float,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onStartRecord: () -> Unit,
     onStopRecord: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(Spacings.s1)) {
-        RecordingLevelIndicator(level = micLevel, active = isRecording)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            HoldToTalkButton(
-                isRecording = isRecording,
-                enabled = !isSubmitting,
-                micGranted = micGranted,
-                onRequestPermission = onRequestPermission,
-                onStart = onStartRecord,
-                onStop = onStopRecord
-            )
-            Spacer1()
-            Text(
-                text = when {
-                    isSubmitting -> "评分中…"
-                    isRecording -> "松开完成录音"
-                    else -> "按住说话 / 或打字作答"
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun Spacer1() {
-    Box(Modifier.size(Spacings.s2))
+    HoldToTalkRow(
+        row = HoldToTalkRowUi(
+            waveform = waveform,
+            isRecording = isRecording,
+            isBusy = isSubmitting,
+            micGranted = micGranted,
+            onRequestPermission = onRequestPermission,
+            onStart = onStartRecord,
+            onStop = onStopRecord,
+            labels = HoldToTalkCopy(idle = "按住说话 / 或打字作答")
+        )
+    )
 }
 
 /** 评分结果卡: 分数 + 反馈 + 误译/要点; 非真实评分挂警示。 */

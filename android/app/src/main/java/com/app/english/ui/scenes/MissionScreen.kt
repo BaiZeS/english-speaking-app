@@ -47,11 +47,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.TaskChip
 import com.app.english.ui.components.HoldToTalkButton
 import com.app.english.ui.components.RecordingGuard
-import com.app.english.ui.components.RecordingLevelIndicator
+import com.app.english.ui.components.RecordingWaveform
+import com.app.english.ui.components.WaveformGeometry
 import com.app.english.ui.theme.Spacings
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * 实战对话页(计划 §6.4, 聊天软件式): 顶部任务 chips 横滑 + 气泡流(AI 点按播
@@ -132,7 +134,7 @@ fun MissionScreen(
                     input = input,
                     isRecording = state.isRecording,
                     isSubmitting = state.isSubmitting,
-                    micLevel = state.micLevel,
+                    waveform = viewModel.waveform,
                     micGranted = micPermission.status.isGranted,
                     onRequestPermission = { micPermission.launchPermissionRequest() },
                     suggestion = state.suggestion,
@@ -416,7 +418,7 @@ private fun InputBar(
     input: String,
     isRecording: Boolean,
     isSubmitting: Boolean,
-    micLevel: Float,
+    waveform: StateFlow<List<Float>>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     suggestion: String,
@@ -438,7 +440,12 @@ private fun InputBar(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        RecordingLevelIndicator(level = micLevel, active = isRecording)
+        // 波形在输入框上方独立一行: 它比按钮更需要"看得见", 而按钮是嵌在输入行里的
+        // 行内小话筒(与输入框/发送键同一个 Row), 所以这里不套 HoldToTalkRow。
+        RecordingWaveform(
+            waveform = waveform,
+            presentation = WaveformGeometry.presentation(isRecording, isSubmitting)
+        )
         Row(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(Spacings.s1)
