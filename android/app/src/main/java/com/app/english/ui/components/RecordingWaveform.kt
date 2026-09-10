@@ -12,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -65,9 +66,12 @@ fun RecordingWaveform(
         }
     }
     Canvas(
+        // clipToBounds: 滑进/滑出边缘的那半根条必须被裁掉 —— Compose 的 Canvas 默认
+        // 不裁自身边界, 不写这一句的话左缘滑出的半根条会画到屏幕 padding 上去。
         modifier = modifier
             .fillMaxWidth()
             .height(height)
+            .clipToBounds()
             .semantics { contentDescription = description }
     ) {
         if (samples.isEmpty()) return@Canvas
