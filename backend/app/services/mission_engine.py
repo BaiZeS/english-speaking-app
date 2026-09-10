@@ -23,7 +23,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -41,6 +40,8 @@ from app.scoring.read_along import score_read_along
 from app.services.ability_engine import DIMENSIONS, ability_delta
 from app.services.audio_input import speech_rate_from_recognition
 from app.services.drill_grader import (
+    POLISH_BUDGET_S,
+    REVIEW_LLM_BUDGET_S,
     AbilityEvidence,
     Dimension,
     GradeSource,
@@ -407,17 +408,17 @@ async def judge_turn(
     ``hard_timeout_s``: 整轮 (含内置重试) 硬预算 —— 内层单次 timeout 是 20s,
     坏 JSON 重试一遍最坏 40s; 移动端 OkHttp readTimeout 30s, 不封顶就是结构性
     "评分失败: timeout"。超时不报错而是走既有 heuristic 降级 (宁缺勿滥)。
+    预算本身**不再**在这里用 ``asyncio.wait_for`` 实现 —— 交给 :func:`_judge` 的
+    ``hard_budget_s``, 一处强制 (它已把超时收敛成 ``LlmUnavailableError``);
+    下面仍接 ``TimeoutError`` 只是防将来 try 里混进别的 await。
     """
     try:
-        judge_call = _judge(
+        judgement = await _judge(
             MissionTurnJudgement,
             turn_prompt(course, tasks_state, turns, user_text),
             max_tokens=TURN_MAX_TOKENS,
+            hard_budget_s=hard_timeout_s,
         )
-        if hard_timeout_s is None:
-            judgement = await judge_call
-        else:
-            judgement = await asyncio.wait_for(judge_call, timeout=hard_timeout_s)
     except (LlmUnavailableError, TimeoutError) as exc:
         return fallback_turn(course, turn_index, user_text, tasks_state, exc)
     return judgement, "llm", _resolve_judge_model()
@@ -544,7 +545,9 @@ async def polish_text(
     """独立润色 (§5.7 ``POST /polish``): 1 次调用 + 重试 1 次 + 诚实缺席.
 
     LLM 不可用时**返回 ``None`` 而不是占位句** —— 润色没有"确定性降级"可言
-    (规则改写句子容易改错意思), 让 UI 显示"暂不可用"即可。
+    (规则改写句子容易改错意思), 让 UI 显示"暂不可用"即可。超时同理: 预算
+    (:data:`app.services.drill_grader.POLISH_BUDGET_S`) 一到就走 ``LlmUnavailableError``,
+    端点照常 200 + ``polish=null`` + 中文说明, 不 500、不拖死客户端 socket。
     ``model`` 是**文本用途**的模型 (客户端可指定); 默认走服务端模型。
     """
     try:
@@ -553,6 +556,7 @@ async def polish_text(
             polish_prompt(text),
             max_tokens=300,
             model=model,
+            hard_budget_s=POLISH_BUDGET_S,
         )
     except LlmUnavailableError as exc:
         logger.warning("polish unavailable | reason={}", exc)
@@ -838,7 +842,14 @@ async def build_review_report(
     briefing_passed: bool,
     hints_used: int = 0,
 ) -> ReviewReport:
-    """汇总一份复盘报告 (§5.3); 文案走**一次**批量 LLM 调用, 失败诚实降级."""
+    """汇总一份复盘报告 (§5.3); 文案走**一次**批量 LLM 调用, 失败诚实降级.
+
+    ``REVIEW_LLM_BUDGET_S``: 总评文案的墙钟硬预算 —— ``finish-mission`` 是**同步**
+    handler (改 202 是 §P6 的事), 不封顶就是学员看到的 "timeout" (生产日志 2026-09-10
+    烧了 ~68s 才降级, 而 200 OK 从未打印)。超时翻成 ``LlmUnavailableError`` → 走下面
+    既有分支: 数值骨架照出, 文案退回 :func:`deterministic_review`, ``source="heuristic"``
+    (复盘页已有的降级横幅), **绝不 500、绝不丢报告**。
+    """
     dims = aggregate_step_dims(steps)
     subs = aggregate_pronunciation_subs(steps)
     checklist = task_views(cast("list[dict[str, Any]]", mission.get("tasks") or []))
@@ -870,6 +881,7 @@ async def build_review_report(
             ReviewTextJudgement,
             review_prompt(course, _review_facts(facts)),
             max_tokens=REVIEW_MAX_TOKENS,
+            hard_budget_s=REVIEW_LLM_BUDGET_S,
         )
         highlights = [_truncate(item, 300) for item in judgement.highlights if item.strip()][:3]
         improvements = [_truncate(item, 300) for item in judgement.improvements if item.strip()][:3]
@@ -877,7 +889,7 @@ async def build_review_report(
             raise LlmUnavailableError("复盘文案为空")
         source, llm_source = "llm", _resolve_judge_model()
     except LlmUnavailableError as exc:
-        # _judge 自身已消化解析/校验错误; 这里同时兜 "合法 JSON 但两套文案全空".
+        # _judge 自身已消化解析/校验错误 + 超硬预算; 这里同时兜 "合法 JSON 但两套文案全空".
         fallback_high, fallback_improve = deterministic_review(facts)
         highlights, improvements = fallback_high, fallback_improve
         source, llm_source = "heuristic", "stub"

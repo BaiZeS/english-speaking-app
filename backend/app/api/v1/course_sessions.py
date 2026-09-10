@@ -81,6 +81,11 @@ router = APIRouter(tags=["course-sessions"])
 # ISE (= 转写锚定发音证据) 与 LLM 判分都只依赖本句 transcript, 彼此无关,
 # 并行后加和封顶: iat(8) + max(ise 8, llm 15) < 30; 超时/失败 = 诚实降级
 # (证据缺位, 绝不冒充)。
+#
+# 同一条契约的**另一半** —— 文本步判分 / 总评文案 / 润色 / 测评判级四条 LLM 路径的
+# ``*_BUDGET_S`` 与最坏求和表 —— 写在 ``app/services/drill_grader.py`` 的硬预算块
+# (服务层拿不到本文件的常量, 反向 import 会成环)。改任何一边都要重算求和;
+# 求和由 tests/test_latency_budget.py 钉死, 不靠人记。
 ISE_TURN_BUDGET_S = 8.0
 IAT_TURN_BUDGET_S = 8.0
 LLM_TURN_BUDGET_S = 15.0

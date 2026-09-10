@@ -38,6 +38,7 @@ P3 (T4) 起由 ``course_sessions`` 在每次评分后把该列表交给
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -65,8 +66,72 @@ PASS_SCORE = 60.0
 ISE_REF_MAX_CHARS = 2000
 
 #: 单次判分调用的超时与输出预算 (移动端延迟预算, 计划 §四).
+#: 这是**单次尝试**的 socket 超时, 不是一堵墙的封顶 —— 封顶墙钟的是下面契约块里的
+#: ``*_BUDGET_S`` 配上 :func:`_judge` 的 ``hard_budget_s``.
 LLM_TIMEOUT_S = 20.0
 LLM_MAX_TOKENS = 400
+
+# ====== 硬预算块 · 同步 HTTP 处理内的 LLM 端到端时延契约 (计划 §1 R2 / §P5) ======
+#
+# 契约: **budget <= 30s - (同请求内其它 await) - 5s 余量**。每条同步 LLM 路径都必须
+# 显式报出自己的预算, 没有"默认值"可躲。
+#
+# 30s = 移动端 OkHttp ``readTimeout`` (``android/.../di/NetworkModule.kt``; 全站共用一
+# 个 client, 无 ``callTimeout``)。超出它的部分客户端**永远收不到**: 服务端只是白占一条
+# 连接 + 一次 ``FOR UPDATE`` 行锁, 学员看到 "timeout" 红字。生产实锤 (session
+# 719833d1…, 2026-09-10): 总评 LLM 烧了 ~68s 才降级, 而 ``POST …/finish-mission 200
+# OK`` 从未打印 —— 降级本身是有效的, 只是晚了 2 倍, 学员因此看不见总评。
+#
+# 为什么光有 ``timeout=`` 不够 (放大机制): 内层的 20s 是**单次尝试**; provider 层的
+# ``max_retries`` 会在超时后再补射 (``app/services/llm_provider.py``, 本次改为 0), 坏
+# JSON 还要回喂重试一次 (:func:`_judge`) —— 20s x 3 x 2 ≈ 125s。所以两件事一起做:
+# ``max_retries=0`` 让 ``timeout=`` 回到真实单次口径, ``hard_budget_s`` 用
+# ``asyncio.wait_for`` 把**整个调用 (含那次重试)** 封成一堵墙; 超时必须翻成
+# ``LlmUnavailableError`` 而不是让 ``TimeoutError`` 逃逸 —— 用下面四个预算的调用点只
+# ``except LlmUnavailableError``, 逃逸就是 500, 比不封顶更糟 (缘由见 :func:`_judge`)。
+#
+# 另一半契约 (语音轮 ISE/IAT + mission 轮 LLM) 写在 ``app/api/v1/course_sessions.py``
+# 顶部的 ``*_TURN_BUDGET_S`` 块 —— 改任何一边都要重新核对下面的求和。
+# 课程生成**故意不在**本契约内: 它是 202 + 轮询的后台作业 (``course_generator.
+# GEN_TIMEOUT_S`` = 240s/次), 30s 对它不成立, 给它加硬预算只会让整课骨架必然降级。
+#
+# 最坏求和 (契约要求 < 30s; 装不下的两行标了 (*) / (**) 并写明归属, 由
+# tests/test_latency_budget.py 钉死这张表):
+#   POST /sessions/{id}/step      文本回答: 0          + STEP 20           = 20
+#   POST /sessions/{id}/step      音频回答: IAT <=13 (服务层) + STEP 20    = 33  见 (*)
+#   POST /sessions/{id}/mission                  iat 8 + max(ise 8, llm 15) = 23
+#   POST /sessions/{id}/finish-mission           DB    + REVIEW 20         = 20
+#   POST /mission 聊到轮次上限自动收工              23    + REVIEW 20         = 43  见 (**)
+#   POST /polish                               DB    + POLISH 10          = 10
+#   POST /assessment/{id}/complete             DB    + ASSESSMENT 20      = 20
+#
+# (*) 音频步的 IAT 只有**服务层**自己的 8s (``settings.xunfei_iat_timeout_s``) 加
+#     ``open_timeout=5s``; mission 轮在调用点又包了一层 ``IAT_TURN_BUDGET_S``, 这一步
+#     没有。常规 (IAT <=8s) 下 28s 仍在 30s 内, 只有 IAT 挂死的角落会吃穿余量 —— 闭合
+#     办法是把 ``grade_step`` 里的转写也包进 ``IAT_TURN_BUDGET_S`` (讯飞侧的活, 不是
+#     LLM 预算, 故不在本次改动里)。
+# (**) 自动收工**装不进** 30s: 那一轮的判分已经花掉 23s, 再挂一次总评 LLM 是结构性的
+#     (而"聊到轮次上限自然收工"恰是每日练习结束最常发生的时刻)。治法是把它异步化
+#     (202 + ``review_status`` 轮询, 计划 §P6), 不是继续压预算 —— 压到 7s 以下只会让
+#     总评每次都退化成确定性文案。本阶段先给它封顶 (125s → 43s), P6 再消除这一段。
+#: 文本步判分 (retell / translate / make_sentence; 输出 ``LLM_MAX_TOKENS=400``) 的整调用
+#: 硬预算。坏 JSON 的重试落在同一堵墙里, 装不下即降级为确定性启发式分.
+STEP_LLM_BUDGET_S = 20.0
+
+#: 总评文案 (``mission_engine.REVIEW_MAX_TOKENS=500``) 的硬预算。计划 §P5 建议 45s ——
+#: 那是 **P6 异步化之后**后台作业慢慢写文案的数字; 在 ``finish-mission`` 仍是同步
+#: handler 的今天, 45s 等于把学员报告的超时原样留下 (45 > 30 直接违反上面的契约),
+#: 所以这里取同步能装下的值。P6 落地后请给后台作业另开一个更大的预算, 别抬这个。
+REVIEW_LLM_BUDGET_S = 20.0
+
+#: 独立润色 (``POST /polish``; 单句 + 300 token) 的硬预算: 输出最短, 等待也该最短。
+#: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。
+POLISH_BUDGET_S = 10.0
+
+#: CEFR 判级 (``POST /assessment/{id}/complete``; 一次批量 7 题, 600 token) 的硬预算。
+#: 逐题判会被 "7 题 x 20s" 拖爆, 本来就是一次批量调用; 超时 = 诚实空态 (cefr=null,
+#: 零画像写入), 不是 500。
+ASSESSMENT_JUDGE_BUDGET_S = 20.0
 
 #: 文本型 drill 答案的取材上限 (手敲英文或 IAT 转写).
 ANSWER_MAX_CHARS = 2000
@@ -398,18 +463,28 @@ async def _judge(
     model: str | None = None,
     timeout: float = LLM_TIMEOUT_S,
     temperature: float = 0.2,
+    hard_budget_s: float | None = None,
 ) -> _J:
     """一次 LLM 判分 + 容错解析; 输出不合规则**回喂校验错误重试 1 次**.
 
     未配置 -> ``LlmUnavailableError(not_configured=True)``; 传输异常 / 二次仍不合规
     -> ``LlmUnavailableError``. 调用方一律降级到确定性启发式.
 
+    ``hard_budget_s``: **整个调用 (含坏 JSON 的重试那一次) 的墙钟硬预算**, 同步 HTTP
+    路径必填 —— 取值与求和见模块顶部的硬预算块. 用 ``asyncio.wait_for`` 封顶, 并且
+    **在这里**就把 ``TimeoutError`` 翻成 ``LlmUnavailableError``: 四个同步调用点
+    (``_graded_text_step`` / ``mission_engine.build_review_report`` /
+    ``mission_engine.polish_text`` / ``assessment_engine.judge_level``) 只
+    ``except LlmUnavailableError``, 让裸 ``TimeoutError`` 逃逸会把"降级"变成 500,
+    比不封顶更糟. 反过来, 只把 ``timeout=`` 调小是没用的: 那只是单次尝试的上限.
+
     P3 起该模式被 mission/polish/dialogue 复用 (见 ``app.services.mission_engine``):
     ``max_tokens`` 给更大的综合 JSON 留预算; ``model`` **只允许纯文本用途**
     (润色) 传入覆盖 —— 判分/任务判定恒用服务端默认模型 (``_resolve_judge_model``),
     调用方不许拿客户端选的模型污染分数。P4 起课程生成也走同一模式, 但生成的
     JSON 大得多 (整课骨架/剧本 ~2000 token), ``timeout`` / ``temperature`` 给它
-    放宽 (默认值保持判分口径, 判分调用方一个字都不用改)。
+    放宽 (默认值保持判分口径, 判分调用方一个字都不用改)。``hard_budget_s`` 留给
+    同步路径: 生成作业**不给**, 30s 的读超时对它不成立 (后台作业 + 前端轮询).
     """
     provider = get_llm_provider()
     if not cast(bool, getattr(provider, "is_configured", False)):
@@ -426,37 +501,50 @@ async def _judge(
         )
         return completion.content
 
-    turns = list(messages)
-    try:
-        raw = await _ask(turns)
-    except Exception as exc:  # 网络/超时/provider 未就绪: 不在学员身上重试
-        raise LlmUnavailableError(f"LLM 调用失败: {exc}") from exc
+    async def _attempts() -> _J:
+        """1 次调用 + 坏 JSON 回喂重试 1 次; 两次都不合规就到此为止 (移动端不等第二分钟)."""
+        turns = list(messages)
+        try:
+            raw = await _ask(turns)
+        except Exception as exc:  # 网络/超时/provider 未就绪: 不在学员身上重试
+            raise LlmUnavailableError(f"LLM 调用失败: {exc}") from exc
 
-    error_text = ""
-    try:
-        return schema.model_validate(_parse_llm_json(raw))
-    except (ValueError, ValidationError) as first_error:
-        error_text = _truncate(str(first_error), 300)
-        logger.warning("drill judgement malformed, retrying once | err={}", error_text)
+        error_text = ""
+        try:
+            return schema.model_validate(_parse_llm_json(raw))
+        except (ValueError, ValidationError) as first_error:
+            error_text = _truncate(str(first_error), 300)
+            logger.warning("drill judgement malformed, retrying once | err={}", error_text)
 
-    retry_turns = [
-        *turns,
-        LlmMessage(role="assistant", content=_truncate(raw, 1200)),
-        LlmMessage(
-            role="user",
-            content=(
-                f"上一条输出不合格 ({error_text}). "
-                "严格按要求的字段名与类型重发, 只输出那个 JSON 对象, 不要任何多余文字."
+        retry_turns = [
+            *turns,
+            LlmMessage(role="assistant", content=_truncate(raw, 1200)),
+            LlmMessage(
+                role="user",
+                content=(
+                    f"上一条输出不合格 ({error_text}). "
+                    "严格按要求的字段名与类型重发, 只输出那个 JSON 对象, 不要任何多余文字."
+                ),
             ),
-        ),
-    ]
+        ]
+        try:
+            raw2 = await _ask(retry_turns)
+            return schema.model_validate(_parse_llm_json(raw2))
+        except ValidationError as exc:
+            raise LlmUnavailableError(f"重试一次后字段仍不合规: {exc}") from exc
+        except Exception as exc:  # JSON 仍坏 / 调用又失败: 到此为止, 降级
+            raise LlmUnavailableError(f"重试一次后输出仍不可用: {exc}") from exc
+
+    if hard_budget_s is None:
+        return await _attempts()
     try:
-        raw2 = await _ask(retry_turns)
-        return schema.model_validate(_parse_llm_json(raw2))
-    except ValidationError as exc:
-        raise LlmUnavailableError(f"重试一次后字段仍不合规: {exc}") from exc
-    except Exception as exc:  # JSON 仍坏 / 调用又失败: 到此为止, 降级
-        raise LlmUnavailableError(f"重试一次后输出仍不可用: {exc}") from exc
+        return await asyncio.wait_for(_attempts(), timeout=hard_budget_s)
+    except TimeoutError as exc:
+        # 唯一一处超时→降级的转换点: 调用方的 ``except LlmUnavailableError`` 因此
+        # 一个字都不用改 (mission 轮的 ``judge_turn`` 也顺手接住它).
+        raise LlmUnavailableError(
+            f"超出 {hard_budget_s:.0f}s 硬预算 (同步请求封顶, 见 drill_grader 硬预算块)"
+        ) from exc
 
 
 def _judge_prompt(kind: TextStepKind, step: FoundationStep, answer_en: str) -> list[LlmMessage]:
@@ -676,7 +764,11 @@ async def _graded_text_step(
     """文本题型公共流程: LLM 判分 -> 失败降级 -> 组装 :class:`DrillGrade`."""
     judgement: _Judgement
     try:
-        judgement = await _judge(_SCHEMAS[kind], _judge_prompt(kind, step, answer_en))
+        judgement = await _judge(
+            _SCHEMAS[kind],
+            _judge_prompt(kind, step, answer_en),
+            hard_budget_s=STEP_LLM_BUDGET_S,
+        )
     except LlmUnavailableError as exc:
         return _degraded(step, answer_en, kind, exc)
     score = round(judgement.score, 1)

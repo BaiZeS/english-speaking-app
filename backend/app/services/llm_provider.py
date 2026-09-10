@@ -226,11 +226,22 @@ class BailianOpenAIProvider:
         self._api_key = settings.llm_api_key
         self._client: AsyncOpenAI | None = None
         if self._api_key:
+            # ``max_retries=0`` 是**时延契约**的一部分, 不是省钱的旋钮: SDK 的重试会
+            # 乘在 ``timeout`` 上, 而 ``with_options(timeout=...)`` (:meth:`chat`) 只换
+            # 单次超时、**保留**这里的重试次数 —— 于是 "20s 超时" 实际是 20s x 3 次
+            # (+ 指数退避) ≈ 62s, 任何 ``timeout=`` 都不是真实上限。移动端 OkHttp
+            # readTimeout 只有 30s (android/.../di/NetworkModule.kt), 超出的部分学员
+            # 永远收不到 (生产实锤: finish-mission 烧 ~68s, 200 OK 从未打印)。
+            # 封顶交给服务层的显式墙钟预算 (``drill_grader`` 的 ``*_BUDGET_S`` +
+            # ``_judge(hard_budget_s=...)`` 的 asyncio.wait_for), 重试交给
+            # ``_judge`` 的"坏 JSON 回喂一次" —— 都在**预算内**、且日志可见。
+            # 代价 (偶发 429/抖动少一次静默补射) 由上层既有降级承接: 文本步退回确定性
+            # 启发式分、总评退回 deterministic_review、润色/判级诚实返回空 (见 §6 风险表)。
             self._client = AsyncOpenAI(
                 api_key=self._api_key,
                 base_url=self._base_url,
                 timeout=30.0,
-                max_retries=2,
+                max_retries=0,
             )
 
     @property
