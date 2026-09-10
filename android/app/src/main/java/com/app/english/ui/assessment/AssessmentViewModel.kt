@@ -103,6 +103,14 @@ class AssessmentViewModel @Inject constructor(
     private val _isRecording = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
+    /**
+     * 滚动波形窗口(计划 §2.6 E4 点名的缺口: 这一页以前既没有电平管线、也**从来没画过**
+     * 录音条)。直接转发录音器持有的原始逐帧峰值窗口 —— 不是 `levelFlow` 那条平滑过的
+     * VU 值(包络 ~440 ms 才回落, 画波形会把音节糊成一坨), 也不复制进 [_flow](25 Hz
+     * 整屏重组)。收工同样不清: 提交那几秒学员还在看自己刚读的那一句。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+
     private var attemptId: String = ""
     private var textDraft: String = ""
 

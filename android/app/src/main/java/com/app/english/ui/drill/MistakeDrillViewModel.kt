@@ -36,7 +36,6 @@ data class MistakeDrillUiState(
     val isPlayingDemo: Boolean = false,
     val isRecording: Boolean = false,
     val isSubmitting: Boolean = false,
-    val micLevel: Float = 0f,
     val lastScore: ScoreResult? = null,
     val graduatedWord: String? = null,
     val error: String? = null,
@@ -58,13 +57,17 @@ class MistakeDrillViewModel @Inject constructor(
     private val _state = MutableStateFlow(MistakeDrillUiState())
     val state: StateFlow<MistakeDrillUiState> = _state.asStateFlow()
 
+    /**
+     * 滚动波形窗口, 由 `AudioRecorder.waveformFlow` 喂(**未平滑**的逐帧峰值: VU 那条
+     * `levelFlow` 的包络 ~440 ms 才回落, 画波形会把音节糊成一坨)。单词练只有一根根
+     * 短促的条, 正是最能体现"原始帧"价值的地方。不复制进 [MistakeDrillUiState]: 那是
+     * 25 Hz 的整屏重组; 收工也不在这里清 —— 毕业判定与评分那几秒学员还在看自己刚念
+     * 的那个词。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+
     init {
         loadWords()
-        viewModelScope.launch {
-            audioRecorder.levelFlow.collect { level ->
-                _state.update { it.copy(micLevel = level) }
-            }
-        }
     }
 
     private fun loadWords() {
@@ -105,7 +108,7 @@ class MistakeDrillViewModel @Inject constructor(
     fun startRecording() {
         if (_state.value.isRecording || _state.value.isSubmitting) return
         // 乐观翻位: 录音态在点击同一帧立住, 慢的硬件启动在协程里追。
-        _state.update { it.copy(isRecording = true, micLevel = 0f, lastScore = null, error = null) }
+        _state.update { it.copy(isRecording = true, lastScore = null, error = null) }
         viewModelScope.launch {
             try {
                 audioRecorder.start(
@@ -114,7 +117,7 @@ class MistakeDrillViewModel @Inject constructor(
                 )
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                    it.copy(isRecording = false, error = "录音启动失败：${e.message}")
                 }
             }
         }
@@ -125,7 +128,8 @@ class MistakeDrillViewModel @Inject constructor(
         val word = current.currentWord ?: return
         if (!current.isRecording) return
         viewModelScope.launch {
-            _state.update { it.copy(isRecording = false, isSubmitting = true, micLevel = 0f) }
+            // 波形刻意不动: 评分那几秒这条形状还得留在屏上(见 waveform)。
+            _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
             if (file == null) {
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }

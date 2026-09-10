@@ -62,6 +62,13 @@ data class FreeDialogueUiState(
     val isPlayingReference: Boolean = false,
     val isRecording: Boolean = false,
     val isSubmitting: Boolean = false,
+    /**
+     * 点按面诚实计时的起点(墙钟 ms)。**只在 [isRecording] 期间有意义** ——
+     * [com.app.english.ui.components.TapToTalkRow] 用 isRecording 门控它。
+     */
+    val recordingStartedAtMs: Long? = null,
+    /** 传给 `AudioRecorder.start` 的上限; 决定计时器要不要预告自动发送。 */
+    val takeCapMs: Long? = null,
     val currentScore: ScoreResult? = null,
     val scores: List<FreeDialogueScore> = emptyList(),
     val error: String? = null,
@@ -90,6 +97,13 @@ class FreeDialogueViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(FreeDialogueUiState())
     val state: StateFlow<FreeDialogueUiState> = _state.asStateFlow()
+
+    /**
+     * 滚动波形窗口(计划 P2 决策 4 点名的缺口之一: 这一页**过去完全没有电平管线**)。
+     * 直接转发录音器持有的原始逐帧峰值窗口, 不复制进 [FreeDialogueUiState] —— 那是
+     * 25 Hz 的整屏重组。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
 
     init {
         loadScenes()
@@ -192,7 +206,17 @@ class FreeDialogueViewModel @Inject constructor(
 
     fun startRecording() {
         if (_state.value.isRecording || _state.value.isSubmitting) return
-        _state.update { it.copy(isRecording = true, currentScore = null, error = null) }
+        _state.update {
+            it.copy(
+                isRecording = true,
+                // 自由对话按 D4 保留点按手势(一轮要说很久), 所以文案必须诚实 + 计时
+                // 必须真的在走。上限照抄下面 start() 传的值, 别各写一份。
+                recordingStartedAtMs = System.currentTimeMillis(),
+                takeCapMs = AudioRecorder.MAX_TAKE_MS,
+                currentScore = null,
+                error = null
+            )
+        }
         viewModelScope.launch {
             try {
                 audioRecorder.start(

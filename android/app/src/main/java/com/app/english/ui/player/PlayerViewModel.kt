@@ -82,7 +82,14 @@ data class PlayerUiState(
     val isPlayingReference: Boolean = false,
     val isRecording: Boolean = false,
     val isSubmitting: Boolean = false,
-    val micLevel: Float = 0f,
+    /**
+     * 点按面(影子跟读)诚实计时的起点: 本次开录的墙钟毫秒。**只在 [isRecording]
+     * 期间有意义** —— [com.app.english.ui.components.TapToTalkRow] 用 isRecording
+     * 门控它, 所以这里既不用在停录时清, 也不能在别处赋值。
+     */
+    val recordingStartedAtMs: Long? = null,
+    /** 开录时真的传给 `AudioRecorder.start` 的上限; null = 这条不会自动发送(影子跟读)。 */
+    val takeCapMs: Long? = null,
     val currentScore: ScoreResult? = null,
     val lineScores: List<ScoredLine> = emptyList(),
     val hasRetaken: Boolean = false,
@@ -139,6 +146,13 @@ class PlayerViewModel @Inject constructor(
     private val _state = MutableStateFlow(PlayerUiState(mode = mode))
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
+    /**
+     * 录音器持有的滚动波形窗口, 原样转发(不在这里再抄一份进 [PlayerUiState]:
+     * 那是 25 Hz 的整屏重组)。叶子组件直接 collect 它, 每帧只重画那一个 Canvas。
+     * 收工后它仍留着刚说完那条的形状 —— 清空时机由 `AudioRecorder` 独家决定。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+
     /** Shadow mode: playback start offset (ms) of each line within the run. */
     private var shadowBoundaryMs = LongArray(0)
 
@@ -147,11 +161,6 @@ class PlayerViewModel @Inject constructor(
 
     init {
         loadLesson()
-        viewModelScope.launch {
-            audioRecorder.levelFlow.collect { level ->
-                _state.update { it.copy(micLevel = level) }
-            }
-        }
     }
 
     fun reload() = loadLesson()
@@ -346,7 +355,8 @@ class PlayerViewModel @Inject constructor(
         _state.update {
             it.copy(
                 isRecording = true,
-                micLevel = 0f,
+                recordingStartedAtMs = System.currentTimeMillis(),
+                takeCapMs = AudioRecorder.MAX_TAKE_MS,
                 hasRetaken = it.hasRetaken || it.currentScore != null,
                 currentScore = null,
                 error = null
@@ -360,7 +370,7 @@ class PlayerViewModel @Inject constructor(
                 )
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                    it.copy(isRecording = false, error = "录音启动失败：${e.message}")
                 }
             }
         }
@@ -370,7 +380,8 @@ class PlayerViewModel @Inject constructor(
         if (!_state.value.isRecording) return
         val line = _state.value.currentLine ?: return
         viewModelScope.launch {
-            _state.update { it.copy(isRecording = false, isSubmitting = true, micLevel = 0f) }
+            // 波形不清: 送评分的这段时间里学员还在看刚说完的那一条(录音器也刻意保留)。
+            _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
             if (file == null) {
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
@@ -547,7 +558,15 @@ class PlayerViewModel @Inject constructor(
         val lines = _state.value.lines
         shadowDurationMs = references.map { it.durationMs.toLong() }
         shadowBoundaryMs = shadowBoundaries(shadowDurationMs, SHADOW_GAP_MS)
-        _state.update { it.copy(isRecording = true, micLevel = 0f) }
+        _state.update {
+            it.copy(
+                isRecording = true,
+                // 影子跟读按 D4 保留点按手势, 所以必须给"还在录"的证据。上限传 null:
+                // 这一条是整段连续跟读, 不会自动发送, 计时器也不能吓唬人说会发。
+                recordingStartedAtMs = System.currentTimeMillis(),
+                takeCapMs = null
+            )
+        }
         try {
             // Shadow is one continuous take over the whole passage: no 30s cap
             // (the run legitimately runs longer); it ends via onComplete/stopShadow.
@@ -557,7 +576,6 @@ class PlayerViewModel @Inject constructor(
                 it.copy(
                     isRecording = false,
                     isPreparingShadow = false,
-                    micLevel = 0f,
                     error = "录音启动失败：${e.message}"
                 )
             }

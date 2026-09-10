@@ -79,8 +79,6 @@ data class MissionUiState(
     val hint: HintData? = null,
     val hintWarnsScore: Boolean = false,
     val finished: Boolean = false,
-    /** 录音期间的麦克风电平(0..1, 已 dBFS 映射+平滑), 由 AudioRecorder.levelFlow 喂。 */
-    val micLevel: Float = 0f,
     /** 一闪而过的提示(新任务达成 reason / 收藏结果)。 */
     val snackbar: String? = null,
     val error: String? = null
@@ -116,12 +114,16 @@ class MissionViewModel @Inject constructor(
 
     init {
         restore()
-        viewModelScope.launch {
-            audioRecorder.levelFlow.collect { level ->
-                _state.update { it.copy(micLevel = level) }
-            }
-        }
     }
+
+    /**
+     * 滚动波形窗口: 直接转发录音器持有的那一份。以前这是 `MissionUiState.micLevel`
+     * 并注释成"已 dBFS 映射+平滑, 由 levelFlow 喂" —— 那是 VU 语义(DECAY=0.25 从 1.0
+     * 落到 0.05 要 ~440 ms), 拿它画波形会把 3-5 音节/秒糊成一坨, 而且单值没有历史,
+     * 结构上不可能滚动。现在喂的是未平滑逐帧峰值, 且**不进** [MissionUiState]:
+     * 25 Hz 的整屏重组对聊天页是白扔的帧; 收工也不在这里清(评分期间这条形状还留着)。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
 
     /** 恢复: 打基础没打完就退回; 否则按快照重绘气泡与清单。 */
     fun restore() {
@@ -188,7 +190,7 @@ class MissionViewModel @Inject constructor(
         if (_state.value.isRecording || _state.value.isSubmitting) return
         // 乐观翻位: 按住放手的同一帧就把录音态立起来, 硬件启动挪到 IO 协程里,
         // 主线程不再阻塞 AudioRecord 构造(旧写法既卡手感, 又给了双击过守卫的窗口)。
-        _state.update { it.copy(isRecording = true, micLevel = 0f, error = null) }
+        _state.update { it.copy(isRecording = true, error = null) }
         viewModelScope.launch {
             try {
                 audioRecorder.start(
@@ -197,7 +199,7 @@ class MissionViewModel @Inject constructor(
                 )
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isRecording = false, micLevel = 0f, error = "录音启动失败：${e.message}")
+                    it.copy(isRecording = false, error = "录音启动失败：${e.message}")
                 }
             }
         }
@@ -205,7 +207,8 @@ class MissionViewModel @Inject constructor(
 
     fun stopRecordingAndSend() {
         if (!_state.value.isRecording) return
-        _state.update { it.copy(isRecording = false, micLevel = 0f) }
+        // 只翻录音位:  waveform 刻意不动, 评分期间这条形状还得留在屏上。
+        _state.update { it.copy(isRecording = false) }
         viewModelScope.launch {
             val file = audioRecorder.stop()
             if (file == null) {

@@ -51,8 +51,13 @@ class BriefingViewModel @Inject constructor(
     private val _isRecording = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
-    private val _micLevel = MutableStateFlow(0f)
-    val micLevel: StateFlow<Float> = _micLevel.asStateFlow()
+    /**
+     * 滚动波形窗口, 直接转发录音器持有的那一份(不复制进 reduceBriefing 的状态机:
+     * 那是 25 Hz 的整屏重组, 而且状态机不该知道麦克风)。喂的是**未平滑**的逐帧峰值
+     * —— VU 那条 `levelFlow` 的包络会把音节糊成一坨。收工不在这里清: 评分期间学员
+     * 还在看刚说完的那一条, 清空时机由 `AudioRecorder` 独家决定。
+     */
+    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
 
     private val _isPlayingRef = MutableStateFlow(false)
     val isPlayingRef: StateFlow<Boolean> = _isPlayingRef.asStateFlow()
@@ -65,9 +70,6 @@ class BriefingViewModel @Inject constructor(
 
     init {
         restore()
-        viewModelScope.launch {
-            audioRecorder.levelFlow.collect { level -> _micLevel.value = level }
-        }
     }
 
     /** 崩溃恢复: 按 GET /sessions/{id} 的服务端状态机渲染, 不自算进度。 */
@@ -114,7 +116,6 @@ class BriefingViewModel @Inject constructor(
         if (_isRecording.value || _state.value.isSubmitting) return
         // 乐观翻位同 Mission: DOWN 当帧进入录音态, 硬件构造在 IO 协程里完成。
         _isRecording.value = true
-        _micLevel.value = 0f
         viewModelScope.launch {
             try {
                 audioRecorder.start(
@@ -132,7 +133,7 @@ class BriefingViewModel @Inject constructor(
         if (!_isRecording.value) return
         val step = _state.value.currentStep?.id ?: return
         _isRecording.value = false
-        _micLevel.value = 0f
+        // 波形不清: 评分期间这条形状还要留在屏上(见 waveform 的 KDoc)。
         viewModelScope.launch {
             val file = audioRecorder.stop()
             if (file == null) {
