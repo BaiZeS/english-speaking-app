@@ -549,3 +549,36 @@ def test_review_budget_keeps_the_sync_handler_inside_the_socket() -> None:
     45s 却让 finish-mission 继续同步返回。
     """
     assert dg.REVIEW_LLM_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    # 单次尝试的 socket 超时也必须单独装得进 30s: max_retries=0 之后它才是真上限。
+    assert dg.LLM_TIMEOUT_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+
+
+def _direct_chat_call_sites() -> list[tuple[str, int, bool]]:
+    """不走 :func:`_judge` 的**裸** ``provider.chat(...)`` 调用点 (dialogue 轮 / 开场白)."""
+    sites: list[tuple[str, int, bool]] = []
+    for path in sorted(APP_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "chat":
+                has_timeout = any(kw.arg == "timeout" for kw in node.keywords)
+                sites.append((path.name, node.lineno, has_timeout))
+    return sites
+
+
+def test_bare_provider_chat_calls_pass_an_explicit_timeout() -> None:
+    """绕开 :func:`_judge` 的调用点也得显式写 ``timeout=`` —— 契约不允许"默认值兜底"。
+
+    ``dialogue.py`` 自己组 prompt 而不用 ``_judge``, 所以它不受 ``hard_budget_s`` 保护;
+    它的 ``timeout=`` 在 ``max_retries=0`` 之前是**假**上限 (12s 实为 36s), 本次把
+    provider 的重试关掉之后才第一次是真的。这条锁防止将来再加裸调用时漏写超时。
+    """
+    sites = _direct_chat_call_sites()
+    assert sites, "AST 没扫到任何 provider.chat() —— 接缝变了, 请同步改本用例"
+    missing = [(mod, line) for mod, line, ok in sites if not ok]
+    assert missing == [], f"这些 provider.chat() 没有显式 timeout: {missing}"
+
+    from app.api.v1 import dialogue
+
+    assert dialogue._VOICE_CALL_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    assert dialogue._LLM_TURN_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    assert dialogue._ISE_TASK_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
