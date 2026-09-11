@@ -7,7 +7,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?backend/.env 中设置 POSTGRES_PASSWORD}
       POSTGRES_DB: english_dev
     ports:
-      - "5432:5432"
+      # 只绑 loopback: 这台机器同时是生产机, 0.0.0.0 会让 dev 库在局域网可达
+      # (里面还曾放着切换前的同名旧生产库)。宿主侧用 localhost:5432 照常连。
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +30,11 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      # 只绑 loopback。Android 模拟器走 10.0.2.2 -> 宿主 loopback, 照常可达;
+      # 真机局域网调试因此失效, 改用 SSH 隧道或模拟器 (见 backend/README.md)。
+      # 另一层理由: 这台机器同时跑生产栈, 0.0.0.0:8000 会多出一个与生产容器
+      # argv 几乎逐字相同(只差 --reload)的进程, 是"ps 里那个 uvicorn 是谁"的第三重歧义。
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests
