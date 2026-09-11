@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
  * [reduceBriefing])。
  */
 @HiltViewModel
+@Suppress("TooManyFunctions") // 这一屏的动作集就是多: 录音/播音/跳过/反馈三键/恢复, 每个都是一个入口
 class BriefingViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
     private val englishRepository: EnglishRepository,

@@ -1,3 +1,5 @@
+@file:Suppress("MatchingDeclarationName") // Compose 文件: 顶层入口是 @Composable 卡片, carrier 类次之
+
 package com.app.english.ui.scenes
 
 import androidx.compose.foundation.layout.Arrangement
@@ -41,7 +43,13 @@ import com.app.english.ui.theme.color
  * 死在组件里 —— 本步的及格线是服务端给的 `pass_score`, 未必是 60。
  */
 
-/** [DrillFeedbackCard] 的入参(平铺形参会顶到 detekt 的 `LongParameterList` 上限)。 */
+/**
+ * [DrillFeedbackCard] 的入参。
+ *
+ * 形参平铺会顶到 detekt 的 `LongParameterList`(这一屏是 grade + 两个旗标 + 两个动作 +
+ * modifier), 所以像 `HoldToTalkRowUi` 那样收进一个 carrier。detekt 的"文件名跟着唯一
+ * 顶层类"规则不认识 @Composable 入口, 对文件本身关掉 —— 文件名跟着屏幕上那张卡。
+ */
 class DrillFeedbackUi(
     val grade: DrillGradeResult,
     /**

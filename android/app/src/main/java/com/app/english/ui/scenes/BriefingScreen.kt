@@ -2,6 +2,7 @@ package com.app.english.ui.scenes
 
 import android.Manifest
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -72,7 +73,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-@Suppress("LongMethod")
 fun BriefingScreen(
     onBack: () -> Unit,
     onOpenMission: (sessionId: String) -> Unit,
@@ -92,23 +92,7 @@ fun BriefingScreen(
 
     RecordingGuard(viewModel::stopRecordingIfActive)
 
-    // 自动前进的秒针: 键在剩余秒数上, 每秒重挂一次 delay, 到 null(确认/取消)自然停。
-    // 放在界面层而不是 ViewModel 的常驻协程里, 是为了"这一屏不在前台就绝不翻篇"——
-    // 反馈被抽走的最坏形态, 是人在别处、页却在自己往前走。
-    LaunchedEffect(state.autoAdvanceSeconds) {
-        if (state.autoAdvanceSeconds == null) return@LaunchedEffect
-        delay(FeedbackAdvancePolicy.TICK_MILLIS)
-        viewModel.tickAutoAdvance()
-    }
-
-    val scrollState = rememberScrollState()
-    // [D10] 滚动 = 我要自己掌握阅读节奏 -> 撤掉倒计时(反馈留在屏上)。点按任意处同理,
-    // 而「继续」/「再试一次」不会被误伤: 子节点先消费这次按压, 父层的 tap 探测收不到。
-    LaunchedEffect(scrollState) {
-        snapshotFlow { scrollState.isScrollInProgress }
-            .distinctUntilChanged()
-            .collect { scrolling -> if (scrolling) viewModel.cancelAutoAdvance() }
-    }
+    val scrollState = FeedbackCountdownWiring(viewModel, state.autoAdvanceSeconds)
 
     Column(
         modifier = modifier
@@ -118,14 +102,7 @@ fun BriefingScreen(
             .padding(Spacings.s3),
         verticalArrangement = Arrangement.spacedBy(Spacings.s3)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = onBack) { Text("← 退出") }
-            Text(
-                text = "跳过额度 ${state.skipsRemaining}/${state.skipLimit}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        SkipQuotaRow(state = state, onBack = onBack)
         ProgressDots(state)
         // 快照没到手时由下面的 ErrorState 承担(带「重试」), 不再叠一条只能「知道了」
         // 的横幅 —— 同一个错误说两遍, 且其中一遍没有出路。
@@ -187,6 +164,48 @@ fun BriefingScreen(
             ) { Text(state.skipLabel) }
         }
     }
+}
+
+/** 顶行: 退出 + 跳过额度。额度数字与下面的跳过键文案同源([BriefingUiState.skipLabel])。 */
+@Composable
+private fun SkipQuotaRow(state: BriefingUiState, onBack: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        TextButton(onClick = onBack) { Text("← 退出") }
+        Text(
+            text = "跳过额度 ${state.skipsRemaining}/${state.skipLimit}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 反馈停留期间的倒计时接线: 秒针 + 两个取消源(滚动 / 点按)。抽出来是为了让"什么会
+ * 撤掉自动前进"一眼看全, 也不用把 [BriefingScreen] 的正文撑肥。
+ *
+ * 秒针的键就是剩余秒数, 每秒重挂一次 delay, 走到 null(确认 / 取消)自然停 —— 放在界面层
+ * 而不是 ViewModel 的常驻协程里, 是为了"这一屏不在前台就绝不翻篇": 反馈被抽走的最坏
+ * 形态, 是人在别处、页却自己往前走。返回的 [ScrollState] 由调用方挂到整页滚动上, 滚动
+ * 事件在这里变成一个取消动作。
+ */
+@Composable
+private fun FeedbackCountdownWiring(viewModel: BriefingViewModel, secondsLeft: Int?): ScrollState {
+    val scrollState = rememberScrollState()
+    LaunchedEffect(secondsLeft) {
+        if (secondsLeft == null) return@LaunchedEffect
+        delay(FeedbackAdvancePolicy.TICK_MILLIS)
+        viewModel.tickAutoAdvance()
+    }
+    // [D10] 滚动 = "我要自己掌握阅读节奏" -> 只撤倒计时, 反馈留在屏上。
+    LaunchedEffect(scrollState) {
+        snapshotFlow { scrollState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { scrolling -> if (scrolling) viewModel.cancelAutoAdvance() }
+    }
+    return scrollState
 }
 
 @Composable
