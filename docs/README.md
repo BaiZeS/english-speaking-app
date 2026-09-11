@@ -1,11 +1,12 @@
 # docs 索引
 
-**当前版本 v2.1.0（生产：`http://118.89.58.84:5173/api/v1/`）**
+**当前版本 v2.2.0（代码已就绪；生产 OTA 通道此刻仍下发 v2.1.0——本版尚未打 tag / 未自托管发布 / 未做真机验收，见 [operations.md](operations.md) 第 3、5 节）**
 
 | 文档 | 内容 | 读者 |
 |---|---|---|
-| [usage-guide.md](usage-guide.md) | App 使用指南（安装/CEFR 测评/任务通关实战/生成课/表达库/能力画像） | 用户（领导向）|
-| [operations.md](operations.md) | 生产拓扑、deploy 脚本、发版 SOP（tag→Release→publish_apk 自托管 OTA）、密钥启用、冒烟命令、坑位清单 | 运维/开发 |
+| [usage-guide.md](usage-guide.md) | App 使用指南（安装/两种录音手势/CEFR 测评/任务通关实战/每环节反馈/复盘总评/表达库/能力画像） | 用户（领导向）|
+| [feature-report.md](feature-report.md) | 项目功能报告（功能真相清单 + 质量与现状，含"哪一条还没验证"） | 汇报/新人接手 |
+| [operations.md](operations.md) | 生产拓扑、deploy 脚本、发版 SOP（版本硬门 → tag → Release → publish_apk 自托管 OTA → 强更配置）、**同步 LLM 时延预算表**、密钥启用、冒烟命令、坑位清单 | 运维/开发 |
 | [../CHANGELOG.md](../CHANGELOG.md) | 版本历史（用户语言 + 工程摘要） | 所有人 |
 
 ## 历史档案（v1.x 阶段，正文保留原貌 + 归档注记）

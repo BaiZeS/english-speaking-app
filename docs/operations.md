@@ -1,4 +1,4 @@
-# 运维与发版 SOP · english-speaking-app（v2.1.0）
+# 运维与发版 SOP · english-speaking-app（v2.2.0）
 
 部署机 = 本盒（公网 `118.89.58.84`，云防火墙当前仅映射 **TCP 5173/80/8080**）。仓库：`/home/ubuntu/mimo-workspace/english-speaking-app`，工作分支 main（origin==local）。
 
@@ -30,22 +30,60 @@ bash $S logs 200   # 最近 n 行服务日志（= docker logs english-api-prod�
 
 ## 3. 发版 SOP（Android）
 
+### 3.0 发布身份硬门（先读这条，它取代了过去那句"记得 bump"）
+
+**改了 `android/app/src/main/**` 就必须同范围 bump 发布身份 —— 现在是机器检查，不再靠人记。**
+判的是**事件范围**（push 的 `before..after`、PR 的 `base..head`），不是单个 commit，所以"一个 commit 改源码 + 同批另一个 commit 补版本号"合法。实现见 `.github/workflows/android-ci.yml` 的 `release-gate` job（无 JDK/SDK 依赖，纯 git + grep），`build-debug-apk` 依赖它 → 门红则产物也不出。
+
+- 通过条件：范围内 `android/app/build.gradle.kts` 的 **versionCode 严格递增** + **CHANGELOG.md 有新增内容**（当前版本；旧版本条目不补，历史版本号永远不回头）。
+  - 例外档（同一轮发布的"版本列车"）：HEAD 的 versionCode 高于**最近可达 tag** 的 versionCode，且 CHANGELOG.md 已有该 versionName 的 `##` 章节 → 允许后续 push 不再 bump（发版流程本就是"先 bump 再叠修复，最后打 tag"）；**tag 一落地这档自然关闭**，下一批源码改动又要现场 bump。代价写在 workflow 注释里：一列迟迟不发版的列车会一直放行，那归 §3.2 的发版纪律管。
+- 逃生口：范围内任一 commit message 写 `[release-gate-skip: <一句话理由>]`（**必须带理由**，空理由不生效；命中的那一行会进日志与 step summary）。只该用在"确实不改变可发布产物"的改动上（真实例子：`0fc7e29` 只改了 `BriefingScreen.kt` 里一行注释）。**别**把它塞进 git 模板/alias/pre-commit——那等于删掉这道门。
+- 为什么值得这么硬：`2fd067d`（hold-to-talk + 实时音量表，`android/app/src/main` 下 20 个文件）推上 main、双 CI 全绿、**从此永久躺在 main 上**——没动 versionCode，OTA 那份 APK 仍是 v2.1.0 的树（`25d05a3`，`2fd067d` 的祖先），学员报的两个症状在源码里早就修好了却一次都没到过手机。当时缺的从来不是规矩（本节原本就写着"versionCode 永远严格递增"），缺的是有人/有东西**去执行它**。
+
+### 3.1 发版步骤
+
 ```bash
 # ① 变更就绪 + 本地三连（ktlint.sh / testDebugUnitTest / assembleDebug, 见 android/README）
+#    + CHANGELOG.md 新版块 + build.gradle.kts versionCode 严格递增（必须与源码改动在**同一事件范围**内, 见 §3.0）
 # ② 推送后务必确认本地==origin 再打 tag（tag 与 push 分离, 防竞态：一次钉错 release 的教训）
 git push origin main && git fetch -q origin
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && echo synced   # 必须 synced 再继续
-git tag -a v2.1.1 -m "v2.1.1: ..." && git push origin v2.1.1
+#    ★ release-gate 是 blocking 门：本盒没装 gh，去 Actions 页面确认 Android CI 的
+#    "Release Gate" job 已绿再打 tag（它不装 SDK，通常几十秒内就出结果）。
+#    ★ 若门红又自认合理：git commit --amend 在 message 里补 [release-gate-skip: 理由]
+#    重推（force push main 之前先想清楚 —— 见 §6 那条例子），别直接绕过。
+git tag -a v2.2.0 -m "v2.2.0: ..." && git push origin v2.2.0
 # ③ 等 release.yml（~14 min）: 成功且 asset=EnglishAssistant-<ver>.apk,
 #    Release 名/tag 正确（workflow 用 GITHUB_REF_NAME，勿改成 git describe——已踩坑）
 # ④ 【必须】OTA 自托管切换（否则手机走 GitHub 11-40KB/s 等于没有更新）：
-cd backend && bash scripts/publish_apk.sh v2.1.1
+cd backend && bash scripts/publish_apk.sh v2.2.1
 # 该脚本自动：GitHub 拉 asset(慢线 ~20-25min) → static/apk → 写 .env 两变量 → restart
 # → 自检 source=env + Range 探测。重复跑无害（幂等覆盖）。
-# ⑤ versionCode 永远严格递增（v2.1.0=8；Android 同名 version 不比, semver 字典序）
+# ⑤ versionCode 永远严格递增（v2.1.0=8 / v2.2.0=9；Android 同名 version 不比, semver 字典序）
+#    —— §3.0 的门现在会在 push/PR 上强制它, 不再只靠这句话。
 ```
 
-回滚：`scripts/publish_apk.sh v<上一个好版本>`（秒切，GitHub/GCP 双源自动降级）；或临时 `APP_LATEST_VERSION` 回旧值 + restart。
+### 3.2 强制升级（可选，一条**独立于** `publish_apk.sh` 的生产配置变更）
+
+`publish_apk.sh` 只写 `APP_LATEST_VERSION`/`APP_APK_URL`，**不碰** `APP_MIN_SUPPORTED_VERSION`。而 `/app/version` 的 `min_supported_version` 默认是 `0.0.0` 哨兵——**只有显式配置才有强更语义**（`decideUpdate` 的"跳过此版本"分支只在非强更时生效）。
+
+需要强更时（例：v2.2.0 改了 `finish-mission` 的 202 契约，旧包会拿到空 `review`）：
+
+```bash
+# backend/.env  (gitignored; 开发与发布共用这一份——见 §6 最后一条)
+cp backend/.env backend/.env.bak-$(date -u +%F-%H%M)
+grep -q '^APP_MIN_SUPPORTED_VERSION=' backend/.env \
+  && sed -i 's/^APP_MIN_SUPPORTED_VERSION=.*/APP_MIN_SUPPORTED_VERSION=2.2.0/' backend/.env \
+  || printf 'APP_MIN_SUPPORTED_VERSION=2.2.0\n' >> backend/.env
+bash backend/scripts/deploy.sh restart      # 必须 restart（compose restart 不重读 env_file）
+curl -s http://118.89.58.84:5173/api/v1/app/version   # 核对 min_supported_version=2.2.0 + force=true
+```
+
+- **影响存量每一位用户**，执行前单独确认；没看到 `force=true` 就是没生效（十有八九是 §2 那条 `restart` 陷阱）。
+- **回滚必须同步**：`publish_apk.sh v<旧版>` 之后要把 `APP_MIN_SUPPORTED_VERSION` **改回 `0.0.0` 哨兵**并再 restart，否则用户被钉在一个已经下架的版本要求上——升级提示指向一个 OTA 再也发不出的包，等于自己制造一台砖机。
+- 只回滚 APK 不打算回滚要求时（例如旧包有严重缺陷、宁可让人卡在提示上也不放回去），必须**在下一次成功发版前**把要求改回哨兵并留个提醒给未来的运维。
+
+回滚：`scripts/publish_apk.sh v<上一个好版本>`（秒切，GitHub/GCP 双源自动降级）；或临时 `APP_LATEST_VERSION` 回旧值 + restart；强更要求见上一条的同步回滚。
 
 ## 4. 密钥启用清单（当前环境 → 真机全功能）
 
@@ -61,7 +99,7 @@ cd backend && bash scripts/publish_apk.sh v2.1.1
 ```bash
 BASE=http://118.89.58.84:5173
 curl -s $BASE/api/v1/health                                   # {"status":"ok"}
-curl -s $BASE/api/v1/app/version                              # latest=当前发布版, source=env, force=false
+curl -s $BASE/api/v1/app/version                              # latest=当前发布版, source=env；未配强更时 force=false；配了 §3.2 则 min_supported_version=发布版 + force=true
 curl -s -r 0-1023 -o /dev/null -w '%{http_code}' $BASE/static/apk/EnglishAssistant-<ver>.apk  # 206
 curl -s "$BASE/api/v1/scenes?category=workplace" | head -c200          # 含职场课
 curl -s "$BASE/api/v1/stats?device_id=smoke-0906"                       # 合法 JSON（空态即可）
@@ -69,9 +107,23 @@ curl -s "$BASE/api/v1/llm/models"                                       # models
 curl -s "$BASE/api/v1/tts?text=Hello&voice=Mia" -o /tmp/t.out -w '%{http_code} %{size_download}B\n'  # 200 + wav 头（RIFF）= TTS 真合成通
 # key 排查对照组（区分"调用姿势错"vs"key 无效"——09-07 实测：两线路 512 种姿势的 401 与假 key 逐字节一致）:
 # curl -s https://api.xiaomimimo.com/v1/models -H 'api-key: tp-fakekey000' | head -c 60
-# 完整通关冒烟（生成一条真实练习痕迹）:
-# curl 序列 POST /sessions{scene_id:scene_ordering_coffee}→ /step ×6(text) →
-#   /mission ×3 → /finish-mission 看 ReviewReport dims; GET /courses/progress 应现 attempts≥1
+# 完整通关冒烟（生成一条真实练习痕迹 + ★ v2.2.0 的异步总评断言）:
+#   POST /sessions{scene_id:scene_ordering_coffee} → /step ×6(text) → /mission ×3 →
+#   ① POST /finish-mission 必须**亚秒级**返回 **202**，body = {session_id, revision,
+#      stage, status, review_status} 且 review_status=="generating"、**没有 report 字段**
+#      （200 或带 report = 契约回退；十几秒才回 = 有人在请求里又塞了 LLM，见 §6）
+#   ② **立刻** GET /sessions/{id} → review 数值骨架已在（overall/dims/checklist/pairs），
+#      review_status 仍是 generating —— 这一步证明"数字不用等文案"
+#   ③ 每 2-6s 轮询 GET /sessions/{id} 直到 review_status ∈ {ready, failed}（后台作业预算
+#      45s，正常几十秒内必到终态；超过 ~90s 还没动 = 重派水位没生效，查 §6 作业那两条）
+#   ④ 终态断言：review_status=="ready" 且 (review.overall != null **或**
+#      review.evidence_note_cn != "") —— 不许出现"总分是破折号而无解释"
+#      注意判据是 review_status，**不是** report.source：LLM 挂着而作业正常跑完 =
+#      ready + source=="heuristic"，那已是诚实终态
+#   ⑤ 二次 POST /finish-mission 仍须 409 MISSION_FINISHED（幂等门没被异步化绕过）
+#   ⑥ 自动收工同治：/mission 打到 max_turns 那一轮，响应应带 review_status=="generating"
+#      且该请求总时长 <= 23s（不再叠加一次总评 LLM；旧行为是 23+20=43s 结构性必超时）
+#   ⑦ GET /courses/progress 应现 attempts≥1
 # 讯飞真火冒烟（消耗 ISE/IAT 日额度 ~10 会话，不碰 DB，证据落 /tmp/ise-smoke-*）:
 # cd backend && .venv/bin/python scripts/smoke_xunfei_ise.py --quick     # 期望全行 final=True、source=xunfei、退出码 0
 # 线上语音轮真声验证（PCM 用冒烟产物；pronunciation/fluency 应为 source=xunfei, w=1.0）:
@@ -86,7 +138,62 @@ docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f
   && docker cp english-postgres-prod:/tmp/bk.dump backend/logs/backup-$(date -u +%F).dump
 ```
 
-后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **528 全绿**，sqlite；CI 含 PG16）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①）。
+后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **573 全绿**，sqlite；CI 含 PG16 + `--cov-fail-under=85`，本机整轮覆盖率 89.89%）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①），基线 **327 个 JVM 单测**（`android/README.md` 本轮已从过期的 168 校正；开工时实清点 176）。**外加 CI 新增的 `release-gate`（§3.0）——它是 blocking 门，红了就别打 tag。**
+
+**v2.2.0 的发版状态与验收状态（写文档时点，诚实记录）**：代码侧已全部落到 `main`（本地三连 + 双 CI 口径见上），但**尚未打 tag、尚未 `publish_apk.sh`、尚未设强更**——`curl -s $BASE/api/v1/app/version` 此刻返回的仍是 `latest_version=2.1.0` / `min_supported_version=0.0.0`（哨兵）/ `source=env` / `force=false`，也就是**学员手机上现在还是 v2.1.0 那一棵树**。上面这一节的冒烟集（尤其 ①-⑥ 那条异步总评链）**必须在部署后实跑**，本文件里所有早于本版的真机/部署结果条目都是历次发布留下的实况记录，保持原样不动。
+
+同样尚未执行的是**真机验收**：逐条对应用户报告的 5 个症状 + E2/E3/E4/E5 + 强更提示的装机脚本还挂着（发布计划 §5.3），所以本版所有客户端行为的现有证据只有"源码 + 327 个 JVM 单测 + 后端集成测试 + DEBUG APK 能构建"，**没有任何一条被真机确认过**。别把本节或 CHANGELOG 里的描述当验收结论用。
+
+## 5.5 时延预算表（同步 LLM 调用契约）
+
+**这是契约，不是观测记录。** 权威副本只有一处：`backend/app/services/drill_grader.py` 顶部的「硬预算块」注释（`*_BUDGET_S` 常量与求和表），加上 `backend/tests/test_latency_budget.py` 把这张表钉成测试。本节是它的运维口径 —— **改任何一处都要同批改另两处**（求和只许变小，涨上去测试就红）。
+
+**不变量**：同步 HTTP handler 里的每一次 LLM 调用都必须有**显式**硬预算，且
+
+```
+budget <= 30s - (同一请求内其它 await) - 5s 余量
+```
+
+- **30s 从哪来**：客户端全站共用**一个** OkHttp client，`readTimeout=30s`、**没有 `callTimeout`**（`android/app/src/main/java/com/app/english/di/NetworkModule.kt`）。超出 30s 的部分客户端**永远收不到**：服务端只是白占一条连接 + 一次 `FOR UPDATE` 行锁，学员看到一句 `timeout`。
+- **生产实锤**（session `719833d1-6e30-4499-896f-6ed18d1501a8`，2026-09-10）：总评 LLM 烧了 ~68s 才降级，`POST …/finish-mission 200 OK` 那行**从未打印**——业务成功、报告落库，学员却永远看不到，之后猛点「收工」又收了 4 个 409。**降级本身是有效的，只是晚了 2 倍**，这就是本契约存在的全部理由。
+
+| 常量 | 值 | 管谁 | 备注 |
+|---|---|---|---|
+| `LLM_TIMEOUT_S` | 20.0 s | **单次尝试**的 socket 超时（`drill_grader.py`）| 不是墙钟封顶，别拿它当上限 |
+| provider 客户端 `timeout` / `max_retries` | 30.0 s / **0** | `llm_provider.py` | `max_retries` 必须是 0：SDK 的重试乘在 `timeout` 上（20s×3+退避 ≈ 62s），有它在，任何 `timeout=` 都不是真实上限 |
+| `STEP_LLM_BUDGET_S` | 20.0 s | 文本步判分（retell / translate / make_sentence）| 坏 JSON 的回喂重试落在**同一堵墙内** |
+| `REVIEW_LLM_BUDGET_S` | 20.0 s | **同步组合** `build_review_report` | **HTTP 端点已不再调它**（只剩脚本/测试）。计划 §P5 建议的 45s 只在"文案不在请求里"时成立 |
+| `REVIEW_COPY_JOB_BUDGET_S` | 45.0 s | 后台总评文案作业 `run_review_copy_job` | **故意大于 30s**：收工已用 202 + 数值骨架答复，没人在 socket 上等它。但仍必须封顶 —— 挂死的 LLM 会让会话永远停在 `generating`。**别把它塞进任何同步 handler，也别反过来把 45 改成 20**（那等于总评文案永远在超时边缘降级）|
+| `POLISH_BUDGET_S` | 10.0 s | `POST /polish` | 润色**没有**确定性降级（规则改写容易改错意思），超时 = 诚实返回 `polish=null`，不是 500 |
+| `ASSESSMENT_JUDGE_BUDGET_S` | 20.0 s | `POST /assessment/{id}/complete`（7 题**一次**批量调用）| 逐题判会被 7×20s 拖爆；超时 = 诚实空态（`cefr=null`，零画像写入）|
+| `ISE_TURN_BUDGET_S` / `IAT_TURN_BUDGET_S` / `LLM_TURN_BUDGET_S` | 8 / 8 / 15 s | 实战语音轮（`course_sessions.py`）| 契约的**另一半**，与上表同一次求和；改任何一边都要重算 |
+| `REVIEW_REDISPATCH_AFTER_S` | 45 × 2 = **90 s** | 重启兜底水位 | `GET /sessions/{id}` 读到 `generating` 且快照老过 90s 就就地**幂等重派**（`asyncio.create_task` 不持久）。取 2 倍是因为单 `_judge` 最坏 ≈ 40s（两次 20s 尝试）+ 排队/并发挤占，水位低于一整个周期会把**还在跑**的作业判死再烧一次 LLM |
+| `GEN_TIMEOUT_S` | 240 s/段 | 整课生成 | **故意在本契约之外**：那是 202 + 轮询的后台作业，给它加 30s 硬预算 = 骨架段必然降级。豁免在测试里是**显式**的（`ASYNC_JOB_MODULES`），不是漏网 |
+| `xunfei_ise_timeout_s` / `xunfei_iat_timeout_s` | 8 / 8 s | 讯飞服务层自己的硬顶 | `.env` 可覆盖；调用点上再包一层才是本表那些数 |
+
+**最坏求和**（同 `drill_grader.py` 的表；契约要求 `< 30s`，`test_latency_budget.py` 里按「其它 await + budget + 5s ≤ 30s」逐条断言）：
+
+| 路径 | 最坏组成 | 秒 |
+|---|---|---|
+| `POST /sessions/{id}/step`（文本回答）| 0 + STEP 20 | **20** |
+| `POST /sessions/{id}/step`（read_along，只有 ISE）| ISE 服务层 8 | **8** |
+| `POST /sessions/{id}/step`（**音频回答**）| IAT ≤13（服务层 8 + ws `open_timeout` 5）+ STEP 20 | **33 ← 已知超预算，见下** |
+| `POST /sessions/{id}/mission`（一轮）| iat 8 + max(ise 8, llm 15) | **23** |
+| `POST /sessions/{id}/finish-mission` | DB + 数值骨架（**零 LLM**）| **DB** |
+| `POST /mission` 到轮次上限**自动收工** | 那一轮本身 23 + 数值骨架（零 LLM）| **23** |
+| `POST /polish` | DB + POLISH 10 | **10** |
+| `POST /assessment/{id}/complete` | DB + ASSESSMENT 20 | **20** |
+| `POST /dialogue/turn`（语音轮）| iat 8 + max(chat 12, ise 8.5) + 落库 | **≈20.5** |
+
+**还有一行明知装不下**（本次不修，但钉了天花板不许它继续变差）：音频作答的 `/step` 最坏 **33s**。成因不是 LLM —— 是那一处的 IAT **调用点没有预算**，只有服务层自己的 8s + `open_timeout=5s`（mission 轮则另外包了 `IAT_TURN_BUDGET_S`）。常规（IAT ≤8s）下 28s 仍在 30s 内，只有**讯飞 IAT 挂死**这个角落会吃穿余量。闭合办法：把 `grade_step` 里的转写也包进 `IAT_TURN_BUDGET_S`（属于讯飞侧调用点的活，本次刻意没做）。测试里这条列在 `over_budget`，从 33s 涨上去就红。
+
+**新增一条同步 LLM 路径时的硬性要求**（这就是"没有默认值可躲"）：
+1. 取一个**具名** `*_BUDGET_S` 常量（不许就地写字面量 —— 求和测试读的是常量名），传给 `_judge(hard_budget_s=...)` 或包 `asyncio.wait_for`；
+2. 在 `drill_grader.py` 硬预算块的最坏求和表里**加一行**（含"同请求内其它 await"）；
+3. 在 `test_latency_budget.py::test_worst_case_sum_of_each_sync_path_fits_under_30s` 的 `fits` 里加同一条数；
+4. 装不下就只有两个选择：改走 202 + 轮询（照 `run_review_copy_job`），或写进 `over_budget` 并给 ceiling 与归属 —— **不许**默默留下。
+   机器侧的锁：AST 扫全 `app/`，未传 `hard_budget_s` 的 `_judge` 调用点直接红；绕开 `_judge` 的裸 `provider.chat(...)` 未写 `timeout=` 也直接红。
+5. 超时**必须**在服务层翻成既有的降级异常（`_judge` 里 `TimeoutError → LlmUnavailableError`）。这是承重的：`_graded_text_step` / `build_review_report` / `polish_text` / `judge_level` 四个调用点只 `except LlmUnavailableError`，让裸 `TimeoutError` 逃逸就是把"诚实降级"变成 500，**比不加预算更糟**。
 
 ## 6. 已知边界 / 坑位（血泪清单）
 
@@ -96,7 +203,14 @@ docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f
 - 本盒工具超时与进程杀手：长跑任务一律 `nohup ... </dev/null & disown`；`pkill -f` 一律 `zcode[-]cli`/`uvicorn.*` 方括号自匹配免疫写法。
 - GitHub 直链测速：本盒→`release-assets.githubusercontent.com` 11-40KB/s，手机只会更差——OTA 永远走自托管；大文件拉取给 20-30min 耐心或 `--continue-at -` 续传。
 - Room 版本冻结：新表只建在 `EnglishContentDatabase`（v1 独立 DB），`AppDatabase` 保持 v3——删旧实体不 bump 会在 v2.6 老装上炸（已在 P8 用冻壳规避）；升级 Room ≥2.7 前不要动 HistoryCacheEntity 壳。
-- LLM 额度与降级：全课生成 5-10min / 判级润色 6-60s 属预期；偶发超时全部按设计诚实降级（不卡流程）。换 key/换模型后必做：`/llm/models` 若返回空列表 = 新模型不在代码内置目录且 `LLM_EXTRA_MODELS_JSON` 未填——判分不受影响（恒用 `LLM_DEFAULT_MODEL`），但客户端下拉框会空。
+- LLM 额度与降级：**全课生成 5-10min 仍属预期**（202 + 轮询的后台作业，`GEN_TIMEOUT_S=240s`/段，不受 30s 契约约束）；但「**判级 6-60s / 润色 6-60s 属预期**」这句**自 v2.2.0 起作废** —— 判级现在 20s 封顶（超时=诚实空态）、润色 10s 封顶（超时=`polish=null` + 一句「未做润色」）、文本步判分 20s 封顶、总评文案改由 45s 的后台作业慢慢写（请求本身亚秒级返回 202）。同步路径的时延一律按 §5.5 那张表算，不再用"6-60s 属预期"糊过去。偶发超时全部按设计诚实降级（不卡流程、不 500）。换 key/换模型后必做：`/llm/models` 若返回空列表 = 新模型不在代码内置目录且 `LLM_EXTRA_MODELS_JSON` 未填——判分不受影响（恒用 `LLM_DEFAULT_MODEL`），但客户端下拉框会空。
+- **v2.2.0 是 breaking 的（刻意为之，不做旧包兼容）**：`POST /sessions/{id}/finish-mission` 由 200 改 **202**、响应体改成 `{session_id, revision, stage, status, review_status}`、**`report` 字段直接移除**（不是置 nullable）。因此**必须**与 §3.2 的强更配置同批上线；只发 APK 不设强更 = 旧包收工时拿到没有 `review` 的响应、要再点一次吃 409 才进复盘页；只设强更不发 APK = 老用户被要求升到一个还没发布的版本。`SessionView` 与 mission 轮响应新增 `review_status: str | None`（`generating`/`ready`/`failed`，未收工为 null），`ReviewReport` 新增 `evidence_note_cn`；状态住在 `doc` 这个普通 JSON 列里 → **零 alembic 迁移、零新表、零新端点**（轮询复用既有 `GET /sessions/{id}`）。
+- **判断"AI 文案到了没有"只许读 `review_status`，不许读 `report.source`**：作业正常跑完而 LLM 挂着时的终态就是 `ready` + `source=="heuristic"`，那已是诚实的最终答案（页面上另有降级横幅）。把 `source=="heuristic"` 当成"还在生成"会把复盘页永久挂住。`review_status` 是 `str | None` 而不是字面量枚举，也是同一个道理：JSON 列里的脏旧值必须降级成"不可知、别再等"，而不是让 GET 500。
+- **后台作业会随进程重启被丢**（`asyncio.create_task` 不持久）：兜底是 GET 的 90s 就地重派（§5.5）。**数值骨架在 202 之前就已 commit**，所以丢的只有那两句文案，报告本身不会丢。若看到某条会话长期停在 `generating`，先确认重派门 `_REVIEW_IN_FLIGHT` / 水位没被改坏，再看日志里作业有没有落 `failed`（作业任何异常都必须收敛成 `review_status="failed"`，**禁止静默死掉**）。
+- **总评 `overall` 为空不是 bug**：只平均 `source ∈ {xunfei, llm}` 的可信分，整场降级或全跳过时 `dims` 全 None → `overall=null`，此时客户端渲染的是 `evidence_note_cn` 那句解释（「本场没有可信评分证据…不是练得差」），而不是一根破折号。看到破折号才是回归。
+- **Room 的 `history_cache` 冻壳仍不许动**：`5556851` 删过 `HistoryCacheDao`，但 `history_cache` 至今作为**冻结实体**留在 `AppDatabase` 里，唯一作用是钉住 Room 2.6.1 的 v3 身份哈希——不 bump 版本就删 `@Entity` 会让存量装在 `checkIdentity` 崩（E5 的落盘方案因此刻意用 `filesDir` 里一份 JSON，不新建 Room 实体/DAO）。升级 Room ≥2.7 之前别碰这个壳。
+- **发版别再靠人记版本号**：`android/app/src/main/**` 有改动而同一事件范围内没 bump `versionCode` / 没写 CHANGELOG → CI 的 `release-gate` 直接红（§3.0）。历史上这条门该红的那一次是 `2fd067d`（20 个文件，全绿，永久没上过手机）。
+- **`/sessions` 列表默认只看 `active` 是旧行为**：v2.2.0 客户端额外查 `status=completed` 来摆「查看上次复盘」/「最近复盘」（后端 `GET /sessions?status=completed` 早就支持，本次无后端改动）。**历史详情页故意没有"回看复盘"入口**：`history` 表没有 `session_id` 列，加它要迁移，而本版刻意零迁移。
 - **陈旧环境变量遮蔽 `.env`**（09-07 血案，耗 1h+）：pydantic-settings 优先级 = 进程 env > `.env`。本机曾长期在 `~/.bashrc:172` export 旧 `MIMO_API_KEY`，用户更新 `.env` 换 key 后被 bashrc 旧值静默遮蔽——表现酷似"上游拒 valid key"。已修复：`deploy.sh` 启动前自动剥离与 `.env` 同名变量（`.env` 唯一事实源）；轮换任何被 shell export 过的 key 时，记得同步改 `~/.bashrc`。
 - **MiMo key 分线路且互不通用**：`tp-`=token-plan 订阅（只认 `token-plan-cn.xiaomimimo.com`），`sk-`=平台 REST API（只认 `api.xiaomimimo.com`）。key 被上游作废前会先从 429(欠费/额度) 变 401(吊销)——401 别先怀疑代码。
 - **冒烟/临时脚本会被会话环境变量遮蔽 `.env`**（09-08 复现）：本 agent 会话 env 自带一个 `MIMO_API_KEY`（用于别处），直接 `python scripts/smoke_xunfei_ise.py` 报 401 invalid key——deploy.sh 早已免疫，裸跑脚本不行。冒烟脚本已内置「启动时剥离与 `.env` 同名 env 键」（唯一事实源纪律的脚本级复制），自己写一次性脚本时记得同招。

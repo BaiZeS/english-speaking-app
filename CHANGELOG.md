@@ -1,5 +1,42 @@
 # Changelog
 
+## v2.2.0 — 2026-09-11 · 五个真机症状，外加把「发版」从人的记忆里取出来
+
+versionCode 9 / versionName 2.2.0。**与旧版不兼容**（`finish-mission` 契约变更），本版按强制升级发布，见下「发版与升级」。
+
+> **本版第一件该说的事**：commit `2fd067d`（长按录音 + 实时麦克风音量表，改了 `android/app/src/main/` 下 **20 个文件**，其中 17 个是实质改动）自 2026-09-09 起就躺在 `main` 上、双 CI 全绿，但它没动 `versionCode`——于是 OTA 通道上那份 APK 仍是 v2.1.0 的树（`25d05a3`，`2fd067d` 的**祖先**）。用户报告的 5 个症状里有两个（「还是点按、不是长按」「录音条固定不动」）源码早就动过了，学员手机上一次都没拿到。**这两项修复随本版第一次到达设备。**
+> v2.1.0 之后 `CHANGELOG.md` 确有三个新章节，但它们都显式标注「无客户端版本变更」——所以「v2.1.0 起没有任何客户端改动上过手机」这句话是准确的。真正的缺陷不是"忘了 bump"，而是系统里没有任何东西在问「HEAD 可发布吗」；本版把这个问题交给机器（见工程摘要第一条）。
+
+### 用户可感知（这一版打开 App 能看到什么不一样）
+
+- **长按就是长按**：打基础、实战对话、跟读练课、角色对话、弱词本、测评朗读题——短句面一律**按住说话 · 松开发送**，按住即录（键变红 + Stop 图标），松手即停并提交；按住期间不松手不会出现"既已开始又已结束"的错乱。
+- **点按的面不再谎称长按**：影子跟读（整篇连读，没人能按住不松手几十秒、且它没有 30 秒上限）与自由对话（一轮回答可以很长，30 秒到点自动发送）**保留点按开关**，但文案改口成「点一下开始 / 点一下结束并发送」，并且旁边给出**已录 `mm:ss` 计时**——自由对话在离上限 5 秒时追加「即将自动发送」。全 App 不再有"文案承诺长按、控件其实是点按"的屏幕。
+- **录音条真的会滚了**：说话时波形从右往左推，每根条按自己那一帧的音量取高（不再是整块等高、也不再是阈值电平表），约 1.6 秒的历史在屏上滚过；**松手后这一条的形状会留在屏上**直到评分回来，不再是"一松手界面就空了"。自由对话与 CEFR 测评页此前**根本没有**录音条，现在也有了。
+- **评分环节不再骗人**：松手进入评分时，屏幕底部显示「评分中…」，而不是"跳过额度已用完"（此前同一个布尔把"额度用完 / 没有待做步 / 请求在途"三件事压成一句话，于是评分那 8–30 秒里底部一直在喊额度用完了，而同屏右上角还印着"跳过额度 2/2"）。额度真的用完才说用完（并报出每场几次），全部步骤做完说做完，没有清单可跳时这一行整个不出现；快照加载失败给的是**可重试**的错误页，而不是永远亮着的"正在恢复会话…"。
+- **每个环节练完立刻有反馈**：跟读/复述/翻译/造句每一题答完就直接看到反馈卡——总分 + **五个维度子分**（发音/流利/完整/语法/词汇；服务端说"这一维没有证据"的那些**不画**，不会被算成 0 分）+ **逐词芯片带音标** + 引擎实际听到的转写原文 + 中文建议 + 要点与错误。打到 **85 分以上**停留 5 秒后自动进下一题（小字低透明度倒计时），**滚一下或点一下就取消**，改成你自己掌握节奏；85 分以下必须手动点「继续」，因为那正是最该把中文建议读完的分数带。退出重进这节课，已答步骤的反馈**还在**（服务端一直在下发每步的最近评分，此前被客户端丢掉了）；进度点上也直接印分数。
+- **每日练习收工不再超时**：点「收工」后**立刻**进复盘页——总分圆环、四维条、任务清单、逐句对照、生词，这些数字在收工那一刻就已经算完落库；只有那两句 AI 评语的位置写着「AI 正在写总评…」，几十秒后补齐，不用干等一个转圈的进度条，也不会再看到裸英文红字 `timeout`。**聊到轮次上限自动收工**（每日练习最常见的结束方式）走完全一样的路径。
+- **复盘报告回得去了**：练完退出后重进课程详情，会看到明确的「**查看上次复盘**」（另一颗键、另一句话），直达复盘页；首页也有「**最近复盘**」。修好之前这里只有一颗「开始学习」，而它查不到已完成的会话，于是点下去是**新开一局并悄悄丢掉刚写好的那份报告**。现在那颗主按钮在这种场合自己写「再练一次（新开一局）」。
+- **失败与降级都用人话说**：后端错误码走一张共享中文表（含此前**完全没有映射**的 `SKIP_LIMIT_REACHED`），表里没有就采纳后端已经写了中文的消息，**绝不把英文原文递到学员眼前**；读超时的文案也老实说明"服务器可能仍在处理，稍后从最近复盘或历史里看结果"，而不是只喊一句失败让人反复重发。
+- **总分不许是"—"**：一场练习没有任何可信评分证据时（外部评测与 LLM 判分都没参与），复盘页给一句解释——「本场没有可信评分证据 (外部评测 / LLM 判分未参与), 总分与四维留空 —— 不是练得差」，不再用一个破折号让人以为自己考了零分。
+- **杀进程不再丢成绩页**：课本练课的成绩聚合页以前只存在内存里，进程被回收就全没了；现在落一份 JSON 在应用私有目录，重开还在。
+
+### 工程摘要
+
+- **R1 交付闭环：把版本号递增变成机器门（本版真正想根治的东西）**。`.github/workflows/android-ci.yml` 新增 `release-gate` job：一个 push/PR 的**整个事件范围**（`github.event.before..after`，PR 用 base..head，而不是只看 HEAD commit）改了 `android/app/src/main/**`，就必须同时 (a) 让 `android/app/build.gradle.kts` 的 `versionCode` 严格递增、(b) 让 `CHANGELOG.md` 增加内容，否则**红**——不是 warning（warning 就是那条已经失败过一次的人记 SOP：`docs/operations.md` 第 3 节写着"versionCode 永远严格递增"）。`build-debug-apk` 也 `needs` 它。一条受控例外：尚未发布的"版本列车"（HEAD 的 versionCode 高于最近可达 tag、且 CHANGELOG 已有该版本章节）允许不重复 bump，否则 P0 先 bump、P1–P6 继续叠在同一版上的发版方式会被逼着给同一轮发布刷多个版本号。逃生口是 commit message 里的 `[release-gate-skip: <理由>]`（空理由不生效，命中行进日志与 step summary）。
+- **文档对账（同一病灶的另一处表现）**：`android/README.md` 一直写着"168 个 JVM 单测"，本次开工前实清点是 176，现在是 **327**；`README.md` 把课文位置进度条列为"录音可视化"（录音期间它按定义不可能动——这正是"录音条固定显示"观感的一半来源），已改口并给进度条加了语义标签。
+- **问题 2 为什么"结构上不可能滚动"**：发版构建里电平是写死的常量（`level = if (isRecording) 0.7f else 0f`），而振幅高度画在透明盒子上、可见盒子恒满高；即便在 HEAD 上，旧组件也是无状态阈值电平表（28 个固定槽位、所有点亮条共用一个高度），无历史缓冲、无动画。现在是真滚动波形：`ui/components/RecordingWaveform.kt`（Canvas + **一个** `Animatable` 驱动子条滑移，不做 N 个值的动画）← `AudioRecorder.waveformFlow` ← 纯环形缓冲 `audio/WaveformHistory.kt`（40 条 ≈ 1.6 s @ 录音机 ~25 Hz 帧率）。喂的是**平滑前**的逐帧峰值：`AudioLevelMapping.smooth` 的 DECAY=0.25/帧需要约 440 ms 才能从 1.0 落到 0.05，用它画波形会把 3–5 音节/秒糊成一片（该映射及其 9 个单测**一律未动**）。`finalizeTake()` 刻意**保留**历史而不是清空，于是评分期间形状仍在。旧组件 `RecordingLevelIndicator.kt` 被**删除**，让编译器强制 5 个调用点在同一提交内迁移。
+- **问题 4 的根因不是"没做卡片"，是渲染门键在自我作废的身份上**：卡片门在 `answeredStepId == spec.id`，而 `Graded` 事件**在同一次归约里**重算 `currentIndex` → 产生评分的事件同时销毁了卡片要读的键，过关时卡片永不组合；最后一步过关时 `|| currentStep == null` 那半句又是死代码（提前 return 到不了）。现在门只读独立槽位 `pendingGrade`，并区分 `displayedStepId`（屏上是哪题）与 `answerableStepId`（服务端还允许答哪题）——反馈停留期间这两个问题不再是同一个答案。新组件 `ui/scenes/DrillFeedbackCard.kt`；`step.last_grade` 开始被映射（崩溃恢复后逐题反馈不丢）；实战气泡补了逐轮紧凑发音条。
+- **问题 5 的根因不是"LLM 太慢"，是同步 HTTP 里挂了一次没有预算的 LLM 调用**：生产日志（session `719833d1-6e30-4499-896f-6ed18d1501a8`，2026-09-10）显示 `finish-mission` 烧了 ~68 s 才降级，而 `200 OK` 那行从未打印——手机的 30 s `readTimeout` 早就把 socket 关了；报告其实已落库，学员随后猛点四次「收工」收四次 409。现在 `ReviewReport` 只有 `highlights` / `improvements` / `source` / `llm_source` 四个字段来自 LLM，其余全是确定性聚合：请求内算完并 commit 数值骨架、置 `doc["review_status"]="generating"`、**释放行锁**、返回 **202**；后台任务 `run_review_copy_job` 只补文案。客户端立刻跳转并按 `ReviewPollingPolicy`（2 s 起、6 s 封顶、5 min 放弃）轮**已有的** `GET /sessions/{id}`。
+- **时延契约（R2，防复发的另一半）**：不变量是「同步 HTTP handler 里的每一次 LLM 调用都必须有显式硬预算，且 `budget ≤ 30s − 同请求内其它 await − 5s 余量`」。权威表在 `backend/app/services/drill_grader.py` 的硬预算块注释里，并由 `backend/tests/test_latency_budget.py` 钉死（含"新增 `_judge` 调用点不写预算就直接红"的 AST 扫描）；文档口径见 `docs/operations.md`「时延预算表」。两个静默放大机制被关掉：`AsyncOpenAI(max_retries=2)` 会把每次"20 s 超时"变成 ~62 s（`with_options(timeout=...)` **保留**构造期的 `max_retries`），现改为 `max_retries=0`；`_judge` 坏 JSON 的第二次尝试现在落在同一堵 `asyncio.wait_for` 墙内。`_judge` 内部把 `TimeoutError` 翻成 `LlmUnavailableError` 是承重的——四个调用点只 `except LlmUnavailableError`，逃逸就是 500。**还有一行明知超预算并在测试里钉了上限**：音频作答的 `/step` 若讯飞 IAT 挂死是 33 s 天花板（该调用点只有服务层 8 s + `open_timeout` 5 s，没有调用点预算），闭合办法写在那段注释里。
+- **额外发现的 4 个同区域缺陷（复核时顺手，全部本次修掉）**：**E2**「收工」可重复提交——`finishAndReview` 只守卫 `finished` 不守卫在途位，每次重 tap 再发一个 ~60 s 请求（就是那 4 连 409 的直接成因）；现在守卫在 `launch` **之前同步**翻在途位（在协程内翻是同一帧竞态，两次点按都过得去），收工弹窗确认键在途禁用，失败给显式重试出口。**E3** 打基础页把"加载 / 失败 / 已完成"三态混成一个 `steps.isEmpty()`，与症状 3 同形状，单拆 `canSkip` 修不掉。**E4** 测评页从来就没有录音条（新增，不是修复）。**E5** `ScoreSessionHolder` 无持久化——改成 `filesDir` 里一份 JSON（编解码抽成纯 Kotlin `ScoreSessionCodec`）；**确认过无法从后端重建**：`history` 表每行只有逐句 total/pronunciation/fluency/completeness，没有逐词分、没有建议、没有角色名、也没有 `session_id`。刻意**不用 Room**：`5556851` 是故意删掉 `HistoryCacheDao` 的，而 `history_cache` 至今仍作为**冻结实体**留在 `AppDatabase` 里，只为钉住 Room 2.6.1 的 v3 身份哈希（不 bump 版本就删 `@Entity` 会让存量装在 `checkIdentity` 崩）——那个冻结实体不许动。
+- **一条初判缺陷经复核不成立，记录以免被人"顺手修好"**：所谓 `PlayerShadowView` 里 `state.micLevel / 2f` 把电平砍半——全仓 grep 找不到任何电平缩放，命中的 `/ 2f` 全在雷达图与统计卡的几何计算里。**没有这个 bug。**
+- **可测试性沿用既有约定**：仍然**没有** `androidTest` 源集，仍不引 Robolectric/Compose 测试栈；判定逻辑一律抽成纯 Kotlin 再 JVM 单测。本次新增的接缝：`audio/WaveformHistory`、`audio/RecordingTakeClock`、`data/remote/BackendErrorText`、`ui/components/WaveformGeometry`、`ui/scenes/ReviewPollingPolicy`、`ui/scenes/FeedbackAdvancePolicy`、`ui/scenes/ReviewStateMachine`、`ui/scenes/MissionFinishGuard`、`ui/scenes/ReviewEntryPolicy`、`ui/scenes/SubScoreReadout`、`ui/score/ScoreSessionCodec`（每个都有对应 JVM 测试）。
+- **自动前进阈值取 85 不是 60**：60 是通过线（`MIN_SCORE_TO_ADVANCE`，语义只是"不拦"），85 是本 App 已有的优秀线（`ScoreColorMapper.GREEN_THRESHOLD`、弱词毕业线同值）。60–84 恰是最需要读中文建议的分数带。取消语义：滚动 + 点按任意处即取消（「继续」「再试一次」两颗动作键除外，它们本来就前进）；倒计时自然到期不算"取消"。
+- **API 契约变更（breaking，刻意为之）**：`POST /sessions/{id}/finish-mission` 由 200 改 **202**，响应体变成 `{session_id, revision, stage, status, review_status}`，**`report` 字段直接移除**（不是置 nullable）——本次发布按强更走，不同旧客户端做兼容。`SessionView`（`GET /sessions/{id}`）与 mission 轮响应新增 `review_status: str | None`（`generating` / `ready` / `failed`；从未收工为 null）。它**故意**不写成 Literal：值住在 JSON 列里，一条脏的旧数据应当降级成"不可知"而不是让 GET 500。`ReviewReport` 新增 `evidence_note_cn: str = ""`。`doc` JSON 列新增 `review_status` / `review_facts` 两个键——**零 alembic 迁移、零新表、零新端点**。语义坑值得写清：判断"AI 文案到了没有"要读 `review_status`，**不要**读 `report.source`——作业正常跑完而 LLM 挂着时的终态就是 `ready` + `source="heuristic"`，那已是诚实的最终答案。
+- **测试基线**：Android JVM 单测 **327 passed / 0 failed**（本轮开工时 176；文档写的 168 在开工前就已过期）；后端 **573 passed / 0 failed**（开工时 528），`ruff check` / `ruff format --check`（110 个文件）/ `mypy app`（61 个文件）全干净，整轮覆盖率 89.89%，稳在 CI `--cov-fail-under=85` 门内。`assembleDebug` 产物 22.1 MB，ktlint 干净，detekt 维持既有的 ~99 findings 软门画像。
+- **发版与升级**：本版按**强制升级**发布，这需要**另行**在 `backend/.env` 设 `APP_MIN_SUPPORTED_VERSION=2.2.0` 并 `deploy.sh restart`——`publish_apk.sh` 不写它，而 `/app/version` 的 `min_supported_version` 默认是个 `0.0.0` 哨兵，只有显式配置才产生 `force=true`。回滚 APK 时必须同步把它降回 `0.0.0`，否则会把用户钉在一个已下架的版本要求上。
+- **本版没有做、也没有声称做过的事**：**真机验收尚未执行**（`docs/operations.md` 记的是历次发布的真机结果，本版暂无新条目）——上面所有客户端行为都以"源码 + JVM 单测 + 后端集成测试"为据，屏幕上的观感待按验收脚本逐条走一遍。也要诚实说明：现在这台机器现役的是免费额度的模型，一次 500 token 的总评调用**常常仍会**落到确定性文案（`source="heuristic"` + 降级横幅），本次换来的是"在预算内落地"而不是"晚 68 秒再落地"。
+
 ## 测试基线归零 — 2026-09-08（无客户端版本变更，真机无需重新下载）
 
 ### 工程摘要

@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.1.0**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.2.0**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
 
 ## 项目状态
 
@@ -28,8 +28,9 @@
 | 评分语速修复 | ✅ 语速按真实音频时长计算（原固定 4s 窗口）；/score 支持 category=read_word |
 | **v2.0 后端（P1–P4）** | ✅ 情景课内容层（8 门人工剧本 + 文件缓存读路径）、会话状态机（崩溃可恢复）、打基础四题型评分、任务制实战 + 单次 LLM 复盘报告、两级 AI 生成课（jobs 轮询）、CEFR 测评、EWMA 能力画像（stub 证据门控）、/polish、/expressions、/courses/progress |
 | **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
-| **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
+| **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试（**该口径止于 v2.0.0**，当前基线见下一行与 android/README.md）；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
 | **v2.1.0 生产中继（OTA 通道）** | ✅ release 包内置地址切 `:5173`（versionCode 8）；`/static/apk` 自托管分发 + `publish_apk.sh` 一条命令完成发版收尾（GitHub 出口仅 ~10-40KB/s，自托管走服务器出口）；`:8000` 桥退役；运维护栏脚本 + 双实例日志 + 冒烟命令全套（docs/operations.md）|
+| **v2.2.0 五个真机症状 + 交付闭环** | ✅ 长按/点按两种录音手势按取句长短分派（共享件 `HoldToTalkRow`/`TapToTalkRow`）+ **真滚动波形**（`RecordingWaveform` / 纯环形缓冲 `WaveformHistory`）+ 打基础逐题**完整即时反馈**（五维子分/逐词 IPA/转写/建议，≥85 停留 5s 自动前进）+ 收工改 **202 + `review_status` 轮询**（总评不再超时）+ 复盘报告回得去（「查看上次复盘」/「最近复盘」）+ 中文错误码表。后端**零迁移**、新增同步 LLM 时延契约表与 `test_latency_budget.py`；CI 新增 **`release-gate`**：改 `android/app/src/main/**` 却不同范围 bump `versionCode` + `CHANGELOG.md` 直接红（`2fd067d` 那批修复卡在 main 上从没上过手机，就是这条要防的病）。基线：Android **327** JVM 单测 / 后端 **573** 测试全绿；⏳ **v2.2.0 真机验收尚未执行** |
 
 ## 仓库结构
 
@@ -46,7 +47,7 @@
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
 - **AI 服务**：MiMo TTS（语音合成，已启用真合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-flash`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
-- **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
+- **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。`android-ci` 的四个 job：`release-gate`（**改了 `android/app/src/main/**` 就必须同范围 bump `versionCode` + 写 `CHANGELOG.md`**，否则红且挡住产物构建）→ ktlint → detekt(软) → testDebugUnitTest → assembleDebug。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
 
 ## 快速开始
 
@@ -78,13 +79,20 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 发布通道（诚实版，v2.0.0 起）：
 
 - **正式 OTA**：push `v*` tag → `release.yml` 自动构建并发布 GitHub Release
-  （`EnglishAssistant-<ver>.apk`，如 v2.1.0）。**发布后必须再在部署机跑一次
+  （`EnglishAssistant-<ver>.apk`，如 v2.2.0）。**发布后必须再在部署机跑一次
   `backend/scripts/publish_apk.sh <tag>`**：把 APK 拉到服务器 `static/apk/` 自托管
   并写 `.env` 的 `APP_LATEST_VERSION`/`APP_APK_URL`（`/app/version` 优先级 1）——
-  服务器到 GitHub 资源站实测仅 ~10-40KB/s，不切自托管时手机 OTA 下载 21MB
+  服务器到 GitHub 资源站实测仅 ~10-40KB/s，不切自托管时手机 OTA 下载这 20 余 MB
   要约 10-30 分钟。旧客户端打开 App 即可检测到新版本并下载安装；
   提示可「稍后再说」，**不强制**（仅当显式配置 `APP_MIN_SUPPORTED_VERSION`
   才进入不可跳过分支）。
+- **v2.2.0 是一次强制升级**：`POST /sessions/{id}/finish-mission` 在本版改成了
+  **202 + `review_status`**、响应里的 `report` 字段**移除**（刻意不为旧包做兼容，见
+  CHANGELOG v2.2.0）。因此发版时 `publish_apk.sh` 之外**还要**在 `backend/.env` 里
+  显式设 `APP_MIN_SUPPORTED_VERSION=2.2.0`（`publish_apk.sh` 不写它，而 `/app/version`
+  默认把 `min_supported_version` 停在 `0.0.0` 哨兵），否则未升级的 v2.1.0 包在新后端上
+  收工会拿到空 `review`、要再点一次吃 409 才进复盘页。回滚 APK 时**必须同步**把它降回
+  `0.0.0`。步骤与门禁见 [docs/operations.md](docs/operations.md) 第 3 节。
 - **生产后端部署**：主实例公网 `http://118.89.58.84:5173/api/v1/`，运行于
   `backend/docker-compose.prod.yml` 发布栈（容器 `english-api-prod` +
   `english-postgres-prod`，库 `english_prod_5173`@独立卷 `english-prod-pgdata`；
