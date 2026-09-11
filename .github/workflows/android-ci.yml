@@ -116,6 +116,7 @@ jobs:
           BASE_SHA="${GATE_BASE:-}"
           HEAD_SHA="${GATE_HEAD:-}"
           RANGE_NOTE=""
+          NARROWED=0
 
           if ! has_commit "$HEAD_SHA"; then
             # push 一定带 after; 走到这里说明是 workflow_dispatch 或对象没被抓下来。
@@ -133,7 +134,10 @@ jobs:
               RANGE_NOTE=" (退到本次 push 首个 commit 的父)"
             elif has_commit "$(git rev-parse -q --verify "$HEAD_SHA^" 2>/dev/null || true)"; then
               BASE_SHA="$(git rev-parse "$HEAD_SHA^")"
-              RANGE_NOTE=" (退到 HEAD 的父 —— 只审了最后一个 commit, 见本步开头设计 3)"
+              RANGE_NOTE=" (退到 HEAD 的父 —— **只审了最后一个 commit**)"
+              # 范围变窄 = 门能看见的东西变少, 必须吵一点, 绝不安静放行:
+              # force push / 分支重建时 before 指向的对象可能已经不在仓库里。
+              NARROWED=1
             else
               {
                 echo "::error::无法确定发布门的审计范围 (before=${GATE_BASE:-<空>}, push_first=${GATE_PUSH_FIRST:-<空>})"
@@ -145,6 +149,14 @@ jobs:
           fi
 
           echo "审计范围 $BASE_SHA..$HEAD_SHA$RANGE_NOTE"
+          if [ "$NARROWED" -eq 1 ]; then
+            # 无论下面判成什么, 这一行都留在 summary 里: "这次看得更少"本身就是要被看见的事实。
+            echo "::warning::发布门审计范围**已收窄到最后一个 commit** (事件里的 before 不可解析: force push / 分支重建)"
+            {
+              echo "⚠ 审计范围收窄: 事件的 before 不可解析, 本门这次只看了最后一个 commit。"
+              echo "如果是 force push 把该 bump 的那批改动了挤出了门的视野, 这里就是它。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "范围内的 commit:"
           git log --oneline "$BASE_SHA..$HEAD_SHA" | sed 's/^/    /'
 
@@ -231,7 +243,7 @@ jobs:
             echo "::notice::发布门被 commit message 逃生口跳过 —— $SKIP_LINE"
             echo "跳过是**人的判断**, 不是事实: 本范围内的 $SRC_HITS 个 ${SRC_PREFIX}* 改动仍不会改变可发布产物。"
             {
-              echo "⚠ 发布门被逃生口跳过: [$SKIP_LINE]"
+              echo "⚠ 发布门被逃生口跳过: $SKIP_LINE"
               echo "范围内 $SRC_HITS 个 ${SRC_PREFIX}* 文件改动; versionCode=$VC_HEAD, CHANGELOG 净增 $CL_ADD 行。"
               echo "请复核这个理由: 跳过之后, 这批改动是否仍会随某次发布真正到达设备。"
             } >> "$GITHUB_STEP_SUMMARY"
