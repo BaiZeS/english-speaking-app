@@ -585,6 +585,11 @@ def test_no_endpoint_waits_on_the_review_llm_any_more() -> None:
     这是防止 R2 复发的看门狗 —— 本次事故的形状就是"某个端点里挂了一次没人封顶的
     LLM 调用"。端点只许调纯算术的 ``build_review_skeleton``; 会调 LLM 的
     ``build_review_report`` 只能出现在后台作业之外的脚本/测试入口。
+
+    第二刀按**函数**切: 全文扫 ``build_review_report(`` 挡不住"在端点里直接 await
+    ``mission_engine.review_copy(...)``"这种写法 —— 那才是把总评 LLM 塞回请求的最短路径
+    (变异实测: 只有墙钟用例会红, 而墙钟用例很容易被当成 CI 抖动忽略)。作业自己也在本模块
+    里调 ``review_copy``, 所以必须按函数体切范围, 不能按文件切。
     """
     src = Path(cs.__file__).read_text(encoding="utf-8")
     assert "build_review_skeleton(" in src, "收工路径应改用数值骨架"
@@ -594,6 +599,21 @@ def test_no_endpoint_waits_on_the_review_llm_any_more() -> None:
     )
     # 文案只允许在后台作业里取, 且必须显式报作业预算。
     assert "hard_budget_s=REVIEW_COPY_JOB_BUDGET_S" in src
+
+    tree = ast.parse(src)
+    handlers = {"finish_mission", "_finish_mission_state", "submit_mission_turn"}
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name not in handlers:
+            continue
+        for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+            called = getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+            if called in {"build_review_report", "review_copy"}:
+                offenders.append(f"{node.name}:{call.lineno} 等了 {called}()")
+    assert offenders == [], (
+        f"收工入口的函数体里出现了会等总评文案的调用: {offenders}; "
+        "数值骨架落库 -> 202 -> 文案交给 run_review_copy_job, 别把它拉回请求里"
+    )
 
 
 def _direct_chat_call_sites() -> list[tuple[str, int, bool]]:
