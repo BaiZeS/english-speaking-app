@@ -9,6 +9,7 @@ import com.app.english.domain.model.ExpressionEntry
 import com.app.english.domain.model.FoundationStepSpec
 import com.app.english.domain.model.GenerationJob
 import com.app.english.domain.model.HintData
+import com.app.english.domain.model.MissionFinishAck
 import com.app.english.domain.model.MissionRecovery
 import com.app.english.domain.model.MissionSpecDetail
 import com.app.english.domain.model.MissionTaskSpec
@@ -155,8 +156,15 @@ fun SessionViewDto.toDomain(): SessionSnapshot = SessionSnapshot(
     briefing = briefing.toDomain(),
     mission = mission?.toDomain(),
     review = review?.toDomain(),
+    reviewStatus = reviewStatus.normalizesToNull(),
     course = course?.toDomain()
 )
+
+/**
+ * `review_status` 是**可选**键: 未收工 / §P6 之前的旧快照 / 后端字段缺席都会给 null,
+ * 空串按同一档处理 —— 界面对"不可知"的处置是"别再轮询", 而不是当成了一个真状态。
+ */
+private fun String?.normalizesToNull(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
 
 fun MissionSnapshotDto.toDomain(): MissionRecovery = MissionRecovery(
     openingA = opening?.a.orEmpty(),
@@ -197,7 +205,8 @@ fun MissionTurnResponseDto.toDomain(): MissionTurnResult = MissionTurnResult(
     costsScore = costsScore,
     source = source,
     llmSource = llmSource,
-    review = review?.toDomain()
+    review = review?.toDomain(),
+    reviewStatus = reviewStatus.normalizesToNull()
 )
 
 fun ReviewReportDto.toDomain(): com.app.english.domain.model.ReviewReportData =
@@ -220,8 +229,19 @@ fun ReviewReportDto.toDomain(): com.app.english.domain.model.ReviewReportData =
         abilityDelta = abilityDelta,
         hintsUsed = hintsUsed,
         source = source,
-        llmSource = llmSource
+        llmSource = llmSource,
+        evidenceNoteCn = evidenceNoteCn
     )
+
+/**
+ * 202 回执 -> 领域**状态**(不是数据)。这里刻意不碰报告本体: §P6 之后响应里**没有** `report`,
+ * 数值在 `GET /sessions/{id}` 的 [SessionViewDto.toDomain] 里读。
+ */
+fun FinishMissionResponseDto.toFinishAck(): MissionFinishAck = MissionFinishAck(
+    sessionId = sessionId,
+    revision = revision,
+    reviewStatus = reviewStatus
+)
 
 fun HintResponseDto.toHintData(): HintData = HintData(
     taskId = hint.taskId,

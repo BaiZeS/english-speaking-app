@@ -86,6 +86,25 @@ data class MissionUiState(
     val hint: HintData? = null,
     val hintWarnsScore: Boolean = false,
     val finished: Boolean = false,
+    /**
+     * 「收工」请求在途(§2.6 E2)。刻意不等于 [isSubmitting](那一位涵盖发一轮/要提示,
+     * 用它会把"对话请求还挂着"误判成"不能收工", 学员连弹窗都打不开), 更不等于
+     * [finished](那位的语义是"服务端已关闭本场", 超时路径下它一直是 false —— 正是原 bug
+     * 让整条退出链路持续可重入的原因)。
+     */
+    val isFinishing: Boolean = false,
+    /**
+     * 上一次收工**没成功**。界面上必须留一个显式出口(重试 / 先去看复盘): 报告很可能早就
+     * 躺在服务端了, 只留一句红字等于让学员重新开弹窗再猜一次。
+     */
+    val finishFailed: Boolean = false,
+    /**
+     * 一次性导航请求(one-shot 事件): 到轮次上限被服务端**自动收工**时置起, 界面消费后跳
+     * 复盘页。人工「收工」不走这里, 因为弹窗那条路径手上有 `onOpenReview` 回调; 自动收工
+     * 发生在发下一轮的协程里, 那里没有任何导航参数 —— 为这一个分支把回调穿进
+     * `sendTurn`/`stopRecordingAndSend`/`sendText` 三个入口, 换不到任何清晰。
+     */
+    val openReviewRequested: Boolean = false,
     /** 一闪而过的提示(新任务达成 reason / 收藏结果)。 */
     val snackbar: String? = null,
     val error: String? = null
@@ -93,6 +112,9 @@ data class MissionUiState(
     /** HUD「第 n/max 轮 · 已勾 m/k 项」。 */
     val hudText: String
         get() = "第 $turnCount/$maxTurns 轮 · 已勾 ${taskProgressLabel(checklist)} 项"
+
+    /** 有没有什么东西在途(发一轮 / 要提示 / 收工)。重复提交守卫读的就是这一位。 */
+    val inFlight: Boolean get() = isSubmitting || isFinishing
 }
 
 /**
@@ -171,7 +193,10 @@ class MissionViewModel @Inject constructor(
                         turnCount = mission.turnCount,
                         maxTurns = mission.maxTurns,
                         personaCn = course?.mission?.personaCn.orEmpty(),
-                        finished = loaded.status != "active"
+                        // 恢复时服务端已经关掉了这一场(auto-finish 或收工后崩溃恢复):
+                        // 停在聊天页毫无意义, 直接把「去复盘」这一次导航请求摆出来。
+                        finished = loaded.status != "active",
+                        openReviewRequested = loaded.status != "active" && loaded.review != null
                     )
                 }
             } catch (e: Exception) {
@@ -188,13 +213,13 @@ class MissionViewModel @Inject constructor(
 
     fun sendText() {
         val text = draft.trim()
-        if (text.isEmpty() || _state.value.isSubmitting || _state.value.finished) return
+        if (text.isEmpty() || _state.value.inFlight || _state.value.finished) return
         draft = ""
         viewModelScope.launch { sendTurn(text = text, audioB64 = null) }
     }
 
     fun startRecording() {
-        if (_state.value.isRecording || _state.value.isSubmitting) return
+        if (_state.value.isRecording || _state.value.inFlight) return
         // 乐观翻位: 按住放手的同一帧就把录音态立起来, 硬件启动挪到 IO 协程里,
         // 主线程不再阻塞 AudioRecord 构造(旧写法既卡手感, 又给了双击过守卫的窗口)。
         _state.update { it.copy(isRecording = true, error = null) }
@@ -268,14 +293,27 @@ class MissionViewModel @Inject constructor(
                 snackbar = result.turn.newlyDone.firstOrNull()?.evidence
             )
         }
-        if (result.review != null) {
-            // auto-finish(到 max_turns): 复盘已随响应返回, 直接进复盘页。
-            _state.update { it.copy(finished = true, snackbar = "回合用完, 已自动收工") }
+        // 到轮次上界的自动收工(§P6 客户端 4): 响应带的是**数值骨架** + generating。
+        // 以前这一路也在同一个请求里同步写 AI 文案, 于是"一天练到自然结束"必然撞上
+        // 30s 读超时(它比人工收工更高频, 而客户端那时候连跳转都执行不到)。现在和人工
+        // 收工同一条路: 立刻跳复盘页, 由那里轮询补齐文案。
+        val autoFinished = result.autoFinished || result.review != null
+        if (autoFinished) {
+            _state.update {
+                it.copy(
+                    finished = true,
+                    openReviewRequested = true,
+                    snackbar = "回合用完, 已自动收工"
+                )
+            }
         }
     }
 
+    /** 界面消费掉一次性「去复盘」导航请求(LaunchedEffect 里调一次, 避免重组时重复导航)。 */
+    fun consumeReviewRequest() = _state.update { it.copy(openReviewRequested = false) }
+
     fun requestHint() {
-        if (_state.value.isSubmitting || _state.value.finished) return
+        if (_state.value.inFlight || _state.value.finished) return
         viewModelScope.launch {
             _state.update { it.copy(isSubmitting = true, error = null) }
             try {
@@ -333,26 +371,58 @@ class MissionViewModel @Inject constructor(
 
     fun dismissError() = _state.update { it.copy(error = null) }
 
-    /** 退出确认后的收工: finish-mission -> 复盘页; 已 finished 的直接走。 */
+    /** 收工失败后的「先去看复盘」: 报告在不在由复盘页自己说清, 这里不替它猜。 */
+    fun openReviewAfterFailure(onOpenReview: (String) -> Unit) {
+        _state.update { it.copy(finishFailed = false, finished = true) }
+        onOpenReview(sessionId)
+    }
+
+    /**
+     * 退出确认后的收工(§P6 客户端 6 + §2.6 E2)。
+     *
+     * 两道门顺序是刻意的: **在途 -> 什么都不做**(那 4 连 409 的直接对策), 已 finished ->
+     * 不重复请求、直接跳。拿到 202 就**立刻**跳复盘页, 不再在这里等 AI 文案: 服务端在
+     * commit 202 之前已经把数值/历史行/`status="completed"` 全写完了, 欠的只有那两句总评,
+     * 而那部分归复盘页轮询。
+     */
     fun finishAndReview(onOpenReview: (String) -> Unit) {
-        if (_state.value.finished) {
-            onOpenReview(sessionId)
-            return
+        when (
+            MissionFinishGuard.tapOf(
+                finished = _state.value.finished,
+                inFlight = _state.value.inFlight
+            )
+        ) {
+            FinishTap.IGNORE_IN_FLIGHT -> return
+            FinishTap.OPEN_REVIEW -> onOpenReview(sessionId)
+            FinishTap.SUBMIT -> Unit
         }
         viewModelScope.launch {
-            _state.update { it.copy(isSubmitting = true) }
+            _state.update { it.copy(isFinishing = true, finishFailed = false, error = null) }
             try {
-                sessionRepository.finishMission(sessionId)
-                _state.update { it.copy(isSubmitting = false, finished = true) }
+                val ack = sessionRepository.finishMission(sessionId)
+                Timber.i(
+                    "mission finish accepted | session=%s review_status=%s",
+                    ack.sessionId,
+                    ack.reviewStatus
+                )
+                _state.update { it.copy(isFinishing = false, finished = true) }
                 onOpenReview(sessionId)
             } catch (e: Exception) {
-                // 已经收工的幂等场景(409 MISSION_FINISHED)照样进复盘。
                 val code = (e as? HttpException)?.backendErrorCode()
-                _state.update { it.copy(isSubmitting = false) }
-                if (code == "MISSION_FINISHED") {
+                if (MissionFinishGuard.failureMeansAlreadyFinished(code)) {
+                    // 已经收工的幂等场景(409 MISSION_FINISHED)照样进复盘。
+                    _state.update { it.copy(isFinishing = false, finished = true) }
                     onOpenReview(sessionId)
                 } else {
-                    _state.update { it.copy(error = e.missionMessage()) }
+                    // 复位在途位 + 翻起 finishFailed: 界面上的重试出口与「先去看复盘」都由
+                    // 这一位驱动。读超时**不代表**服务端没做完, 所以第二条出口不是摆设。
+                    _state.update {
+                        it.copy(
+                            isFinishing = false,
+                            finishFailed = true,
+                            error = e.missionMessage()
+                        )
+                    }
                 }
             }
         }
@@ -363,14 +433,16 @@ class MissionViewModel @Inject constructor(
         audioPlayer.release()
         if (_state.value.isRecording) audioRecorder.cancel()
     }
-}
 
-private fun Throwable.missionMessage(): String = when (this) {
-    is HttpException -> missionErrorCodeText(backendErrorCode(), backendErrorMessage())
-    // 读超时的异常 message 是裸英文 "timeout", 此前被原样渲染成红字; 更要紧的是
-    // 超时**不代表服务端没做完** —— 收工的复盘报告往往已经落库, 所以文案引导去
-    // 复盘/历史里确认, 而不是让人反复重点「收工」(生产日志里那 4 连 409 即由此来)。
-    else -> sessionMessage(fallback = "发送失败, 请重试")
-}
+    private fun Throwable.missionMessage(): String = when (this) {
+        is HttpException -> missionErrorCodeText(backendErrorCode(), backendErrorMessage())
+        // 读超时的异常 message 是裸英文 "timeout", 此前被原样渲染成红字; 更要紧的是
+        // 超时**不代表服务端没做完** —— 收工的复盘报告往往已经落库, 所以文案引导去
+        // 复盘/历史里确认, 而不是让人反复重点「收工」(生产日志里那 4 连 409 即由此来)。
+        else -> sessionMessage(fallback = "发送失败, 请重试")
+    }
 
-private const val BRIEFING_NOT_DONE = "实战还没解锁, 先把打基础清单走完"
+    private companion object {
+        private const val BRIEFING_NOT_DONE = "实战还没解锁, 先把打基础清单走完"
+    }
+}

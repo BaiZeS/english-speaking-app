@@ -6,9 +6,11 @@ import com.app.english.data.remote.EnglishApi
 import com.app.english.data.remote.MissionTurnRequestDto
 import com.app.english.data.remote.StepAttemptRequestDto
 import com.app.english.data.remote.toDomain
+import com.app.english.data.remote.toFinishAck
 import com.app.english.data.remote.toHintData
 import com.app.english.domain.model.ContinueSession
 import com.app.english.domain.model.HintData
+import com.app.english.domain.model.MissionFinishAck
 import com.app.english.domain.model.MissionTurnResult
 import com.app.english.domain.model.SessionSnapshot
 import javax.inject.Inject
@@ -45,8 +47,14 @@ interface SessionRepository {
     /** 要提示: 标记下一个判定回合 costs_score。 */
     suspend fun hint(sessionId: String): HintData
 
-    /** 主动收工 -> 复盘报告。 */
-    suspend fun finishMission(sessionId: String): MissionTurnResult
+    /**
+     * 主动收工: `POST` 返回 **202** + [MissionFinishAck](§P6)。
+     *
+     * 报告本体**不在**这个返回值里 —— 数值骨架在 202 之前就已 commit, 到
+     * [get] 的 `review` 里读, AI 文案由服务端后台作业补, `reviewStatus` 就是那盏灯。
+     * 收工因此从"一个可能烧 60s 的同步请求"变成一次跳转。
+     */
+    suspend fun finishMission(sessionId: String): MissionFinishAck
 }
 
 /** `/step` 与 `/skip-step` 的返回(评分 + 清单进度 + 是否解锁实战)。 */
@@ -124,29 +132,8 @@ class SessionRepositoryImpl @Inject constructor(
         MissionTurnRequestDto(deviceId = settingsStore.deviceId)
     ).toHintData()
 
-    override suspend fun finishMission(sessionId: String): MissionTurnResult {
-        val response = api.finishMission(
-            sessionId,
-            MissionTurnRequestDto(deviceId = settingsStore.deviceId)
-        )
-        // 收工响应里没有单轮语义: 把报告包进 turn-less 的结果(界面只读 review)。
-        return MissionTurnResult(
-            turn = com.app.english.domain.model.MissionTurn(
-                turnIndex = 0,
-                transcript = "",
-                reply = "",
-                suggestion = ""
-            ),
-            checklist = response.report.checklist.map { it.toDomain() },
-            cleared = response.report.cleared,
-            turnCount = response.report.turnCount,
-            maxTurns = response.report.maxTurns,
-            autoFinished = response.report.autoFinished,
-            finished = true,
-            costsScore = false,
-            source = response.report.source,
-            llmSource = response.report.llmSource,
-            review = response.report.toDomain()
-        )
-    }
+    override suspend fun finishMission(sessionId: String): MissionFinishAck = api.finishMission(
+        sessionId,
+        MissionTurnRequestDto(deviceId = settingsStore.deviceId)
+    ).toFinishAck()
 }

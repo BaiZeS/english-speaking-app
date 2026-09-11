@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,6 +39,11 @@ import com.app.english.ui.theme.Spacings
 /**
  * 复盘报告页(计划 §6.4): 总分圆环 + 4 维分条(无证据维度诚实显示「本轮无证据」)
  * + ability_delta 角标 + 任务清单 + 原话 vs 更好说法对照 + new_tokens + 参考剧本。
+ *
+ * §P6 的三态: 收工当场数值骨架就已落库, 缺的只有那两句 AI 文案 —— 所以"正在生成"这一态
+ * **照常渲染分数**, 只把文案区换成进度。整页 spinner 会把学员已经拿到的成绩藏起来,
+ * 而那恰好是原来的超时界面给人的感觉("我这一场白练了")。态的判定在
+ * [ReviewStateMachine], 本文件只负责照它渲染。
  */
 @Composable
 fun ReviewScreen(
@@ -62,23 +68,98 @@ fun ReviewScreen(
             }
         }
         when {
-            state.isLoading -> LoadingState()
+            state.phase == ReviewPhase.LOADING -> LoadingState()
             report == null -> ErrorState(
-                message = state.error ?: "加载复盘失败",
+                message = ReviewStateMachine.errorMessageOf(state.phase, state.error)
+                    ?: "加载复盘失败",
                 onRetry = viewModel::load
             )
             else -> {
                 OverallRing(report)
-                if (report.source != "llm") {
-                    DegradedBanner("本场文案由离线规则生成 (source=${report.source}), 配好 LLM 后会更细")
+                if (ReviewStateMachine.showDegradedBanner(state.phase, report.source)) {
+                    DegradedBanner(
+                        "本场文案由离线规则生成 (source=${report.source}), 配好 LLM 后会更细"
+                    )
                 }
                 DimBars(report)
                 ChecklistCard(report)
                 PairsCard(report)
-                HighlightsCard(report)
+                CopyCard(
+                    report = report,
+                    phase = state.phase,
+                    elapsedMillis = state.elapsedMillis,
+                    onRetry = viewModel::load
+                )
                 if (report.newTokens.isNotEmpty()) TokensCard(report)
                 state.course?.let { course ->
                     ScriptCard(course.id, course, state.isPlayingLine, viewModel::playLine)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 文案区(亮点 + 建议)。三态的**唯一**变化就发生在这里。
+ *
+ * `generating` 时刻意**不**先把确定版文案铺出来: AI 版本落地会整段换掉它, 学员看不出
+ * 哪一版是自己那场的成绩; 一句诚实的进度语 + 一个不确定的进度条就够了。
+ */
+@Composable
+private fun CopyCard(
+    report: ReviewReportData,
+    phase: ReviewPhase,
+    elapsedMillis: Long,
+    onRetry: () -> Unit
+) {
+    val hint = ReviewStateMachine.proseHintOf(phase, elapsedMillis)
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacings.s2),
+            verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
+        ) {
+            Text("亮点与建议", style = MaterialTheme.typography.titleSmall)
+            if (hint != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Spacings.s1)
+                ) {
+                    if (phase == ReviewPhase.GENERATING) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    Text(
+                        text = hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ReviewStateMachine.retryCopyLabelOf(phase)?.let { label ->
+                    TextButton(
+                        onClick = onRetry,
+                        modifier = Modifier
+                            .align(Alignment.Start)
+                            .padding(top = Spacings.tiny)
+                    ) { Text(label) }
+                }
+            } else {
+                report.highlights.forEach { line ->
+                    Text(
+                        text = "✦ $line",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+                report.improvements.forEach { line ->
+                    Text(
+                        text = "▲ $line",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
@@ -119,9 +200,24 @@ private fun OverallRing(report: ReviewReportData) {
                     }
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val note = ReviewStateMachine.overallCenterText(overall, report.evidenceNoteCn)
                     Text(
-                        text = overall?.let { "${it.toInt()}" } ?: "—",
-                        style = MaterialTheme.typography.displaySmall
+                        text = note,
+                        // 无证据时这里是一整句中文而不是一个数: displaySmall 会把整环撑满,
+                        // 所以要降字号 + 允许换行。「—」骗人说考了 0 分, 这句话才不会。
+                        style = if (ReviewStateMachine.overallCenterIsSentence(
+                                overall,
+                                report.evidenceNoteCn
+                            )
+                        ) {
+                            MaterialTheme.typography.bodySmall
+                        } else {
+                            MaterialTheme.typography.displaySmall
+                        },
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacings.s2)
                     )
                     Text(
                         text = if (report.cleared) "通关成功" else "未通关",

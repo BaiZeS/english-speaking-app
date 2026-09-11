@@ -185,6 +185,14 @@ data class SessionSnapshot(
     // 恢复实战页: 历史轮 + 任务清单 + 开场白; 首轮之前为 null。
     val mission: MissionRecovery? = null,
     val review: ReviewReportData? = null,
+    /**
+     * 总评文案的作业状态(`generating` / `ready` / `failed`; 未收工为 null)。
+     * §P6 的轮询键 —— 报告的**数值**不依赖它: 收工那次 commit 就已经把数值骨架写进
+     * [review] 了, 这个键只说"那两句 AI 文案补没补"。取值与解读集中在
+     * [com.app.english.ui.scenes.ReviewPollingPolicy](脏值/缺字段按"不可知, 别再等"
+     * 处理, 绝不让复盘页卡在转圈上 —— 那正是本次要修的 bug 的形状)。
+     */
+    val reviewStatus: String? = null,
     val course: SceneCourseDetail? = null
 )
 
@@ -219,8 +227,24 @@ data class MissionTurnResult(
     // llm | heuristic —— heuristic 时界面提示"本轮为离线降级判定"。
     val source: String,
     val llmSource: String?,
-    val review: ReviewReportData?
+    val review: ReviewReportData?,
+    /**
+     * 仅 `autoFinished` 时有值(§P6): 到轮次上限被服务端**自动收工**, 数值骨架已随本次
+     * 响应落库, AI 文案交给后台作业。以前这条路径也在同一请求里同步写文案, 于是"一天
+     * 练到自然结束"必然撞上手机 30s 读超时(比人工「收工」更高频)。现在它和人工收工一样:
+     * [review] 一到手就跳复盘页, 由复盘页轮询这个状态键。
+     */
+    val reviewStatus: String? = null
 )
+
+/**
+ * 「收工」的 202 回执(§P6)。
+ *
+ * 只有"服务端已经把这局关掉、文案作业已排上"这一件事, 报告本体**不在**这里 ——
+ * 那正是收工从 ~68s(最坏 ~125s)掉回亚秒级、不再撞 30s 读超时的原因。
+ * 界面拿到它就立刻跳复盘页, 由复盘页轮询 [SessionSnapshot.reviewStatus]。
+ */
+data class MissionFinishAck(val sessionId: String, val revision: Int, val reviewStatus: String?)
 
 data class HintData(
     val taskId: String?,
@@ -242,6 +266,12 @@ data class ReviewReportData(
     val overall: Double?,
     val dims: Map<String, Double?>,
     val pronunciationSubs: Map<String, Double?>,
+    /**
+     * 无可信评分证据时(`overall` 为 null)服务端替界面说的那句中文(§P6 次因)。
+     * 存在的理由: 一个光秃秃的「—」读起来像"你考了 0 分", 而实情是这一场**没有可信
+     * 证据可打分**(讯飞/LLM 未配置或全部降级)。这两种含义对学员完全不同, 不能让 UI 猜。
+     */
+    val evidenceNoteCn: String = "",
     val highlights: List<String>,
     val improvements: List<String>,
     val checklist: List<TaskChip>,
@@ -250,6 +280,9 @@ data class ReviewReportData(
     val abilityDelta: Map<String, Double?>,
     val hintsUsed: Int,
     // llm = 模型文案; heuristic = 离线降级文案(界面挂警示)。
+    // 注意 §P6: `heuristic` **不代表**"还在生成中" —— 文案作业跑完但 LLM 挂着时,
+    // `review_status == "ready"` + `source == "heuristic"` 就是最终诚实答案。
+    // 判断要不要继续等只读 reviewStatus。
     val source: String,
     val llmSource: String?
 ) {

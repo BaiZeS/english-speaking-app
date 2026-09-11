@@ -62,6 +62,13 @@ data class SessionViewDto(
     val briefing: BriefingProgressDto = BriefingProgressDto(),
     val mission: MissionSnapshotDto? = null,
     val review: ReviewReportDto? = null,
+    /**
+     * 总评文案的作业状态(`generating` / `ready` / `failed`; 未收工为 null), 复盘页的
+     * **轮询键** —— §P6 刻意不新增端点, 就让本快照多带这一个键。收工当场 `review`
+     * 已经是**数值完整**的报告, 缺的只有那两句 AI 文案。
+     * 类型跟服务端一样宽松(而不是枚举): 它住在 JSON 列里, 脏值要能当"不可知"处理。
+     */
+    @SerialName("review_status") val reviewStatus: String? = null,
     val course: SceneCourseDto? = null
 )
 
@@ -202,7 +209,13 @@ data class MissionTurnResponseDto(
     val source: String = "heuristic",
     @SerialName("llm_source") val llmSource: String? = null,
     @SerialName("costs_score") val costsScore: Boolean = false,
-    val review: ReviewReportDto? = null
+    val review: ReviewReportDto? = null,
+    /**
+     * 仅 `auto_finished` 时有值(§P6): 到轮次上限被服务端自动收工 —— 这条路径**以前**
+     * 也在同一个请求里同步写 AI 文案, 于是"每日练完的自然结束"必然撞上 30s readTimeout。
+     * 现在带回 `generating` + 数值骨架, 客户端照人工收工那样跳复盘页轮询。
+     */
+    @SerialName("review_status") val reviewStatus: String? = null
 )
 
 /** `GET /sessions/{id}` 恢复快照里 mission 分区实际被消费的字段子集。 */
@@ -253,13 +266,21 @@ data class HintResponseDto(
     @SerialName("hints_used") val hintsUsed: Int = 0
 )
 
+/**
+ * `POST /sessions/{id}/finish-mission` 的 **202** 载荷(§P6)。
+ *
+ * **没有 `report` 字段了**: 收工不再在请求里等那次 ~68s 的总评 LLM(它就是"总体评价
+ * 永远不出来"的根因)。确定性数值在 202 之前已落库, 到 `GET /sessions/{id}` 的 `review`
+ * 里读; 本响应只剩"跳到复盘页 + 开始轮询"所需的的最小信息。
+ */
 @Serializable
 data class FinishMissionResponseDto(
     @SerialName("session_id") val sessionId: String,
     val revision: Int = 0,
     val stage: String = "review",
     val status: String = "completed",
-    val report: ReviewReportDto = ReviewReportDto("", "")
+    /** 本端点恒为 `generating`; 缺省 null 只为"后端还没这个键"时不炸解码。 */
+    @SerialName("review_status") val reviewStatus: String? = null
 )
 
 // ====== 复盘报告(ReviewReport, §5.3) ======
@@ -285,6 +306,12 @@ data class ReviewReportDto(
     val overall: Double? = null,
     val dims: Map<String, Double?> = emptyMap(),
     @SerialName("pronunciation_subs") val pronunciationSubs: Map<String, Double?> = emptyMap(),
+    /**
+     * 没有任何可信评分证据时(`overall` 为 null)给学员的那句中文说明(§P6 次因)。
+     * 界面**必须**画它, 而不是一个光秃秃的「—」: 后者读起来像"你考了 0 分", 而实情是
+     * 这一场根本没有可信证据可以打分(讯飞/LLM 未配置或全部降级)。
+     */
+    @SerialName("evidence_note_cn") val evidenceNoteCn: String = "",
     val highlights: List<String> = emptyList(),
     val improvements: List<String> = emptyList(),
     val checklist: List<MissionTaskViewDto> = emptyList(),
