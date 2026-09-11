@@ -48,6 +48,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1 import course_sessions as cs
+from app.core.errors import AppError
+from app.db.session import get_sessionmaker
 from app.main import app
 from app.models.db import PracticeSession, PracticeStep
 from app.services import llm_provider, scene_store
@@ -91,6 +93,8 @@ _TURN_T2 = mission_json(
 
 #: autouse 夹具会把模块属性换成 no-op; 导入期抓住原身, 供"在途幂等门"那条用例用.
 ORIGINAL_SPAWN = cs.spawn_review_copy_job
+#: 同上: 乐观锁那两条用例要让"某一刀"失败、下一刀照旧走真身.
+ORIGINAL_SAVE_DOC = cs._save_doc
 
 
 # ---------------------------------------------------------------------- 夹具 / helper
@@ -542,6 +546,81 @@ async def test_rerunning_a_ready_job_changes_nothing(
 
 
 @pytest.mark.asyncio
+async def test_a_crash_after_the_copy_landed_never_downgrades_ready(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    course_root: Callable[..., Path],
+) -> None:
+    """文案已经 ``ready``, 兜底又被跑了一次 -> 只准不动, 不准把终态改成 ``failed``.
+
+    ``_fail_review_copy`` 里那句"已经有终态了, 别把 ready 改回 failed"守的是学员侧的确定性:
+    复盘页显示过的那份总评不能因为一次撞车的重派突然变成错误态。这里让作业**主体**在落库
+    之后再炸 (模拟"写完文案后又踩到一个 bug"), 于是兜底路径真的会跑一遍。
+    """
+    sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
+    await cs.run_review_copy_job(sid)
+    assert (await _snapshot(client, sid))["review_status"] == "ready"
+
+    async def _explode_after_the_fact(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("落库之后作业里又踩到一个 bug")
+
+    monkeypatch.setattr(cs, "_run_review_copy_job", _explode_after_the_fact)
+    await cs.run_review_copy_job(sid)
+
+    after = await _snapshot(client, sid)
+    assert after["review_status"] == "ready", "终态被兜底改写 -> 学员的报告会突然变成错误态"
+    assert after["review"]["source"] == "llm"
+
+
+@pytest.mark.asyncio
+async def test_the_job_that_loses_the_optimistic_race_writes_no_second_cut(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    course_root: Callable[..., Path],
+) -> None:
+    """落库输给了乐观锁 (重派出来的第二个作业先写了) -> **不再补第二刀**, 也不抛.
+
+    ``_commit_review_copy`` 只把 ``SESSION_CONCURRENT_UPDATE`` 咽下去, 其它 ``AppError``
+    照旧冒到终态兜底。为什么不制造真并发: 测试跑在 sqlite 的 StaticPool 上 (一条连接),
+    两个会话交错事务测的不是乐观锁本身 (那由 ``test_course_sessions`` 的并发用例钉), 这里
+    要钉的是**输家的行为** —— 快照留在 ``generating``, 于是下一次过水位的 GET 还能重派。
+    """
+    # 两局都先收完工: patched 的 _save_doc 会让收工本身 409, 所以现场必须提前备好。
+    sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
+    skeleton = (await _snapshot(client, sid))["review"]
+    other = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
+
+    async def _lose(*args: Any, **kwargs: Any) -> int:
+        raise AppError(
+            409, "this session was updated by another request", "SESSION_CONCURRENT_UPDATE"
+        )
+
+    monkeypatch.setattr(cs, "_save_doc", _lose)
+    await cs.run_review_copy_job(sid)  # 不抛 = 作业不会把 traceback 甩进无人接的 task
+
+    view = await _snapshot(client, sid)
+    assert view["review_status"] == "generating", "输家不该改状态: 下一跳 GET 还要靠它重派"
+    assert _numbers(view["review"]) == _numbers(skeleton)
+
+    attempts = {"n": 0}
+
+    async def _broken_once(*args: Any, **kwargs: Any) -> int:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise AppError(500, "数据库真出了别的问题", "DB_SOMETHING")
+        return await ORIGINAL_SAVE_DOC(*args, **kwargs)
+
+    # 只让**写文案那一刀**失败: 连终态那刀也写不进去就是另一种情况 (数据库整个不行了,
+    # 那时能做的只有把栈打全), 不在本用例的射程里。
+    monkeypatch.setattr(cs, "_save_doc", _broken_once)
+    await cs.run_review_copy_job(other)
+    assert attempts["n"] == 2, "非竞争性冲突没冒到终态兜底 (第一次写之后就该再写一次状态)"
+    assert (await _snapshot(client, other))["review_status"] == "failed", (
+        "非竞争性冲突被和竞争一起咽掉了 -> 会话永远留在 generating, 没人知道为什么"
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_job_returns_quietly_when_the_session_row_is_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -553,6 +632,13 @@ async def test_the_job_returns_quietly_when_the_session_row_is_gone(
     fake = install_slow_llm(monkeypatch, [(0.0, REVIEW_A)])
     await cs.run_review_copy_job("00000000-0000-0000-0000-000000000000")
     assert fake.calls == 0
+
+    # 写那一刀同理: 行没了就留一行日志, 不许抛 (作业外面没有 except 接得住)。单独叫这一刀
+    # 是因为"读的时候行还在、写的时候被清了"这个窗口在 sqlite (单连接) 上交错不出来。
+    async with get_sessionmaker()() as session:
+        await cs._commit_review_copy(
+            session, "00000000-0000-0000-0000-000000000000", {"review_status": "ready"}
+        )
 
 
 # ============================================ 6) 轮询通道: 每一跳都看得见状态
@@ -681,6 +767,42 @@ async def test_a_get_redispatches_a_stalled_failed_job_at_the_shorter_threshold(
     assert spawned.calls == [sid], "failed 的会话没人救 -> 只能等进程重启, 学员没有重试出口"
 
 
+@pytest.mark.asyncio
+async def test_a_redispatched_failed_job_still_refuses_to_run(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    db: AsyncSession,
+    course_root: Callable[..., Path],
+) -> None:
+    """重派一个 ``failed`` 的会话: 作业在入口的状态复查那儿**静默退回** (现状锁).
+
+    这一条记的是实现里一处**互相矛盾**的说法, 不是我认为对的行为:
+    ``_fail_review_copy`` 与 ``resume_stranded_review_copy`` 的注释都说"failed 的会话还能被
+    GET 重派, 重派需要同一份料", 而 ``_run_review_copy_job`` 的入门门写的是
+    ``status != "generating"`` —— 于是重派出去的那一次第一件事就是自己退出。
+    净效果: 崩过一次文案的会话会**永久**停在 ``failed``, 反复打开复盘页只是多派几个空转的
+    作业 (数值仍然完整可渲染, 所以不是数据事故, 是"学员没有重试出口")。
+
+    本用例只把现状钉住, 让修复者必须**显式**改动它 (把 ``failed`` 也当可补的状态, 或反过来
+    把 failed 从 ``_REVIEW_RESUME_STATUSES`` 里摘掉并给客户端一条真正的重试端点)。
+    已作为 §P6 的实现缺口上报, 测试不做任何"顺手修一下"。
+    """
+    sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
+    skeleton = (await _snapshot(client, sid))["review"]
+    doc = await _read_doc(db, sid)
+    del doc["review_facts"]  # 让作业即使真的跑起来也没料可补, 从而**绝不**落回 ready
+    doc["review_status"] = "failed"
+    await _write_doc(db, sid, doc)
+
+    await cs.run_review_copy_job(sid)
+
+    view = await _snapshot(client, sid)
+    assert view["review_status"] == "failed", (
+        "重派把 failed 改成了别的状态 —— 现状变了, 请同步改本用例与那两处注释的说法"
+    )
+    assert _numbers(view["review"]) == _numbers(skeleton), "报告至少还得是可渲染的那一份"
+
+
 def test_redispatch_thresholds_are_per_status() -> None:
     """水位判定的真值表 (纯函数: 状态 x 时刻), 不用起会话也不用起作业.
 
@@ -727,17 +849,30 @@ async def test_the_in_flight_guard_admits_exactly_one_dispatch_per_session(
 
     monkeypatch.setattr(cs, "run_review_copy_job", _hang_job)
 
+    # GET 侧同一道门: 两个轮询请求同时到达 -> 第二个必须拿到 False (不重派)。
+    monkeypatch.setattr(cs, "spawn_review_copy_job", ORIGINAL_SPAWN)
+    stranded: dict[str, Any] = {
+        "review_status": "generating",
+        "updated_at": cs._iso(
+            datetime.now(UTC) - timedelta(seconds=cs.REVIEW_REDISPATCH_AFTER_S + 1)
+        ),
+    }
+    assert cs.resume_stranded_review_copy("polled-session", stranded) is True
+    assert cs.resume_stranded_review_copy("polled-session", stranded) is False, (
+        "轮询撞车时第二次也派了活 -> 同一会话同时跑两个文案作业"
+    )
+
     assert ORIGINAL_SPAWN("session-under-test") is True
     assert ORIGINAL_SPAWN("session-under-test") is False, "在途门失效 -> 同一会话跑两个作业"
     assert ORIGINAL_SPAWN("another-session") is True  # 门按会话分, 不是全局锁
     await asyncio.sleep(0)
-    assert started == ["session-under-test", "another-session"]
+    assert sorted(started) == ["another-session", "polled-session", "session-under-test"]
 
     gate.set()
     pending = list(cs._REVIEW_JOBS)
     await asyncio.gather(*pending, return_exceptions=True)
     await asyncio.sleep(0)
-    assert set() == cs._REVIEW_IN_FLIGHT, "task 跑完没 release -> 之后的重派会被永久拒"
+    assert not cs._REVIEW_IN_FLIGHT, "task 跑完没 release -> 之后的重派会被永久拒"
     assert ORIGINAL_SPAWN("session-under-test") is True
 
 
