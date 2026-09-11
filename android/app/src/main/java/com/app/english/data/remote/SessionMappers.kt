@@ -122,7 +122,10 @@ fun BriefingProgressDto.toDomain(): BriefingProgress = BriefingProgress(
             attempts = step.attempts,
             bestScore = step.bestScore,
             lastScore = step.lastScore,
-            lastSource = step.lastSource
+            lastSource = step.lastSource,
+            // 服务端逐份存下 `last_grade` 就是为了让重进不用重算; 以前这里只取
+            // best/last 两个数, 于是崩溃恢复后每步反馈全部消失(问题 4)。
+            lastGrade = step.lastGrade?.toDomain()
         )
     }
 )

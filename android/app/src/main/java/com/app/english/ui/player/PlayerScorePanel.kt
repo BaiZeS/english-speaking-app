@@ -152,20 +152,55 @@ fun SubScorePill(label: String, value: Double, modifier: Modifier = Modifier) {
     }
 }
 
-/** Tiny pill showing a single word + a coloured dot for its band. */
+/**
+ * 单词芯片: 色点 + 词, 可选带上这个词的分数与音标。
+ *
+ * [score] / [ipa] 用**默认参数**加进来, 而不是另造一个组件: ISE 逐词评测本来就把这两
+ * 个值发到了客户端(`WordScore`), 但芯片只画一个词 —— 学员看得见"这个词是红的", 看不
+ * 出差在哪个音、扣了几分。默认值同时保住播读页那处只给词的旧调用点。
+ */
 @Composable
-fun WordChip(word: String, scoreColor: Color, modifier: Modifier = Modifier) {
+fun WordChip(
+    word: String,
+    scoreColor: Color,
+    modifier: Modifier = Modifier,
+    score: Double? = null,
+    ipa: String? = null
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
-        Box(modifier = Modifier.size(10.dp).background(scoreColor, CircleShape))
-        Spacer(Modifier.width(6.dp))
-        Text(
-            word,
-            style = MaterialTheme.typography.bodyMedium,
-            color = scoreColor,
-            fontWeight = FontWeight.SemiBold
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .background(scoreColor, CircleShape)
         )
+        Spacer(Modifier.width(6.dp))
+        Column {
+            Text(
+                word,
+                style = MaterialTheme.typography.bodyMedium,
+                color = scoreColor,
+                fontWeight = FontWeight.SemiBold
+            )
+            ipa?.takeIf { it.isNotBlank() }?.let { pronunciation ->
+                // 服务端给的 IPA 有时自带斜杠, 这里统一补上, 免得出现 //ˈriːd//。
+                Text(
+                    text = "/${pronunciation.trim('/', ' ')}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        score?.let { value ->
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = value.toInt().toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = scoreColor,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }

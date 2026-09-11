@@ -94,10 +94,16 @@ class BriefingViewModel @Inject constructor(
         }
     }
 
-    /** 当前步的题目内容(题型卡片的数据源)。 */
+    /**
+     * 当前展示的题目内容(题型卡片的数据源)。
+     *
+     * 读的是 `displayedStepId` 而不是 `currentStep`: 反馈停留期间服务端游标已经推到
+     * 下一题了(`Graded` 整表重建), 拿 `currentStep` 会让反馈卡没有宿主题目 —— 这正是
+     * 问题 4 的成因(计划 R3b)。
+     */
     fun currentSpec(): FoundationStepSpec? {
-        val step = _state.value.currentStep ?: return null
-        return _course.value?.briefing?.firstOrNull { it.id == step.id }
+        val stepId = _state.value.displayedStepId ?: return null
+        return _course.value?.briefing?.firstOrNull { it.id == stepId }
     }
 
     fun updateDraft(text: String) {
@@ -106,7 +112,7 @@ class BriefingViewModel @Inject constructor(
 
     /** 文本作答(翻译主路径 / 复述·造句备选)。 */
     fun submitText() {
-        val step = _state.value.currentStep?.id ?: return
+        val step = _state.value.answerableStepId ?: return
         val text = draft.trim()
         if (text.isEmpty() || _state.value.isSubmitting) return
         viewModelScope.launch { submit(step, text = text, audioB64 = null) }
@@ -114,6 +120,9 @@ class BriefingViewModel @Inject constructor(
 
     fun startRecording() {
         if (_isRecording.value || _state.value.isSubmitting) return
+        // 开始新的一取就意味着学员不再需要那份倒计时: 秒针要是继续走, 新评分回来时
+        // 会被上一张反馈的到期事件搅掉。
+        cancelAutoAdvance()
         // 乐观翻位同 Mission: DOWN 当帧进入录音态, 硬件构造在 IO 协程里完成。
         _isRecording.value = true
         viewModelScope.launch {
@@ -131,7 +140,7 @@ class BriefingViewModel @Inject constructor(
 
     fun stopRecordingAndSubmit() {
         if (!_isRecording.value) return
-        val step = _state.value.currentStep?.id ?: return
+        val step = _state.value.answerableStepId ?: return
         _isRecording.value = false
         // 波形不清: 评分期间这条形状还要留在屏上(见 waveform 的 KDoc)。
         viewModelScope.launch {
@@ -155,10 +164,12 @@ class BriefingViewModel @Inject constructor(
     }
 
     fun skipCurrent() {
-        val step = _state.value.currentStep?.id ?: return
+        val step = _state.value.answerableStepId ?: return
         if (!_state.value.canSkip) return
         viewModelScope.launch {
-            _state.update { it.copy(isSubmitting = true, error = null) }
+            _state.update { current ->
+                reduceBriefing(current, BriefingEvent.SubmitStarted)
+            }
             try {
                 val outcome = sessionRepository.skipStep(sessionId, step)
                 _state.update { current ->
@@ -168,6 +179,30 @@ class BriefingViewModel @Inject constructor(
                 _state.update { it.copy(isSubmitting = false, error = e.userMessage()) }
             }
         }
+    }
+
+    /**
+     * 「继续」/「再试一次」/ 倒计时走完 —— 三个入口都是同一个动作: 学员看完了这份
+     * 反馈, 屏幕交还给游标。「再试一次」不需要额外请求: 不及格那一步服务端本来就留
+     * 在 pending, 撤掉停留后录音键回到可用作答状态。
+     */
+    fun acknowledgeFeedback() {
+        _state.update { reduceBriefing(it, BriefingEvent.FeedbackAcknowledged) }
+    }
+
+    /**
+     * 滚动 / 点按任意处: 撤掉自动前进, **反馈留在屏上**转手动(D10)。
+     * 没在倒计时时什么都不做, 免得每次滑动屏幕都白推一次状态。
+     */
+    fun cancelAutoAdvance() {
+        if (_state.value.autoAdvanceSeconds == null) return
+        _state.update { reduceBriefing(it, BriefingEvent.AutoAdvanceCancelled) }
+    }
+
+    /** 秒针走一格(由 `LaunchedEffect(autoAdvanceSeconds)` 每秒推一次)。 */
+    fun tickAutoAdvance() {
+        if (_state.value.autoAdvanceSeconds == null) return
+        _state.update { reduceBriefing(it, BriefingEvent.AutoAdvanceTick) }
     }
 
     /** 原句示范发音(read_along/retell), /tts 的 stub URL 照常播。 */

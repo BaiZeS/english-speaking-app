@@ -91,6 +91,13 @@ data class DrillGradeResult(
 ) {
     /** 没有真实评分证据(xunfei/llm 之外)时界面要挂警示标。 */
     val isRealEvidence: Boolean get() = source == "xunfei" || source == "llm"
+
+    /**
+     * `/skip-step` 复用 `/step` 的响应形状, 塞进来的是 `score=0` + `passed=true` +
+     * `llm_source="skip"`(见 `course_sessions._skipped_grade`)。那个 0 不是分数, 是占位
+     * —— 照原样画就会得到一枚刺眼的「0 分」旁边写着「过关」。界面据此改说人话。
+     */
+    val isSkipped: Boolean get() = source == "skip" || llmSource == "skip"
 }
 
 data class DrillMistake(
@@ -109,7 +116,13 @@ data class BriefingStepState(
     val attempts: Int = 0,
     val bestScore: Double? = null,
     val lastScore: Double? = null,
-    val lastSource: String? = null
+    val lastSource: String? = null,
+    /**
+     * 服务端为这一步**单独留档**的完整评分(`step.last_grade`)。存在的理由就是让
+     * 客户端不必重算也能把反馈原样摆回来 —— 以前在映射层被丢掉, 于是重进/崩溃恢复后
+     * 每一步的反馈全部消失, 只剩一个分数。
+     */
+    val lastGrade: DrillGradeResult? = null
 )
 
 data class BriefingProgress(

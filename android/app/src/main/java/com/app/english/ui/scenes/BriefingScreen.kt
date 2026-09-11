@@ -3,15 +3,18 @@ package com.app.english.ui.scenes
 import android.Manifest
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,17 +32,21 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.app.english.domain.model.DrillGradeResult
+import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.FoundationStepSpec
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.HoldToTalkCopy
@@ -46,17 +54,25 @@ import com.app.english.ui.components.HoldToTalkRow
 import com.app.english.ui.components.HoldToTalkRowUi
 import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.theme.Spacings
+import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * 打基础页(计划 §6.4): 顶部 step 进度点(f1..fN) + 按题型换卡片 +
  * 底部跳过。60 分以下不拦(可重录), 只用警示色; 跳过额度用完前置禁用。
+ *
+ * 每一步作答后由 [DrillFeedbackCard] 给出完整反馈(问题 4)。反馈停留期间整屏的作答
+ * 入口收起、跳过行让位, 因为那时屏幕上显示的是**刚答过**的那一题, 而服务端只接受
+ * 下一个 pending 步。
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
+@Suppress("LongMethod")
 fun BriefingScreen(
     onBack: () -> Unit,
     onOpenMission: (sessionId: String) -> Unit,
@@ -66,15 +82,39 @@ fun BriefingScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
     val isPlayingRef by viewModel.isPlayingRef.collectAsStateWithLifecycle()
-    var draft by remember { mutableStateOf("") }
+    // 文本草稿按"屏幕上这一题"存, 而不是按"服务端游标指的那一题": 反馈停留期间
+    // displayedStepId 还指着刚答过的那题, 确认之后才翻成下一题。换题的这一刻必须同时
+    // 把 ViewModel 里的旧草稿擦掉 —— `submitText()` 读的是 ViewModel 那一份, 擦不干净
+    // 就是"输入框显示新题、提交上去是上一题的句子"。
+    var draft by remember(state.displayedStepId) { mutableStateOf("") }
+    LaunchedEffect(state.displayedStepId) { viewModel.updateDraft(draft) }
     val micPermission = rememberPermissionState(Manifest.permission.RECORD_AUDIO)
 
     RecordingGuard(viewModel::stopRecordingIfActive)
 
+    // 自动前进的秒针: 键在剩余秒数上, 每秒重挂一次 delay, 到 null(确认/取消)自然停。
+    // 放在界面层而不是 ViewModel 的常驻协程里, 是为了"这一屏不在前台就绝不翻篇"——
+    // 反馈被抽走的最坏形态, 是人在别处、页却在自己往前走。
+    LaunchedEffect(state.autoAdvanceSeconds) {
+        if (state.autoAdvanceSeconds == null) return@LaunchedEffect
+        delay(FeedbackAdvancePolicy.TICK_MILLIS)
+        viewModel.tickAutoAdvance()
+    }
+
+    val scrollState = rememberScrollState()
+    // [D10] 滚动 = 我要自己掌握阅读节奏 -> 撤掉倒计时(反馈留在屏上)。点按任意处同理,
+    // 而「继续」/「再试一次」不会被误伤: 子节点先消费这次按压, 父层的 tap 探测收不到。
+    LaunchedEffect(scrollState) {
+        snapshotFlow { scrollState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { scrolling -> if (scrolling) viewModel.cancelAutoAdvance() }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .pointerInput(Unit) { detectTapGestures { viewModel.cancelAutoAdvance() } }
+            .verticalScroll(scrollState)
             .padding(Spacings.s3),
         verticalArrangement = Arrangement.spacedBy(Spacings.s3)
     ) {
@@ -117,6 +157,17 @@ fun BriefingScreen(
                 onStopRecord = viewModel::stopRecordingAndSubmit,
                 onSubmitText = viewModel::submitText
             )
+            state.pendingGrade?.let { grade ->
+                DrillFeedbackCard(
+                    DrillFeedbackUi(
+                        grade = grade,
+                        canRetry = state.canRetryAnsweredStep,
+                        autoAdvanceHint = state.autoAdvanceHint,
+                        onRetry = viewModel::acknowledgeFeedback,
+                        onContinue = viewModel::acknowledgeFeedback
+                    )
+                )
+            }
         }
         when {
             state.unlockedMission -> Button(
@@ -128,7 +179,8 @@ fun BriefingScreen(
 
             // 清单还没到手就不渲染这一行: 以前它会在加载失败时永久宣称
             // "跳过额度已用完", 而同屏右上角还印着 "跳过额度 2/2"。
-            state.showsSkipRow -> OutlinedButton(
+            // 反馈停留时也不渲染: 那时可跳的下一步并没有显示在屏幕上。
+            state.showsSkipRow && !state.isAwaitingFeedback -> OutlinedButton(
                 onClick = viewModel::skipCurrent,
                 enabled = state.canSkip,
                 modifier = Modifier.fillMaxWidth()
@@ -161,42 +213,68 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
     }
 }
 
-/** f1..fN 进度点: 过关实心打勾 / 跳过打叉位 / 当前高亮圈 / 未做灰。 */
+/**
+ * f1..fN 进度点: 过关实心打勾 / 跳过打叉位 / 当前高亮圈 / 未做灰。
+ *
+ * 分数本来就在状态里(`bestScore`/`lastScore`/`attempts` 服务端逐步都给了), 以前这一排
+ * 只画序号和一个勾 —— 于是"这一步我读过三次、最好 92 分"和"一次过 61 分"长得一模一样。
+ * 现在有点就报分并按分数带配色, 只有没作答过的步才退回序号/勾。
+ */
 @Composable
 private fun ProgressDots(state: BriefingUiState) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(Spacings.s1),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
     ) {
         state.steps.forEachIndexed { index, step ->
-            val isCurrent = index == state.currentIndex
+            // 高亮跟着**屏幕上这一题**走, 不是服务端游标: 反馈停留时游标已经在下一题,
+            // 若还按游标画, 屏幕讲上一题、进度点标下一题, 两处各说各话。
+            val isCurrent = step.id == state.displayedStepId
+            val score = step.dotScore
             val container = when {
+                score != null -> ScoreColorMapper.level(score).color()
                 step.status == "passed" -> MaterialTheme.colorScheme.primary
                 isCurrent -> MaterialTheme.colorScheme.tertiary
                 step.status == "skipped" -> MaterialTheme.colorScheme.secondaryContainer
                 else -> MaterialTheme.colorScheme.surfaceVariant
             }
-            Box(
-                modifier = Modifier
-                    .size(30.dp)
-                    .background(color = container, shape = CircleShape),
-                contentAlignment = Alignment.Center
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
             ) {
-                if (step.status == "passed") {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = "已过关",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                } else {
-                    Text(
-                        text = "${index + 1}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(DOT_SIZE)
+                        .background(color = container, shape = CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when {
+                        score != null -> Text(
+                            text = score.toInt().toString(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                        step.status == "passed" -> Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = "已过关",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        else -> Text(
+                            text = "${index + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
+                // 占位保持整排点对齐: 没刷过第二次也要留这一行的高度。
+                Text(
+                    text = step.dotAttempts.orEmpty(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -257,26 +335,46 @@ private fun StepCard(
                 )
                 else -> MakeSentenceBody(spec = spec, draft = draft, onDraftChange = onDraftChange)
             }
-            RecordButtonRow(
-                isRecording = isRecording,
-                isSubmitting = state.isSubmitting,
-                waveform = waveform,
-                micGranted = micGranted,
-                onRequestPermission = onRequestPermission,
-                onStartRecord = onStartRecord,
-                onStopRecord = onStopRecord
-            )
-            if (spec.type != "read_along") {
-                Button(
-                    onClick = onSubmitText,
-                    enabled = !state.isSubmitting && draft.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("提交文字作答") }
+            // 反馈停留期间收起作答键: 这一屏显示的是**刚答过**的那一题, 而服务端只接受
+            // 下一个 pending 步 —— 留着录音键就是在演一个必然 409 的操作。
+            if (!state.isAwaitingFeedback) {
+                RecordButtonRow(
+                    isRecording = isRecording,
+                    isSubmitting = state.isSubmitting,
+                    waveform = waveform,
+                    micGranted = micGranted,
+                    onRequestPermission = onRequestPermission,
+                    onStartRecord = onStartRecord,
+                    onStopRecord = onStopRecord
+                )
+                if (spec.type != "read_along") {
+                    Button(
+                        onClick = onSubmitText,
+                        enabled = !state.isSubmitting && draft.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("提交文字作答") }
+                }
+                GradingIndicator(state.isSubmitting)
             }
-            state.lastGrade
-                ?.takeIf { state.answeredStepId == spec.id || state.currentStep == null }
-                ?.let { grade -> GradeResultCard(grade) }
         }
+    }
+}
+
+/**
+ * 在途指示: 真转圈 + 一句话。
+ *
+ * 以前唯一的"还在算"证据是 `HoldToTalkRow` 那侧的一行文字。文本步走 LLM judge(最坏
+ * ~40s, 已超手机 30s 读超时), 学员看不见任何进度就只能反复点。范式抄自
+ * `PlayerScreen` 的同一段。话术在这里置空([RecordButtonRow]): 同一屏不该把"评分中"
+ * 说两遍, 而底部那个被禁用的跳过键写的是**为什么禁用**, 是另一件事。
+ */
+@Composable
+private fun GradingIndicator(show: Boolean) {
+    if (!show) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(modifier = Modifier.size(SPINNER_SIZE))
+        Spacer(Modifier.width(Spacings.s1))
+        Text("评分中…", style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -437,78 +535,11 @@ private fun RecordButtonRow(
             onRequestPermission = onRequestPermission,
             onStart = onStartRecord,
             onStop = onStopRecord,
-            labels = HoldToTalkCopy(idle = "按住说话 / 或打字作答")
+            // busy 特意留空: 在途信号换成带转圈的 [GradingIndicator], 同一屏不说两遍。
+            labels = HoldToTalkCopy(idle = "按住说话 / 或打字作答", busy = "")
         )
     )
 }
 
-/** 评分结果卡: 分数 + 反馈 + 误译/要点; 非真实评分挂警示。 */
-@Composable
-private fun GradeResultCard(grade: DrillGradeResult) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = if (grade.passed) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            }
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacings.s2),
-            verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "${grade.score.toInt()} 分",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = if (grade.passed) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.error
-                    }
-                )
-                Box(Modifier.size(Spacings.s1))
-                Text(
-                    text = if (grade.passed) "过关" else "未到 ${grade.passScore.toInt()} 分, 可以再试一次",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (!grade.isRealEvidence) {
-                Text(
-                    text = "本轮为离线占位评分 (${grade.source}), 不计入能力画像",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-            if (grade.feedbackCn.isNotBlank()) {
-                Text(grade.feedbackCn, style = MaterialTheme.typography.bodyMedium)
-            }
-            grade.keyPointsHit.forEach { hit ->
-                Text(
-                    text = "✓ $hit",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-            grade.mistakes.forEach { mistake ->
-                Column {
-                    Text(
-                        text = mistake.said,
-                        style = MaterialTheme.typography.bodySmall,
-                        textDecoration = TextDecoration.LineThrough,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Text(
-                        text = "${mistake.better} — ${mistake.explanationCn}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                }
-            }
-        }
-    }
-}
+private val DOT_SIZE = 30.dp
+private val SPINNER_SIZE = 20.dp
