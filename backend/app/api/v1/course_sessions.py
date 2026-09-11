@@ -1784,8 +1784,12 @@ async def _run_review_copy_job(db: AsyncSession, session_id: str) -> None:
         logger.warning("review copy job skipped | session={} reason=session row gone", session_id)
         return
     status = str(doc.get("review_status") or "")
-    if status != "generating":
-        # 重派/并发已经有人写完; 幂等退出 (别把 ready 覆盖回 generating)。
+    if status not in _REVIEW_RESUME_STATUSES:
+        # 这道门要挡的是**已写完的文案被下一次轮询重写**(``ready``), 不是挡住重试。
+        # ``failed`` 与 ``generating`` 同属"没人管了"的非终态, GET 会重派它 (见
+        # :data:`_REVIEW_RESUME_STATUSES`), 所以这里必须放行 —— 否则重派来的作业第一步
+        # 就把自己跳过, ``review_status`` 永远停在 ``failed``, 学员的重试出口退化成
+        # GET→重派→空转 的死循环。并发/跨进程的收敛仍由落库时的乐观锁负责。
         logger.info("review copy job skipped | session={} status={}", session_id, status or "-")
         return
     review_raw: Any = doc.get("review")

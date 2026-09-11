@@ -80,6 +80,14 @@ REVIEW_B = json.dumps(
     },
     ensure_ascii=False,
 )
+#: ``failed`` 被重派、LLM 已恢复时补回来的那份文案 (与 A/B 都可区分)。
+REVIEW_C = json.dumps(
+    {
+        "highlights": ["重试补回来的文案: 点单与问价都说出口了。"],
+        "improvements": ["重试补回来的文案: 疑问句语序再练一轮。"],
+    },
+    ensure_ascii=False,
+)
 #: 聊两轮的综合 JSON (语法 66 / 词汇 70 -> 骨架 overall 68), 与 test_mission 同一份料.
 _TURN_T1 = mission_json(done=[("t1", "说了点单内容")])
 _TURN_T2 = mission_json(
@@ -831,38 +839,74 @@ async def test_a_get_redispatches_a_stalled_failed_job_at_the_shorter_threshold(
 
 
 @pytest.mark.asyncio
-async def test_a_redispatched_failed_job_still_refuses_to_run(
+async def test_a_redispatched_failed_job_retries_and_can_reach_ready(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     db: AsyncSession,
     course_root: Callable[..., Path],
 ) -> None:
-    """重派一个 ``failed`` 的会话: 作业在入口的状态复查那儿**静默退回** (现状锁).
+    """``failed`` 的会话被重派后**真的会重跑**, 并能在 LLM 恢复后补回文案落到 ``ready``。
 
-    这一条记的是实现里一处**互相矛盾**的说法, 不是我认为对的行为:
-    ``_fail_review_copy`` 与 ``resume_stranded_review_copy`` 的注释都说"failed 的会话还能被
-    GET 重派, 重派需要同一份料", 而 ``_run_review_copy_job`` 的入门门写的是
-    ``status != "generating"`` —— 于是重派出去的那一次第一件事就是自己退出。
-    净效果: 崩过一次文案的会话会**永久**停在 ``failed``, 反复打开复盘页只是多派几个空转的
-    作业 (数值仍然完整可渲染, 所以不是数据事故, 是"学员没有重试出口")。
+    这是学员唯一的重试出口: 复盘页在 ``failed`` 时给「重试」, 而重试就是再 GET 一次
+    ``/sessions/{id}``, 由 :func:`resume_stranded_review_copy` 重派作业。
 
-    本用例只把现状钉住, 让修复者必须**显式**改动它 (把 ``failed`` 也当可补的状态, 或反过来
-    把 failed 从 ``_REVIEW_RESUME_STATUSES`` 里摘掉并给客户端一条真正的重试端点)。
-    已作为 §P6 的实现缺口上报, 测试不做任何"顺手修一下"。
+    曾经作业入口的状态复查写的是 ``status != "generating"``, 于是重派出去的那一次第一件事
+    就是自己退出 —— ``review_status`` 永久停在 ``failed``, 学员点多少次重试都只是多派几个
+    空转作业 (数值仍完整可渲染, 所以不是数据事故, 是"没有重试出口")。而
+    ``_fail_review_copy`` 与 ``resume_stranded_review_copy`` 的注释、以及
+    :data:`_REVIEW_RESUME_STATUSES` 把 ``failed`` 列为可救并**特意保留 review_facts**,
+    说的都是相反的话。修复 = 入口复查改读同一个事实源 ``_REVIEW_RESUME_STATUSES``:
+    这道门要挡的从来只是"已写完的 ``ready`` 被下一次轮询重写", 不是挡住重试。
+
+    数值必须一字不动 —— 学员已经看过分数, 补文案不许顺带改分。
     """
     sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
     skeleton = (await _snapshot(client, sid))["review"]
     doc = await _read_doc(db, sid)
-    del doc["review_facts"]  # 让作业即使真的跑起来也没料可补, 从而**绝不**落回 ready
+    # failed 必须留着料, 否则重派无从补起 (这正是 _fail_review_copy 不删 review_facts 的原因)。
+    assert isinstance(doc.get("review_facts"), dict), "failed 丢了 review_facts -> 重派无料可补"
     doc["review_status"] = "failed"
     await _write_doc(db, sid, doc)
 
+    install_llm(monkeypatch, [REVIEW_C])  # 重派时 LLM 已经恢复
     await cs.run_review_copy_job(sid)
 
     view = await _snapshot(client, sid)
-    assert view["review_status"] == "failed", (
-        "重派把 failed 改成了别的状态 —— 现状变了, 请同步改本用例与那两处注释的说法"
-    )
+    assert view["review_status"] == "ready", "重派 failed 后仍没救回来 -> 学员没有重试出口"
+    report = view["review"]
+    assert report["source"] == "llm", "重跑应当真补到 AI 文案, 而不是又退回模板"
+    assert report["highlights"] == ["重试补回来的文案: 点单与问价都说出口了。"], report[
+        "highlights"
+    ]
+    assert _numbers(report) == _numbers(skeleton), "补文案不许改动学员已经看过的分数"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_job_without_facts_closes_honestly_instead_of_looping(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    db: AsyncSession,
+    course_root: Callable[..., Path],
+) -> None:
+    """重派一个**没料可补**的 ``failed``: 诚实收尾成 ``ready``, 不是无限重派。
+
+    ``review_facts`` 缺失意味着没有 prompt 输入 (§P6 之前收的工, 或快照被动过)。此时反复
+    重派只会反复空转, 所以作业直接落 ``ready`` —— 学员拿到数值 + 确定性文案, 复盘页的降级
+    横幅说明这是模板文案。这条与上一条一起界定 ``failed`` 重派的两个出口。
+    """
+    sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
+    skeleton = (await _snapshot(client, sid))["review"]
+    doc = await _read_doc(db, sid)
+    del doc["review_facts"]
+    doc["review_status"] = "failed"
+    await _write_doc(db, sid, doc)
+
+    fake = install_llm(monkeypatch, [REVIEW_C])
+    await cs.run_review_copy_job(sid)
+
+    view = await _snapshot(client, sid)
+    assert view["review_status"] == "ready", "没料可补就该诚实收尾, 别把学员留在 failed"
+    assert fake.requests == [], "没有 facts 就不该发起 LLM 调用"
     assert _numbers(view["review"]) == _numbers(skeleton), "报告至少还得是可渲染的那一份"
 
 
