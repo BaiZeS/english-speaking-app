@@ -94,10 +94,13 @@ data class MissionUiState(
      */
     val isFinishing: Boolean = false,
     /**
-     * 上一次收工**没成功**。界面上必须留一个显式出口(重试 / 先去看复盘): 报告很可能早就
-     * 躺在服务端了, 只留一句红字等于让学员重新开弹窗再猜一次。
+     * 上一次收工**没成功**时那句中文文案; 非 null 就是"要摆出显式出口"的那一位。
+     *
+     * 刻意不回写通用的 [error]: 红字埋在气泡流末尾不是一个出口(那正是原来"只能重开弹窗
+     * 再猜一次"的形状), 而且会和这一轮真正要说的话混在一起。用一个自己的键, 让"失败"
+     * 与"界面该给出口"是同一件事实, 不需要第二个布尔。
      */
-    val finishFailed: Boolean = false,
+    val finishError: String? = null,
     /**
      * 一次性导航请求(one-shot 事件): 到轮次上限被服务端**自动收工**时置起, 界面消费后跳
      * 复盘页。人工「收工」不走这里, 因为弹窗那条路径手上有 `onOpenReview` 回调; 自动收工
@@ -193,10 +196,16 @@ class MissionViewModel @Inject constructor(
                         turnCount = mission.turnCount,
                         maxTurns = mission.maxTurns,
                         personaCn = course?.mission?.personaCn.orEmpty(),
-                        // 恢复时服务端已经关掉了这一场(auto-finish 或收工后崩溃恢复):
-                        // 停在聊天页毫无意义, 直接把「去复盘」这一次导航请求摆出来。
                         finished = loaded.status != "active",
-                        openReviewRequested = loaded.status != "active" && loaded.review != null
+                        // "收工成功但响应没能回到手机上"之后重进这一页: 服务端早已
+                        // `completed`, 而这一场的报告(哪怕只是数值骨架)已经在快照里。
+                        // 停在聊天页就是把人困在一个既不能输入、也看不到总评的死界面上 ——
+                        // 那正是 §2 问题 5 的原始观感, 所以这里直接把「去复盘」摆出来。
+                        openReviewRequested = loaded.status != "active" &&
+                            (
+                                loaded.review != null ||
+                                    loaded.reviewStatus == ReviewPollingPolicy.STATUS_GENERATING
+                                )
                     )
                 }
             } catch (e: Exception) {
@@ -293,11 +302,11 @@ class MissionViewModel @Inject constructor(
                 snackbar = result.turn.newlyDone.firstOrNull()?.evidence
             )
         }
-        // 到轮次上界的自动收工(§P6 客户端 4): 响应带的是**数值骨架** + generating。
-        // 以前这一路也在同一个请求里同步写 AI 文案, 于是"一天练到自然结束"必然撞上
-        // 30s 读超时(它比人工收工更高频, 而客户端那时候连跳转都执行不到)。现在和人工
-        // 收工同一条路: 立刻跳复盘页, 由那里轮询补齐文案。
-        val autoFinished = result.autoFinished || result.review != null
+        // 到轮次上界的自动收工(§P6 客户端 4): 响应带的是**数值骨架** + `generating`。
+        // 三个信号任一成立都算收工, 因为服务端在这一条路径上是同时给它们的, 而其中任何一个
+        // 单独出现都已经说明"这一场结束了": 只看 `review != null` 会漏掉"骨架还在路上"的
+        // 未来变体, 只看 `finished` 又回到那个把"服务端关掉了"当"我可以跳了"的混用。
+        val autoFinished = result.finished || result.review != null || result.reviewStatus != null
         if (autoFinished) {
             _state.update {
                 it.copy(
@@ -375,12 +384,12 @@ class MissionViewModel @Inject constructor(
     fun openReviewAfterFailure(onOpenReview: (String) -> Unit) {
         // **不**翻 `finished`: 这一步我们并不知道服务端有没有关掉这一场。报告在不在由
         // 复盘页按快照自己说(`review == null` 时它会给一句诚实的可重试错误态)。
-        _state.update { it.copy(finishFailed = false, error = null) }
+        _state.update { it.copy(finishError = null) }
         onOpenReview(sessionId)
     }
 
-    /** 收掉失败出口(弹窗被 dismiss 时), 不改会话状态。 */
-    fun dismissFinishError() = _state.update { it.copy(finishFailed = false, error = null) }
+    /** 收掉失败出口(弹窗被 dismiss 时), 不动会话状态。 */
+    fun dismissFinishError() = _state.update { it.copy(finishError = null) }
 
     /**
      * 退出确认后的收工(§P6 客户端 6 + §2.6 E2)。
@@ -401,8 +410,11 @@ class MissionViewModel @Inject constructor(
             FinishTap.OPEN_REVIEW -> onOpenReview(sessionId)
             FinishTap.SUBMIT -> Unit
         }
+        // 在途位**同步**立起来, 不能等 `launch` 里再翻: 主线程同一帧内的第二次「收工」会
+        // 在协程排队之前就跑到这里, 于是守卫看到的是 `isFinishing == false` —— 那正是
+        // "点两下发出两个请求"的窗口, 也是 E2 要堵的那一个。
+        _state.update { it.copy(isFinishing = true, finishError = null) }
         viewModelScope.launch {
-            _state.update { it.copy(isFinishing = true, finishFailed = false, error = null) }
             try {
                 val ack = sessionRepository.finishMission(sessionId)
                 Timber.i(
@@ -419,14 +431,10 @@ class MissionViewModel @Inject constructor(
                     _state.update { it.copy(isFinishing = false, finished = true) }
                     onOpenReview(sessionId)
                 } else {
-                    // 复位在途位 + 翻起 finishFailed: 界面上的重试出口与「先去看复盘」都由
-                    // 这一位驱动。读超时**不代表**服务端没做完, 所以第二条出口不是摆设。
+                    // 复位在途位 + 留下**中文**失败文案: 界面上「重试收工」与「先去看复盘」
+                    // 两条出口都由它驱动。读超时**不代表**服务端没做完, 所以第二条不是摆设。
                     _state.update {
-                        it.copy(
-                            isFinishing = false,
-                            finishFailed = true,
-                            error = e.missionMessage()
-                        )
+                        it.copy(isFinishing = false, finishError = e.missionMessage())
                     }
                 }
             }

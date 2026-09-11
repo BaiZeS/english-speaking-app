@@ -384,34 +384,6 @@ private fun PairsCard(report: ReviewReportData) {
 }
 
 @Composable
-private fun HighlightsCard(report: ReviewReportData) {
-    Card {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacings.s2),
-            verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
-        ) {
-            Text("亮点与建议", style = MaterialTheme.typography.titleSmall)
-            report.highlights.forEach { line ->
-                Text(
-                    text = "✦ $line",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-            }
-            report.improvements.forEach { line ->
-                Text(
-                    text = "▲ $line",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun TokensCard(report: ReviewReportData) {
     Card {
         Column(

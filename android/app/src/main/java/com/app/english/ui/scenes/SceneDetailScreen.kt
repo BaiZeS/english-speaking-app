@@ -103,7 +103,9 @@ fun SceneDetailScreen(
                 // 旧那份报告就这么被静默丢弃了。措辞归 ReviewEntryPolicy, 界面只负责画。
                 state.lastCompleted?.let { done ->
                     if (state.showReviewEntry) {
-                        LastReviewButton(entry = done, onOpenReview = { viewModel.viewLastReview(onOpenReview) })
+                        LastReviewButton(entry = done, onOpenReview = {
+                            viewModel.viewLastReview(onOpenReview)
+                        })
                     }
                 }
                 Spacer(Modifier.height(Spacings.s2))
@@ -355,7 +357,10 @@ private fun LastReviewButton(entry: ContinueSession, onOpenReview: () -> Unit) {
             .height(48.dp)
     ) {
         Column(horizontalAlignment = Alignment.Start) {
-            Text(ReviewEntryPolicy.LABEL_VIEW_LAST_REVIEW, style = MaterialTheme.typography.labelLarge)
+            Text(
+                ReviewEntryPolicy.LABEL_VIEW_LAST_REVIEW,
+                style = MaterialTheme.typography.labelLarge
+            )
             Text(
                 text = entry.toReviewSubtitle(),
                 style = MaterialTheme.typography.labelSmall,

@@ -182,7 +182,17 @@ fun MissionScreen(
                 if (!state.isFinishing) showExitDialog = false
             },
             title = { Text("收工并看复盘?") },
-            text = { Text("现在退出会按当前进度生成本场复盘报告。") },
+            text = {
+                Text(
+                    // 发一轮还在评分时确认键是**disabled** 的, 那就必须解释为什么按不动 ——
+                    // 一灰了的键没有说明, 读起来跟"按钮坏了"一模一样。
+                    if (state.inFlight && !state.isFinishing) {
+                        "这一轮还在评分, 等它判完就能收工。"
+                    } else {
+                        "现在退出会按当前进度记下本场成绩, AI 写的总评在复盘页里补齐。"
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(
                     // 收工在途时按钮**不可点**(§2.6 E2): 弹窗此刻唯一诚实的内容是这句
@@ -207,11 +217,11 @@ fun MissionScreen(
     // 收工真的失败了才出现的显式出口(§2.6 E2 后半)。两条都是必要的:
     // 「重试收工」处理"服务端没做成"; 「先去看复盘」处理"服务端做完了, 只是响应没回来"
     // —— 后者在这条链路上是**多数**情况(§2 问题 5 的那场生产事故就是它)。
-    if (state.finishFailed && !state.isFinishing) {
+    state.finishError?.takeIf { !state.isFinishing }?.let { message ->
         AlertDialog(
             onDismissRequest = { viewModel.dismissFinishError() },
             title = { Text("收工没成功") },
-            text = { Text(state.error ?: "发送失败, 请重试") },
+            text = { Text(message) },
             confirmButton = {
                 TextButton(onClick = { viewModel.finishAndReview(onOpenReview) }) {
                     Text("重试收工")
