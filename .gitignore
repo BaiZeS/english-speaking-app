@@ -36,6 +36,8 @@ backend/static/
 .gradle/
 build/
 captures/
+# Kotlin 2.x 编译器会话与错误日志 (android/.kotlin/sessions, android/.kotlin/errors)
+.kotlin/
 local.properties
 *.apk
 *.aab
