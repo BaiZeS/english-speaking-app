@@ -2,6 +2,7 @@ package com.app.english.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.app.english.data.remote.sessionMessage
 import com.app.english.data.repository.AbilityRepository
 import com.app.english.data.repository.DEFAULT_ABILITY_DAYS
 import com.app.english.data.repository.SceneRepository
@@ -119,7 +120,7 @@ class HomeViewModel @Inject constructor(
                 _state.update { it.copy(isLoadingStats = false, stats = stats) }
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isLoadingStats = false, statsError = e.message ?: "加载练习数据失败")
+                    it.copy(isLoadingStats = false, statsError = e.sessionMessage("加载练习数据失败"))
                 }
             }
         }
@@ -140,7 +141,7 @@ class HomeViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(isLoadingScenes = false, scenesError = e.message ?: "加载情景课失败")
+                    it.copy(isLoadingScenes = false, scenesError = e.sessionMessage("加载情景课失败"))
                 }
             }
         }
