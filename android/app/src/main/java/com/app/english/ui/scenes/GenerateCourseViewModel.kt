@@ -2,6 +2,7 @@ package com.app.english.ui.scenes
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.app.english.data.remote.sessionMessage
 import com.app.english.data.repository.GenerateRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -51,7 +52,10 @@ class GenerateCourseViewModel @Inject constructor(
                 poll(jobId)
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(phase = GeneratePhase.FAILED, error = e.message ?: "创建生成任务失败")
+                    it.copy(
+                        phase = GeneratePhase.FAILED,
+                        error = e.sessionMessage("创建生成任务失败")
+                    )
                 }
             }
         }

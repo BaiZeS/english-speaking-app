@@ -371,7 +371,8 @@ class MissionViewModel @Inject constructor(
                     it.copy(snackbar = if (created) "已收进表达库" else "这句话已经在表达库里")
                 }
             } catch (e: Exception) {
-                _state.update { it.copy(snackbar = "收藏失败: ${e.message}") }
+                // 收藏打不动只是个小挫折, 但也得有中文: 这条以前直出 `e.message`。
+                _state.update { it.copy(snackbar = e.sessionMessage("收藏失败, 稍后再试")) }
             }
         }
     }

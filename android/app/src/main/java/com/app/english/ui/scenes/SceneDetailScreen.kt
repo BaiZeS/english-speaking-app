@@ -101,8 +101,9 @@ fun SceneDetailScreen(
                 // 「查看上次复盘」永远是**另一颗键、另一句话**(次级 OutlinedButton, 不与大
                 // 按钮同形同色): §P6 之前这里只有一颗按钮, 想看总评的人点它 = 开一局新课,
                 // 旧那份报告就这么被静默丢弃了。措辞归 ReviewEntryPolicy, 界面只负责画。
-                state.lastCompleted?.let { done ->
-                    if (state.showReviewEntry) {
+                // 显隐由政策的单一真源说话(`showReviewEntry`), 载荷就在手边。
+                if (state.showReviewEntry) {
+                    state.lastCompleted?.let { done ->
                         LastReviewButton(entry = done, onOpenReview = {
                             viewModel.viewLastReview(onOpenReview)
                         })
@@ -345,8 +346,9 @@ private fun StartButton(state: SceneDetailUiState, onClick: () -> Unit) {
 
 /**
  * 「查看上次复盘」(§P6 客户端 9): 直达复盘页, **不经** MissionScreen —— 那一页要一条
- * active 会话才进得去, 而这一场已经 completed。次级样式(描边 + 小字), 与上面的大按钮
- * 不成对 competing, 免得人被两句话差不多的键绕住。
+ * active 会话才进得去, 而这一场已经 completed。刻意是次级样式(描边、小字、排在主按钮
+ * **之下**): 两颗长成一样的大键会让人分不清哪颗是"接着练"、哪颗是"看报告", 而那正是
+ * 本来要修的那个误解。
  */
 @Composable
 private fun LastReviewButton(entry: ContinueSession, onOpenReview: () -> Unit) {

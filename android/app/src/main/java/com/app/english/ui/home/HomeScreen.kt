@@ -33,6 +33,7 @@ import com.app.english.ui.components.SceneCategoryCard
 import com.app.english.ui.components.SceneSummaryCard
 import com.app.english.ui.components.SectionHeader
 import com.app.english.ui.components.StreakCard
+import com.app.english.ui.scenes.ReviewEntryPolicy
 import com.app.english.ui.theme.Spacings
 
 /**
@@ -82,7 +83,7 @@ fun HomeScreen(
             // sessionId -> 复盘页, 与上面的「继续学习」(sceneId -> 详情页) 不是同一条路。
             state.recentReview?.let { review ->
                 ActionEntryCard(
-                    title = "最近复盘",
+                    title = ReviewEntryPolicy.LABEL_RECENT_REVIEW,
                     subtitle = review.title,
                     icon = Icons.Filled.History,
                     onClick = { onReviewClick(review.sessionId) },

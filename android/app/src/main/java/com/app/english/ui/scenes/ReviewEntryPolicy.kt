@@ -9,11 +9,11 @@ import com.app.english.domain.model.ContinueSession
  * `SceneDetailViewModel.startLearning()` 与 `HomeViewModel` 都只查 `status = "active"`。
  * 于是一场已 `completed` 的会话在客户端**根本不存在**: 想看刚才那份总评, 唯一能点的按钮
  * 会 `sessionRepository.create(sceneId)` **新开一局并悄悄丢掉那份报告**。复盘页
- * (`Route.SceneReview`) 在MissionScreen 之外没有任何入口, 而进 MissionScreen 需要一条
+ * (`Route.SceneReview`) 在 MissionScreen 之外没有任何入口, 而进 MissionScreen 需要一条
  * active 会话 —— 报告落库了却回不去。
  *
- * 修法是纯客户端的: 后端 `GET /sessions?status=completed` 早就支持(Z 行按
- * `last_active_at` 倒序), 而 `GET /sessions/{id}` 不按 status 过滤。
+ * 修法是纯客户端的: 后端 `GET /sessions?status=completed` 早就支持(按 `last_active_at`
+ * 倒序), 而 `GET /sessions/{id}` 不按 status 过滤, 所以旧场收工后照样读得回整份快照。
  * **[E4] 不要从历史详情页链回** —— `History` 表没有 `session_id` 列, 那需要一次迁移,
  * 而本次发版刻意是零迁移的(计划 §6 风险表)。
  */
