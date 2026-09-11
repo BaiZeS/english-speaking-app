@@ -224,6 +224,8 @@ private fun FeedbackCountdownWiring(viewModel: BriefingViewModel, secondsLeft: I
  * 终态一致。
  */
 private suspend fun PointerInputScope.cancelOnAnyTap(onTap: () -> Unit) {
+    // 两边同为像素: `touchSlop` 与 `PointerInputChange.position` 都是 px, 所以这里
+    // 平方一下直接比, 不要绕去 Dp —— 绕一圈只会把 density 悄悄乘进去。
     val slopSquared = viewConfiguration.touchSlop.let { it * it }
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
