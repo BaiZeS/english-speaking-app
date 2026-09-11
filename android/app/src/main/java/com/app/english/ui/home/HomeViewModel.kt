@@ -14,6 +14,7 @@ import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.SceneCategoryStat
 import com.app.english.domain.model.SceneSummary
 import com.app.english.ui.courses.SceneFilter
+import com.app.english.ui.scenes.ReviewEntryPolicy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.LocalTime
 import javax.inject.Inject
@@ -38,6 +39,19 @@ data class ContinueLearningTarget(
     val stage: String = ""
 )
 
+/**
+ * 「最近复盘」的目标(§P6 客户端 9): 最近一场**打完了**的练习 + 那份报告的会话 id。
+ *
+ * 与 [ContinueLearningTarget] 分开是因为走的路**根本不同**: 后者按 sceneId 回详情页
+ * 接着练, 前者按 sessionId 直达复盘页。把两件事塞进一个目标, 迟早有人拿 sessionId
+ * 去拼 `scene_detail/{id}` —— 那正是报告回不去的原状。
+ */
+data class RecentReviewTarget(
+    /** 复盘页的句柄: `GET /sessions/{id}` 不按 status 过滤, completed 照常可读。 */
+    val sessionId: String,
+    val title: String
+)
+
 data class HomeUiState(
     val greeting: String = "你好",
     val isLoadingStats: Boolean = true,
@@ -50,6 +64,8 @@ data class HomeUiState(
     val sceneTotal: Int = 0,
     val scenesError: String? = null,
     val continueLearning: ContinueLearningTarget? = null,
+    /** 最近一场打完了的练习(§P6): 收工后回到首页也能找回那份总评。 */
+    val recentReview: RecentReviewTarget? = null,
     /** 画像最低维(pronunciation/grammar/vocabulary/fluency); 空画像 = null。 */
     val weakestDimension: String? = null,
     /** 是否已经测评过(测评过 → 首页「未测评引导」卡隐藏)。 */
@@ -91,6 +107,7 @@ class HomeViewModel @Inject constructor(
         loadStats()
         loadScenes()
         loadContinueLearning()
+        loadRecentReview()
         loadAbility()
     }
 
@@ -150,6 +167,36 @@ class HomeViewModel @Inject constructor(
                 }
             } catch (_: Exception) {
                 _state.update { it.copy(continueLearning = null) }
+            }
+        }
+    }
+
+    /**
+     * 「最近复盘」(§P6 客户端 9): `GET /sessions?status=completed` 的第一条(服务端按
+     * `last_active_at` 倒序)。与「继续学习」是**两条独立**的请求 —— 两类 status 一次拿不到,
+     * 而这一路失败只该丢一个入口, 不该拖累另一张卡。
+     *
+     * 为什么必须有这张卡: 收工之后复盘页是唯一入口, 而它是**一次性**跳转(从实战页跳过去)。
+     * 学员要是中途退回首页或杀了 App, 那份已经落库的总评在客户端就没有任何入口了 ——
+     * 首页原来的「继续学习」只查 active, 详情页的主按钮会直接开一局新课。
+     */
+    private fun loadRecentReview() {
+        viewModelScope.launch {
+            try {
+                val completed = sessionRepository.list(
+                    status = ReviewEntryPolicy.STATUS_COMPLETED
+                )
+                val latest = ReviewEntryPolicy.latestCompletedSession(completed)
+                _state.update {
+                    it.copy(
+                        recentReview = latest?.let { row ->
+                            RecentReviewTarget(sessionId = row.sessionId, title = row.title)
+                        }
+                    )
+                }
+            } catch (_: Exception) {
+                // 与「继续学习」同纪律: 拿不到就整卡隐藏, 不放假入口。
+                _state.update { it.copy(recentReview = null) }
             }
         }
     }

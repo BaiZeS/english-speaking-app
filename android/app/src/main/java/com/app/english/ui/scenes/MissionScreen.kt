@@ -91,12 +91,26 @@ fun MissionScreen(
             viewModel.consumeSnackbar()
         }
     }
+    // 到轮次上限被服务端自动收工(§P6): 数值骨架随那一轮响应已经落库, 这里立刻交棒给
+    // 复盘页 —— 那条路径以前会在同一个请求里同步写 AI 文案, 于是"一天练到自然结束"
+    // 必然撞上 30s 读超时, 而这才是每日练习最常见的结束方式。
+    LaunchedEffect(state.openReviewRequested) {
+        if (state.openReviewRequested) {
+            viewModel.consumeReviewRequest()
+            onOpenReview(viewModel.sessionId)
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             MissionTopBar(
                 state = state,
-                onExit = { showExitDialog = true },
+                onExit = {
+                    // 收工在途时不再重开弹窗: 那正是重复提交的入口(§2.6 E2)。
+                    if (MissionFinishGuard.canOpenExitDialog(state.isFinishing)) {
+                        showExitDialog = true
+                    }
+                },
                 onHint = viewModel::requestHint
             )
             if (state.isLoading) {
@@ -162,17 +176,51 @@ fun MissionScreen(
 
     if (showExitDialog) {
         AlertDialog(
-            onDismissRequest = { showExitDialog = false },
+            onDismissRequest = {
+                // 在途时不许用返回键关掉: 关掉就等于"刚刚那一下没发生", 而它可能已经
+                // 发出去了 —— 学员会再点一次。
+                if (!state.isFinishing) showExitDialog = false
+            },
             title = { Text("收工并看复盘?") },
             text = { Text("现在退出会按当前进度生成本场复盘报告。") },
             confirmButton = {
-                TextButton(onClick = {
-                    showExitDialog = false
-                    viewModel.finishAndReview(onOpenReview)
-                }) { Text("收工") }
+                TextButton(
+                    // 收工在途时按钮**不可点**(§2.6 E2): 弹窗此刻唯一诚实的内容是这句
+                    // "正在收工…"。VM 入口那道 `inFlight` 守卫是第二层, 防的是竞态。
+                    enabled = !state.inFlight,
+                    onClick = {
+                        showExitDialog = false
+                        viewModel.finishAndReview(onOpenReview)
+                    }
+                ) {
+                    Text(if (state.isFinishing) "收工中…" else "收工")
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showExitDialog = false }) { Text("继续聊") }
+                TextButton(
+                    onClick = { showExitDialog = false },
+                    enabled = !state.isFinishing
+                ) { Text("继续聊") }
+            }
+        )
+    }
+    // 收工真的失败了才出现的显式出口(§2.6 E2 后半)。两条都是必要的:
+    // 「重试收工」处理"服务端没做成"; 「先去看复盘」处理"服务端做完了, 只是响应没回来"
+    // —— 后者在这条链路上是**多数**情况(§2 问题 5 的那场生产事故就是它)。
+    if (state.finishFailed && !state.isFinishing) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissFinishError() },
+            title = { Text("收工没成功") },
+            text = { Text(state.error ?: "发送失败, 请重试") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.finishAndReview(onOpenReview) }) {
+                    Text("重试收工")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.openReviewAfterFailure(onOpenReview) }) {
+                    Text("先去看复盘")
+                }
             }
         )
     }

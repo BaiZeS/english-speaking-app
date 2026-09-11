@@ -24,6 +24,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.app.english.domain.model.ContinueSession
 import com.app.english.domain.model.SceneCourseDetail
 import com.app.english.domain.model.VocabCard
 import com.app.english.ui.components.ErrorState
@@ -50,6 +52,7 @@ fun SceneDetailScreen(
     onBack: () -> Unit,
     onOpenBriefing: (sessionId: String) -> Unit,
     onOpenMission: (sessionId: String) -> Unit,
+    onOpenReview: (sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SceneDetailViewModel = hiltViewModel()
 ) {
@@ -95,6 +98,14 @@ fun SceneDetailScreen(
                         )
                     }
                 )
+                // 「查看上次复盘」永远是**另一颗键、另一句话**(次级 OutlinedButton, 不与大
+                // 按钮同形同色): §P6 之前这里只有一颗按钮, 想看总评的人点它 = 开一局新课,
+                // 旧那份报告就这么被静默丢弃了。措辞归 ReviewEntryPolicy, 界面只负责画。
+                state.lastCompleted?.let { done ->
+                    if (state.showReviewEntry) {
+                        LastReviewButton(entry = done, onOpenReview = { viewModel.viewLastReview(onOpenReview) })
+                    }
+                }
                 Spacer(Modifier.height(Spacings.s2))
             }
         }
@@ -304,6 +315,11 @@ private fun TaskPreview(course: SceneCourseDetail) {
     }
 }
 
+/**
+ * 主按钮 = **进去练**(续跑或新开一局), 标签由 [SceneDetailUiState.startLabel] 给。
+ * 有可回看的旧场时它是「再练一次（新开一局）」—— 那半句括号是刻意的: 这一颗键**永远**
+ * 不带你看上次的报告, 别让人以为点它就是去收尾工。
+ */
 @Composable
 private fun StartButton(state: SceneDetailUiState, onClick: () -> Unit) {
     Button(
@@ -319,10 +335,38 @@ private fun StartButton(state: SceneDetailUiState, onClick: () -> Unit) {
                 strokeWidth = 2.dp,
                 color = MaterialTheme.colorScheme.onPrimary
             )
-        } else if (state.resuming != null) {
-            Text("继续学习")
         } else {
-            Text("开始学习")
+            Text(state.startLabel)
         }
     }
+}
+
+/**
+ * 「查看上次复盘」(§P6 客户端 9): 直达复盘页, **不经** MissionScreen —— 那一页要一条
+ * active 会话才进得去, 而这一场已经 completed。次级样式(描边 + 小字), 与上面的大按钮
+ * 不成对 competing, 免得人被两句话差不多的键绕住。
+ */
+@Composable
+private fun LastReviewButton(entry: ContinueSession, onOpenReview: () -> Unit) {
+    OutlinedButton(
+        onClick = onOpenReview,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.Start) {
+            Text(ReviewEntryPolicy.LABEL_VIEW_LAST_REVIEW, style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = entry.toReviewSubtitle(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 入口下面那行小字: 说清"哪一场的复盘", 别让人点开才知道是哪次。 */
+private fun ContinueSession.toReviewSubtitle(): String = when (stage) {
+    "mission" -> "$title · 实战收工那场"
+    else -> "$title · 上次练完的那场"
 }

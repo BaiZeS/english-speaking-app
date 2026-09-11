@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -47,6 +48,7 @@ fun HomeScreen(
     onCategoryClick: (categoryId: String) -> Unit,
     onGenerateCourseClick: () -> Unit,
     onAssessmentClick: () -> Unit,
+    onReviewClick: (sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
@@ -74,6 +76,18 @@ fun HomeScreen(
                     subtitle = target.title,
                     icon = Icons.Filled.School,
                     onClick = { onSceneClick(target.sceneId) }
+                )
+            }
+            // 「最近复盘」(§P6): 收工后那份已经落库的总评, 在首页也要回得去。走的是
+            // sessionId -> 复盘页, 与上面的「继续学习」(sceneId -> 详情页) 不是同一条路。
+            state.recentReview?.let { review ->
+                ActionEntryCard(
+                    title = "最近复盘",
+                    subtitle = review.title,
+                    icon = Icons.Filled.History,
+                    onClick = { onReviewClick(review.sessionId) },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             TodayPickSection(

@@ -259,7 +259,8 @@ fun SessionSummaryDto.toDomain(): ContinueSession = ContinueSession(
     stage = stage,
     doneSteps = doneSteps,
     totalSteps = totalSteps,
-    unlockedMission = unlockedMission
+    unlockedMission = unlockedMission,
+    status = status
 )
 
 fun GenerationJobDto.toDomain(): GenerationJob = GenerationJob(

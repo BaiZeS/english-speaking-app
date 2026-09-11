@@ -291,7 +291,7 @@ data class ReviewReportData(
         get() = listOf("pronunciation", "grammar", "vocabulary", "fluency")
 }
 
-/** 首页「继续学习」目标(最近 active 会话摘要)。 */
+/** 首页「继续学习」/详情页「查看上次复盘」的目标(会话摘要, 同一形状两种用法)。 */
 data class ContinueSession(
     val sessionId: String,
     val sceneId: String,
@@ -300,7 +300,13 @@ data class ContinueSession(
     val stage: String,
     val doneSteps: Int,
     val totalSteps: Int,
-    val unlockedMission: Boolean
+    val unlockedMission: Boolean,
+    /**
+     * `active` / `completed` / `abandoned`。§P6 加它只为一件事: 回看入口**只**认
+     * `completed`。列表请求本身带 `status` 过滤, 但不能假定过滤一定生效(旧服务端、
+     * 代理、以后有人改调用方), 而把一场还在练的会话链到复盘页 = 学员点进一个空壳。
+     */
+    val status: String = ""
 )
 
 /** 生成任务的客户端视图(轮询进度页)。 */

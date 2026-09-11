@@ -68,13 +68,20 @@ fun ReviewScreen(
             }
         }
         when {
-            state.phase == ReviewPhase.LOADING -> LoadingState()
-            report == null -> ErrorState(
-                message = ReviewStateMachine.errorMessageOf(state.phase, state.error)
-                    ?: "加载复盘失败",
-                onRetry = viewModel::load
-            )
-            else -> {
+            !ReviewStateMachine.paintsReportSkeleton(state.phase) ->
+                if (state.phase == ReviewPhase.LOADING) {
+                    LoadingState()
+                } else {
+                    // 一份报告都没有: 整页可重试错误态(§2 问题 5 的"没有重试按钮"在这里
+                    // 一并补上 —— ErrorState 自带那颗键, 而重试就是一个普通 GET)。
+                    ErrorState(
+                        message = ReviewStateMachine.errorMessageOf(state.phase, state.error)
+                            ?: "加载复盘失败",
+                        onRetry = viewModel::load
+                    )
+                }
+
+            report != null -> {
                 OverallRing(report)
                 if (ReviewStateMachine.showDegradedBanner(state.phase, report.source)) {
                     DegradedBanner(

@@ -373,9 +373,14 @@ class MissionViewModel @Inject constructor(
 
     /** 收工失败后的「先去看复盘」: 报告在不在由复盘页自己说清, 这里不替它猜。 */
     fun openReviewAfterFailure(onOpenReview: (String) -> Unit) {
-        _state.update { it.copy(finishFailed = false, finished = true) }
+        // **不**翻 `finished`: 这一步我们并不知道服务端有没有关掉这一场。报告在不在由
+        // 复盘页按快照自己说(`review == null` 时它会给一句诚实的可重试错误态)。
+        _state.update { it.copy(finishFailed = false, error = null) }
         onOpenReview(sessionId)
     }
+
+    /** 收掉失败出口(弹窗被 dismiss 时), 不改会话状态。 */
+    fun dismissFinishError() = _state.update { it.copy(finishFailed = false, error = null) }
 
     /**
      * 退出确认后的收工(§P6 客户端 6 + §2.6 E2)。

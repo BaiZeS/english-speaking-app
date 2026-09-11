@@ -73,6 +73,16 @@ object ReviewStateMachine {
     }
 
     /**
+     * 这一态要不要把**数值骨架**摆出来(总分圆环 / 四维条 / 任务清单 / 对照 / 生词)。
+     *
+     * 只有两态不画: 快照还没到手, 以及这一场根本没有报告。`generating` **要**画 —— §P6
+     * 的整个取舍都在这里: 数值在 202 之前就 commit 了, 让学员对着一个 spinner 等那两句
+     * AI 文案, 等于把他已经拿到的成绩藏起来(而原来的超时界面给人的正是这个感觉)。
+     */
+    fun paintsReportSkeleton(phase: ReviewPhase): Boolean =
+        phase != ReviewPhase.LOADING && phase != ReviewPhase.NOTHING_TO_RENDER
+
+    /**
      * 文案区顶部那句话; null = 这一态不需要进度/占位语。
      *
      * `generating` 用 [ReviewPollingPolicy.stageText](措辞按已等时长变, 不写死"马上好")。

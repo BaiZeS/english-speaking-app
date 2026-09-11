@@ -134,7 +134,12 @@ private fun NavGraphBuilder.homeTab(
             },
             onCategoryClick = onCategoryClick,
             onGenerateCourseClick = { navController.navigate(Route.GenerateCourse.route) },
-            onAssessmentClick = { navController.navigate(Route.AssessmentIntro.route) }
+            onAssessmentClick = { navController.navigate(Route.AssessmentIntro.route) },
+            // 首页「最近复盘」: 直达复盘页(§P6 客户端 9)。不弹到详情页, 也不经实战页 ——
+            // 那一页要一条 active 会话才进得去。
+            onReviewClick = { sessionId ->
+                navController.navigate(Route.SceneReview.create(sessionId))
+            }
         )
     }
 }
@@ -279,6 +284,10 @@ private fun NavGraphBuilder.sceneGraph(navController: NavHostController) {
             },
             onOpenMission = { sessionId ->
                 navController.navigate(Route.SceneMission.create(sessionId))
+            },
+            // 详情页「查看上次复盘」= 同一句 Route.SceneReview, 不经 MissionScreen。
+            onOpenReview = { sessionId ->
+                navController.navigate(Route.SceneReview.create(sessionId))
             }
         )
     }
