@@ -4,7 +4,8 @@ import android.Manifest
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,7 +100,7 @@ fun BriefingScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) { detectTapGestures { viewModel.cancelAutoAdvance() } }
+            .pointerInput(Unit) { cancelOnAnyTap(onTap = viewModel::cancelAutoAdvance) }
             .verticalScroll(scrollState)
             .padding(Spacings.s3),
         verticalArrangement = Arrangement.spacedBy(Spacings.s3)
@@ -206,6 +209,41 @@ private fun FeedbackCountdownWiring(viewModel: BriefingViewModel, secondsLeft: I
             .collect { scrolling -> if (scrolling) viewModel.cancelAutoAdvance() }
     }
     return scrollState
+}
+
+/**
+ * 整屏"任意点按都算取消", **包括落在子按键上的那一次**。
+ *
+ * 不用 `detectTapGestures` 是因为 clickable 在 Main pass 消费按压并阻断传播, 父层的探测
+ * 永远收不到落在「听原句」/文本框/展开键上的那几下 —— 而 D10 说的"点按任意处"里, 最典型
+ * 的恰恰是这些: 正在读反馈的人就是要重听一遍、要改一下草稿。这里在 Initial pass 观察同
+ * 一次按压, **只看不动**, 所以子节点行为完全不受影响。
+ *
+ * 位移超过 touch slop 的那次按滚动处理(由 `isScrollInProgress` 那条路取消), 回弹/甩动
+ * 因此不会被当成点按。「继续」/「再试一次」被点到也只是先撤秒针、再自己清掉 pendingGrade,
+ * 终态一致。
+ */
+private suspend fun PointerInputScope.cancelOnAnyTap(onTap: () -> Unit) {
+    val slopSquared = viewConfiguration.touchSlop.let { it * it }
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        var dragged = false
+        var finished = false
+        // 循环节抄 HoldToTalkButton 的 drainUntilUp: 以"这根手指抬手"为一次手势的终点,
+        // 而不是"当前没有任何按下"—— 多指时后者会提前退出, 把 awaitEachGesture 的流打乱。
+        while (!finished) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            for (change in event.changes) {
+                if (change.pressed) {
+                    val delta = change.position - change.previousPosition
+                    if (delta.x * delta.x + delta.y * delta.y > slopSquared) dragged = true
+                } else if (change.id == down.id) {
+                    finished = true
+                }
+            }
+        }
+        if (!dragged) onTap()
+    }
 }
 
 @Composable
@@ -354,9 +392,10 @@ private fun StepCard(
                 )
                 else -> MakeSentenceBody(spec = spec, draft = draft, onDraftChange = onDraftChange)
             }
-            // 反馈停留期间收起作答键: 这一屏显示的是**刚答过**的那一题, 而服务端只接受
-            // 下一个 pending 步 —— 留着录音键就是在演一个必然 409 的操作。
-            if (!state.isAwaitingFeedback) {
+            // 作答键只在"屏幕上这一题正好就是待做步"时摆出来(见 answerableStepId):
+            // 过关停留时屏上是已答完的那一题, 发过去只会吃 409; 而不及格与崩溃恢复的
+            // 停留屏上就是待做步 —— 那时反馈和录音键并存才对, 「再试一次」不必先确认。
+            if (state.answerableStepId != null) {
                 RecordButtonRow(
                     isRecording = isRecording,
                     isSubmitting = state.isSubmitting,

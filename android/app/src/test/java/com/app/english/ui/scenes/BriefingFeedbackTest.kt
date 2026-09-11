@@ -241,6 +241,33 @@ class BriefingFeedbackTest {
         assertEquals("f1", next.displayedStepId)
     }
 
+    /**
+     * 拉快照的那一刻如果反馈正挂着, 不能把它抹掉。眼下的界面没有"边看反馈边刷新"的
+     * 入口, 但这条不变式很便宜, 而违背它的代价正是问题 4 的另一面 —— 反馈在阅读途中
+     * 被静默抽走。
+     */
+    @Test
+    fun refreshingTheSnapshotWhileReadingFeedbackKeepsItOnScreen() {
+        val dwelling = reduceBriefing(
+            progress().toUiState(),
+            BriefingEvent.Graded(
+                grade(score = 72.0),
+                briefing = progress(statuses = listOf("passed", "pending", "pending"))
+            )
+        )
+        val refreshed = reduceBriefing(
+            dwelling,
+            BriefingEvent.Loaded(progress(statuses = listOf("passed", "pending", "pending")))
+        )
+        assertNotNull(refreshed.pendingGrade)
+        assertEquals("f1", refreshed.displayedStepId)
+        assertEquals(1, refreshed.currentIndex)
+        // 快照里没有这一步的 last_grade 时也照样留着, 由学员自己点继续。
+        val cleared = reduceBriefing(refreshed, BriefingEvent.FeedbackAcknowledged)
+        assertNull(cleared.pendingGrade)
+        assertEquals("f2", cleared.answerableStepId)
+    }
+
     // ---- 崩溃恢复: 服务端逐步留档的 last_grade ------------------------------
 
     /**
@@ -261,6 +288,34 @@ class BriefingFeedbackTest {
         // 重进不是"刚读完", 所以不自作主张倒数把反馈抽走。
         assertNull(resumed.autoAdvanceSeconds)
         assertTrue(resumed.canRetryAnsweredStep)
+        // 恢复出来的这张卡必须还能动作: 撤掉停留后这一步就能重录。
+        val acknowledged = reduceBriefing(resumed, BriefingEvent.FeedbackAcknowledged)
+        assertEquals("f2", acknowledged.answerableStepId)
+        assertEquals("f2", acknowledged.displayedStepId)
+    }
+
+    @Test
+    fun aResumedResubmittableStepCanChainGradeAcknowledgeGrade() {
+        val failed = grade(score = 45.0, passed = false, stepId = "f1")
+        val resumed = progress(
+            statuses = listOf("pending", "pending"),
+            grades = mapOf(0 to failed)
+        ).toUiState()
+        // 摆回反馈 -> 学员看清问题 -> 「再试一次」确认 -> 录音键就在下面。
+        assertEquals("f1", resumed.displayedStepId)
+        assertEquals("f1", resumed.answerableStepId)
+        val acknowledged = reduceBriefing(resumed, BriefingEvent.FeedbackAcknowledged)
+        assertEquals("f1", acknowledged.answerableStepId)
+        // 再答一次, 反馈又来一张。
+        val again = reduceBriefing(
+            acknowledged,
+            BriefingEvent.Graded(
+                grade(score = 66.0, stepId = "f1"),
+                briefing = progress(statuses = listOf("passed", "pending"))
+            )
+        )
+        assertEquals("f1", again.displayedStepId)
+        assertNull(again.answerableStepId)
     }
 
     @Test

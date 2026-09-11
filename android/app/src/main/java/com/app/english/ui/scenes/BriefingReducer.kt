@@ -86,12 +86,15 @@ data class BriefingUiState(
     val isAwaitingFeedback: Boolean get() = pendingGrade != null
 
     /**
-     * 现在还能不能作答。**"屏幕上显示的题"和"能提交的题"在反馈停留期间是两回事**:
-     *  displayedStepId 是刚答过的那一题, 而服务端只接受下一个 pending 步。反馈没确认
-     *  就提交, 发的要么是已经 passed 的步(409 STEP_ALREADY_DONE), 要么是屏幕根本没
-     *  显示的那一题(409 STEP_OUT_OF_ORDER)。
+     * 现在能作答的那一步 —— 规则只有一句: **屏幕上这一题, 正好就是待做的那一题**。
+     *
+     * 过关后的停留里两者不再相等(屏上是 f1, 服务端只吃下一个 pending 的 f2), 所以作答
+     * 键收起: 发 f1 会吃 409 `STEP_ALREADY_DONE`, 发 f2 又是一道屏幕上根本没显示的题。
+     * 而**不及格 / 崩溃恢复**的停留是同一题, 这条把录音键放了回来 —— 「再试一次」要的
+     * 正是这个场景(以前这里一律 `takeUnless { isAwaitingFeedback }`, 于是恢复出来的反馈
+     * 会同时锁死重录, 确认之后又直接停在"没有题目可答"的空屏上)。
      */
-    val answerableStepId: String? get() = currentStep?.id?.takeUnless { isAwaitingFeedback }
+    val answerableStepId: String? get() = currentStep?.id?.takeIf { it == displayedStepId }
 
     /** 「再试一次」只有在**这一步还能再答**时才是真选项(不及格留在原地)。 */
     val canRetryAnsweredStep: Boolean
@@ -211,19 +214,27 @@ fun reduceBriefing(state: BriefingUiState, event: BriefingEvent): BriefingUiStat
     is BriefingEvent.Loaded -> {
         val steps = event.briefing.steps.map { it.toUi() }
         val currentIndex = event.briefing.steps.indexOfFirst { it.status == "pending" }
+        // 快照刷新**不该**把正在读的那份反馈抽走。所以两层:
+        // 1) 重进/崩溃恢复 -> 摆回服务端为待做步存下的 last_grade;
+        // 2) 反馈还挂着时又拉了一次快照 -> 保留手上这份, 让学员自己点继续。
+        // 眼下的界面没有"边看反馈边刷新"的入口, 但这条不变式很便宜, 而违背它的代价正是
+        // 问题 4 的另一面: 反馈在阅读途中被抹掉。
         val resumed = event.briefing.resumableGrade()
+        val pending = resumed
+            ?: state.pendingGrade?.takeIf { held ->
+                event.briefing.steps.any { it.id == held.stepId }
+            }
         BriefingUiState(
             steps = steps,
             skipsRemaining = event.briefing.skipsRemaining,
             skipLimit = event.briefing.skipLimit,
             unlockedMission = event.briefing.unlockedMission,
             currentIndex = currentIndex,
-            // 崩溃/重进: 服务端逐步存的 last_grade 就是"上次没看完的反馈", 直接摆回去。
-            // **不**起倒计时 —— 那 5 秒属于"刚读完这一句"的语境, 隔了一次进程复活再
-            // 倒数, 等于在学员没读的时候把反馈抽走。
-            answeredStepId = resumed?.stepId,
-            lastGrade = resumed,
-            pendingGrade = resumed,
+            answeredStepId = pending?.stepId,
+            lastGrade = pending ?: state.lastGrade,
+            pendingGrade = pending,
+            // 重进不起倒计时: 那 5 秒属于"刚读完这一句"的语境, 隔了一次进程复活再倒数,
+            // 等于在学员没读的时候把反馈抽走。
             isLoading = false
         )
     }
