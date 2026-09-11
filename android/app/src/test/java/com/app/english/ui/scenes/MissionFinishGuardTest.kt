@@ -63,6 +63,31 @@ class MissionFinishGuardTest {
     }
 
     /**
+     * 端到端冒烟实测(2026-09-11, 本机真火)抓到的: 对一场**已收工成功**的会话再收一次,
+     * 后端返回的是 `SESSION_NOT_ACTIVE` 而**不是** `MISSION_FINISHED` ——
+     * `_require_mission_actionable` 先判 `status != "active"`, 而收工已把 status 置成
+     * `completed`, 于是 `stage in ("review","done")` 那条 `MISSION_FINISHED` 分支不可达。
+     *
+     * 只认 `MISSION_FINISHED` 会让幂等恢复路径变成死代码, 而它要救的正是生产事故那个形状
+     * (session 719833d1: 报告已落库、`200 OK` 从未打印、学员 4 连点吃 4 个 409)。
+     * 认 `SESSION_NOT_ACTIVE` 是安全的: 后端只有 `active → completed` 一条状态迁移,
+     * `abandoned` 从未被任何代码置上。
+     */
+    @Test
+    fun theRepeatFinishCodeTheBackendActuallyReturnsIsAlsoTreatedAsIdempotentSuccess() {
+        assertTrue(MissionFinishGuard.failureMeansAlreadyFinished("SESSION_NOT_ACTIVE"))
+        // 两个码都得认, 且都收在同一份事实源里(别处再判一次就会漂移)。
+        assertEquals(
+            setOf("MISSION_FINISHED", "SESSION_NOT_ACTIVE"),
+            MissionFinishGuard.CODES_ALREADY_FINISHED
+        )
+        // 其余状态机码仍必须是"真失败", 否则会把该报的错也吞成跳转。
+        assertFalse(MissionFinishGuard.failureMeansAlreadyFinished("SESSION_CONCURRENT_UPDATE"))
+        assertFalse(MissionFinishGuard.failureMeansAlreadyFinished("SKIP_LIMIT_REACHED"))
+        assertFalse(MissionFinishGuard.failureMeansAlreadyFinished("STEP_ALREADY_DONE"))
+    }
+
+    /**
      * 收工在途时「← 退出」不能再开弹窗 —— 那是重复提交的第二条路(弹窗关了, 按钮还在)。
      * 而**发一轮**在途时仍要能打开: 一轮可以挂到 23s, 那时把退出按钮打死会让人连
      * "算了, 收工"都按不到, 用一个更糟的体验去换一个更安全的体验。

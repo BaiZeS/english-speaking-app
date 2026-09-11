@@ -17,8 +17,25 @@ package com.app.english.ui.scenes
  *    (= 发一轮 OR 要提示 OR 收工), 界面另用 `isFinishing` 单独驱动弹窗与重试出口。
  */
 object MissionFinishGuard {
-    /** 服务端"这一场早就收过了"的错误码 —— 幂等场景, 该跳复盘页而不是报错。 */
-    const val CODE_ALREADY_FINISHED = "MISSION_FINISHED"
+    /**
+     * 服务端"这一场早就收过了"的错误码 —— 幂等场景, 该跳复盘页而不是报错。
+     *
+     * **两个码都要认**, 这是端到端冒烟实测出来的(2026-09-11, 本机真火): 后端
+     * `_require_mission_actionable` 的判序是 `status != "active"` → `SESSION_NOT_ACTIVE`
+     * **先于** `stage in ("review","done")` → `MISSION_FINISHED`, 而收工会同时置
+     * `status="completed"` 与 `stage="review"`, 所以对一场**已经收工成功**的会话再收一次,
+     * 拿到的永远是 `SESSION_NOT_ACTIVE`, `MISSION_FINISHED` 那条分支根本不可达。
+     * 只认 `MISSION_FINISHED` 等于把幂等恢复路径写成死代码 —— 而它要救的恰恰是生产事故
+     * 那个形状: 请求其实成了、响应没回到手机上(session 719833d1 的 `200 OK` 从未打印,
+     * 学员随后 4 连点吃 4 个 409), 此时报告已落库, 该做的是把人送进复盘页, 不是甩一句
+     * "本场会话已结束"让他以为成绩没了。
+     *
+     * 认 `SESSION_NOT_ACTIVE` 是安全的: 全后端只有 `active → completed` 一条状态迁移,
+     * `abandoned` 从未被任何代码置上(只存在于 `models/db.py` 的取值注释里), 所以这个码
+     * 在实践中只可能意味着"已收工"。万一真遇到没有报告的会话, 复盘页自己会渲染可重试的
+     * 空态, 不会白屏。
+     */
+    val CODES_ALREADY_FINISHED = setOf("MISSION_FINISHED", "SESSION_NOT_ACTIVE")
 
     /** 点「收工」/调 `finishAndReview` 那一刻的处置。 */
     fun tapOf(finished: Boolean, inFlight: Boolean): FinishTap = when {
@@ -36,10 +53,10 @@ object MissionFinishGuard {
     fun canOpenExitDialog(isFinishing: Boolean): Boolean = !isFinishing
 
     /**
-     * 失败是不是"幂等成功"。409 [CODE_ALREADY_FINISHED] 说明服务端已经关掉了这一场 ——
+     * 失败是不是"幂等成功"。409 [CODES_ALREADY_FINISHED] 说明服务端已经关掉了这一场 ——
      * 多半是上一次请求其实成了, 只是响应没能回到这台手机上。
      */
-    fun failureMeansAlreadyFinished(code: String?): Boolean = code == CODE_ALREADY_FINISHED
+    fun failureMeansAlreadyFinished(code: String?): Boolean = code in CODES_ALREADY_FINISHED
 }
 
 /** [MissionFinishGuard.tapOf] 的结果。 */
