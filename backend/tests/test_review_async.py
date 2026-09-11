@@ -54,7 +54,7 @@ from app.main import app
 from app.models.db import PracticeSession, PracticeStep
 from app.services import llm_provider, scene_store
 from app.services import mission_engine as me
-from tests.test_course_sessions import BRIEFING6
+from tests.test_course_sessions import BRIEFING6, _open, _pass_briefing
 from tests.test_drill_grader import install_llm
 from tests.test_latency_budget import HANG_S, install_slow_llm, shrink_budget
 from tests.test_mission import DEV, _finish, _mission, _ready, _report, mission_json
@@ -323,6 +323,68 @@ async def test_the_202_skeleton_is_already_a_readable_report(
     doc = await _read_doc(db, sid)
     assert isinstance(doc["review_facts"], dict)
     assert doc["review_facts"]["dims"]["grammar"] == pytest.approx(66.0)
+
+
+@pytest.mark.asyncio
+async def test_an_all_untrusted_session_says_so_instead_of_rendering_a_dash(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, course_root: Callable[..., Path]
+) -> None:
+    """全场没可信证据 (本机/CI: 讯飞与 LLM 都没配) -> 骨架要**说清缺席**, 不是留个破折号.
+
+    §P6 的次因之一: 四维全空时总分渲染成 "—", 学员会读成"考了 0 分", 而事实是**这场没有可
+    信的评分来源**。缺席必须按缺席说, 这句话得服务端来说 (不让 UI 猜)。异步化之后这句话
+    仍然在骨架里 —— 它不依赖文案作业, 所以必须在 ``generating`` 那一刻就已经到位。
+    """
+    course_root()
+    sid = await _ready(client)  # 无凭据: 打基础全走 stub/heuristic
+    await _played_ready(client, sid)
+    await _finish(client, sid)
+    report = await _report(client, sid, run_copy_job=False)
+
+    assert report["dims"] == {
+        "pronunciation": None,
+        "grammar": None,
+        "vocabulary": None,
+        "fluency": None,
+    }, "启发式/stub 的证据不该混进可信四维 (宁缺勿滥, §5.6)"
+    assert report["overall"] is None
+    assert report["evidence_note_cn"] == me.NO_EVIDENCE_NOTE_CN
+    # 清单与总分是两件事: 沟通任务全做完了, 这句话照样要说 (否则整页看起来都像"没数据")
+    assert report["cleared"] is True
+    assert any("实战任务全部达成" in line for line in report["highlights"])
+    assert any("没有可信证据" in line for line in report["improvements"]), (
+        "缺证据要落在改进建议里说清楚, 不能让学员以为是自己练得差"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_briefing_with_skips_is_worded_as_finished_not_as_failed(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, course_root: Callable[..., Path]
+) -> None:
+    """正当跳过 (额度内) 不算缺席: 骨架说「走完了, 其中 N 步跳过」, 而不是静默少说一句.
+
+    §P6 次因之二: 以前这里只有一个 ``all(status == "passed")`` 布尔, 于是**一次合规跳过**
+    就把"清单全部走完"这句话吃掉 —— 门禁 (``_reconcile_stage``) 认的是 passed|skipped,
+    文案口径必须跟门禁一致。两局对照着断, 才看得出"含跳过"没被当成"没走完"。
+    """
+    course_root()
+    all_passed = await _ready(client)
+    await _played_ready(client, all_passed)
+    await _finish(client, all_passed)
+    clean = await _report(client, all_passed, run_copy_job=False)
+
+    skipped_sid = await _open(client)
+    await _pass_briefing(client, skipped_sid, skip_steps=("f6",))
+    await _played_ready(client, skipped_sid)
+    await _finish(client, skipped_sid)
+    with_skip = await _report(client, skipped_sid, run_copy_job=False)
+
+    assert any(line == "打基础清单全部走完。" for line in clean["highlights"])
+    assert any("其中 1 步选择跳过" in line for line in with_skip["highlights"]), (
+        "合规跳过被静默当成没走完 —— 门禁认 passed|skipped, 文案必须同口径"
+    )
+    # 跳过不该动分数: 两局的数值半边各按自己的行为走, 但清单口径必须自洽
+    assert with_skip["cleared"] is True and clean["cleared"] is True
 
 
 # ============================================ 3) 收工确实把作业派出去了
