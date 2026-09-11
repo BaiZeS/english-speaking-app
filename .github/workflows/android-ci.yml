@@ -17,6 +17,278 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ==========================================================================
+  # 发布门 (计划 §1 R1 / §P8-3) · 取代「靠人记得 bump 版本号」那条 SOP 步骤
+  #
+  # 为什么是 blocking 而不是一句提醒: commit 2fd067d (hold-to-talk 话筒 + 实时音量
+  # 表, 改了 android/app/src/main 下 20 个文件) 推上 main、CI 全绿, 然后**永久停在
+  # main 上** —— 它没动 versionCode, 所以 OTA 通道那份 APK 仍是 v2.1.0 的树
+  # (25d05a3, 而 2fd067d 是它的后代)。用户报的五个症状里有两个源码上早修好了, 学员
+  # 手机上永远看不到。测试全绿抓不到它: 测试跑 HEAD 的源码, 手机跑 APK 的源码,
+  # 中间唯一的关系就是版本号。docs/operations.md 第 3 节的「versionCode 永远严格
+  # 递增」就是那条被失败过一次的人记 SOP —— 不要再往回退。
+  #
+  # 因此: 本 job 没有 continue-on-error, 且 build-debug-apk `needs` 它。
+  # 依赖: 只有 git + coreutils (grep/sed/awk), 不需要 JDK / Android SDK。
+  # ==========================================================================
+  release-gate:
+    name: Release Gate (versionCode + CHANGELOG)
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 是功能性的, 不是浪费: 本门要按**整个事件范围**的首尾两棵 tree
+      # 比较 (还要读最近一个 tag 上的 versionCode), 默认浅克隆只有 HEAD 一个 commit。
+      # 本仓 .git < 10MB, 全量抓取秒级。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail when android/app/src/main changed without a release identity
+        env:
+          # 范围 = 事件自带的首尾 SHA, **不是**只看 HEAD commit: 一次多 commit 的 push
+          # 必须整体判 (本仓 P0 bump + P1..P6 源码就是同一批推上来的)。
+          # 注入纪律: 所有 ${{ }} 只落在 env 里, shell 里一律 "$VAR" 引用。
+          GATE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          GATE_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
+          GATE_PUSH_FIRST: ${{ github.event.commits[0].id }}
+        run: |
+          # ==================================================================
+          # R1 机器门 · 「改了会上手机的源码 = 改了发布身份」
+          #
+          # 规则 (计划 §P8 第 3 项): 一个 push/PR 的**整个范围**改了
+          # android/app/src/main/**, 就必须同时改掉「发布身份」:
+          #   ① android/app/build.gradle.kts 的 versionCode 严格递增;
+          #   ② CHANGELOG.md 增加了内容。
+          # 按范围而不是按单个 commit 判, 所以「一个 commit 改源码 + 同批另一个
+          # commit 补版本号」算通过 —— 本仓真实历史 1ad2c28..8576a3a 整批推上去
+          # 就是这个形状 (P0 的 bump + P1 的源码)。
+          #
+          # 三个刻意的设计, 动手改之前先读完:
+          #  1. **blocking, 不是 warning**。原来不缺规矩, 缺的是执行 (见本 job 头注)。
+          #     下面每个分支只有 exit 0 / exit 1, 别在这里加 continue-on-error。
+          #  2. **允许一列尚未发布的版本列车 (path B)**。本仓发版流程故意是「先 bump
+          #     版本号 (P0), 再在其上叠一串修复 commit (P1…P6), 最后打 tag 发版」。
+          #     列车里后到的 push 必然不再改 versionCode, 一律判红就会逼人给同一轮
+          #     发布刷多个版本号 —— 那会毁掉「一个 versionCode 对应一份可复现的
+          #     APK」这个更要紧的不变量。path B 只在两条同时成立时放行, 它表达的仍
+          #     是本门那条不变量: 这些源码确实会到达设备 —— HEAD 的 versionCode 高于
+          #     **最近一个可达 tag** 的 versionCode (这一版还没发出去), 且 CHANGELOG.md
+          #     已有对应 versionName 的章节 (这一版的内容有人写过)。tag 一落地, 下一批
+          #     源码改动就重新要求现场 bump。**代价**: 一列开着不关的列车 (= bump 之后
+          #     迟迟不发版) 会一直放行; 那属于发版纪律问题, 由 operations.md 第 3 节的
+          #     硬门兜, 不在本门里加时间判断 —— 时间判断只会带来更多误判。
+          #  3. **范围算不出来 = 红** (fail-closed)。force push / 分支重建后
+          #     `github.event.before` 可能取不到 (新建分支时它是 40 个 0); 先退到「本次
+          #     push 首个 commit 的父」, 再退到 HEAD^ —— 后两个退路都在**审更少的内容**,
+          #     所以会把放过的那部分打进本步 summary, 让它可见。全都不存在时 (仓库首
+          #     提交) 直接红, 不做乐观通过: 一条能被绕过的门等于没有门。
+          #
+          # 逃生口 (唯一, 且必须写理由): 范围内**任一** commit message 含
+          #     [release-gate-skip: <一句话理由>]
+          # 冒号后面必须有字, 空理由不生效。命中的那一行会打进日志与本步 summary, 便于
+          # 事后复核。适用场景确实很少: 只改注释/话术的 main 下文件 (真实例子 0fc7e29
+          # 只改了 BriefingScreen.kt 里一行注释), 或确定不改变可发布产物的内部重构。
+          # **不要**把它写进 git 模板、alias 或 pre-commit —— 那等于把本门删掉。
+          # ==================================================================
+          set -u
+
+          GRADLE="android/app/build.gradle.kts"
+          CHANGELOG="CHANGELOG.md"
+          SRC_PREFIX="android/app/src/main/"
+
+          version_code_at() {
+            git show "$1:$GRADLE" 2>/dev/null |
+              sed -n 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' |
+              head -n 1
+          }
+
+          version_name_at() {
+            git show "$1:$GRADLE" 2>/dev/null |
+              sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' |
+              head -n 1
+          }
+
+          has_commit() {
+            [ -n "${1:-}" ] && git cat-file -e "$1^{commit}" 2>/dev/null
+          }
+
+          # ---- 1. 审计范围: 用事件自带的 before/after (或 PR base), 不是只看 HEAD ----
+
+          BASE_SHA="${GATE_BASE:-}"
+          HEAD_SHA="${GATE_HEAD:-}"
+          RANGE_NOTE=""
+
+          if ! has_commit "$HEAD_SHA"; then
+            # push 一定带 after; 走到这里说明是 workflow_dispatch 或对象没被抓下来。
+            HEAD_SHA="$(git rev-parse HEAD)"
+            RANGE_NOTE=" (GATE_HEAD 不可用, 退回检出的 HEAD)"
+          fi
+
+          if ! has_commit "$BASE_SHA"; then
+            PUSH_FIRST_PARENT=""
+            if has_commit "${GATE_PUSH_FIRST:-}"; then
+              PUSH_FIRST_PARENT="$(git rev-parse -q --verify "$GATE_PUSH_FIRST^" 2>/dev/null || true)"
+            fi
+            if has_commit "$PUSH_FIRST_PARENT"; then
+              BASE_SHA="$PUSH_FIRST_PARENT"
+              RANGE_NOTE=" (退到本次 push 首个 commit 的父)"
+            elif has_commit "$(git rev-parse -q --verify "$HEAD_SHA^" 2>/dev/null || true)"; then
+              BASE_SHA="$(git rev-parse "$HEAD_SHA^")"
+              RANGE_NOTE=" (退到 HEAD 的父 —— 只审了最后一个 commit, 见本步开头设计 3)"
+            else
+              {
+                echo "::error::无法确定发布门的审计范围 (before=${GATE_BASE:-<空>}, push_first=${GATE_PUSH_FIRST:-<空>})"
+                echo "这是 fail-closed 的选择: 门宁可红一次, 也不静默放过 2fd067d 那种 20 文件不上机的改动。"
+                echo "确属正当 (仓库首提交 / 历史重建) 时, 在 commit message 里写 [release-gate-skip: 理由] 重推。"
+              } >&2
+              exit 1
+            fi
+          fi
+
+          echo "审计范围 $BASE_SHA..$HEAD_SHA$RANGE_NOTE"
+          echo "范围内的 commit:"
+          git log --oneline "$BASE_SHA..$HEAD_SHA" | sed 's/^/    /'
+
+          # ---- 2. 有没有动到"会上手机"的文件 --------------------------------------
+          # 前缀带结尾的 / : AndroidManifest.xml 与 res/ 也在 main/ 下, 它们同样上手机。
+          # app/src/test/** 不在门内 —— 测试代码不会进 APK。
+
+          CHANGED="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          SRC_HITS="$(printf '%s\n' "$CHANGED" | grep -c "^$SRC_PREFIX")"
+
+          if [ "$SRC_HITS" -eq 0 ]; then
+            echo "范围内没有任何 ${SRC_PREFIX}** 改动 —— 没有东西要上手机, 发布门通过。"
+            echo "通过原因: 无 android/app/src/main 改动 (backend / docs / app/src/test 不受本门约束)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          VC_BASE="$(version_code_at "$BASE_SHA")"
+          VC_HEAD="$(version_code_at "$HEAD_SHA")"
+          VM_HEAD="$(version_name_at "$HEAD_SHA")"
+          CL_ADD="$(git diff --numstat "$BASE_SHA" "$HEAD_SHA" -- "$CHANGELOG" | awk '{a += $1} END {print a + 0}')"
+
+          if [ -z "$VC_HEAD" ]; then
+            {
+              echo "::error::$HEAD_SHA 上读不出 versionCode ($GRADLE 被改坏或被移动了?)"
+              echo "本范围动了 $SRC_HITS 个 ${SRC_PREFIX}* 文件, 本门要求发布身份可解析。"
+            } >&2
+            exit 1
+          fi
+
+          echo "改动 ${SRC_PREFIX}* 文件数: $SRC_HITS"
+          echo "versionCode: '${VC_BASE:-<读不出>}' -> '$VC_HEAD'   versionName: '$VM_HEAD'   CHANGELOG 净增行: $CL_ADD"
+
+          BUMPED=0
+          [ "$VC_HEAD" -gt "${VC_BASE:-0}" ] && BUMPED=1
+          DOCUMENTED=0
+          [ "$CL_ADD" -gt 0 ] && DOCUMENTED=1
+
+          # ---- 3. path A: 本范围自己把发布身份改了 ----------------------------------
+
+          if [ "$BUMPED" -eq 1 ] && [ "$DOCUMENTED" -eq 1 ]; then
+            echo "通过: 同一范围内 versionCode $VC_BASE -> $VC_HEAD, 且 CHANGELOG.md 有新增内容。"
+            {
+              echo "通过原因: 范围内 bumps versionCode ($VC_BASE → $VC_HEAD) 且 CHANGELOG.md +$CL_ADD 行 ——"
+              echo "$SRC_HITS 个 ${SRC_PREFIX}* 改动会随 v$VM_HEAD (versionCode $VC_HEAD) 到达设备。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # ---- 4. path B: 同一列尚未发布的版本列车 (设计 2) -------------------------
+
+          TAG_SHA="$(git describe --tags --abbrev=0 "$HEAD_SHA" 2>/dev/null || true)"
+          TAG_CODE=0
+          if [ -n "$TAG_SHA" ]; then
+            TAG_CODE="$(version_code_at "$TAG_SHA")"
+            TAG_CODE="${TAG_CODE:-0}"
+          fi
+
+          NAME_PAT="$(printf '%s' "$VM_HEAD" | sed 's/\./\\./g')"
+          CL_HAS_HEADING=0
+          if [ -n "$VM_HEAD" ] &&
+            git show "$HEAD_SHA:$CHANGELOG" 2>/dev/null | grep -Eq "^## +v?${NAME_PAT}([^0-9.]|$)"; then
+            CL_HAS_HEADING=1
+          fi
+
+          if [ "$VC_HEAD" -gt "$TAG_CODE" ] && [ "$CL_HAS_HEADING" -eq 1 ]; then
+            {
+              echo "通过 (未发布的版本列车): v$VM_HEAD / versionCode $VC_HEAD 尚未发布"
+              echo "  (最近可达 tag ${TAG_SHA:-无} 的 versionCode = $TAG_CODE), 且 CHANGELOG.md 已有该版本章节。"
+              echo "  本门允许把后续源码改动并入同一版; tag 一落地, 下一批 $SRC_PREFIX* 改动就要重新 bump。"
+            }
+            {
+              echo "通过原因: 未发布列车 —— v$VM_HEAD (versionCode $VC_HEAD) 高于最近可达 tag ${TAG_SHA:-无} 的 $TAG_CODE,"
+              echo "  且 CHANGELOG.md 已有对应章节; 范围内 $SRC_HITS 个 ${SRC_PREFIX}* 改动未再 bump。"
+              echo "  待办: 下一次发版的 tag 必须覆盖到 $HEAD_SHA。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # ---- 5. 逃生口 ------------------------------------------------------------
+
+          SKIP_LINE="$(git log --format='%H%n%s%n%b' "$BASE_SHA..$HEAD_SHA" |
+            grep -Eio '\[release-gate-skip[^]]*\]' | head -n 1 || true)"
+          if printf '%s' "$SKIP_LINE" | grep -Eqi '\[release-gate-skip:[[:space:]]*[^][[:space:]]'; then
+            echo "::notice::发布门被 commit message 逃生口跳过 —— $SKIP_LINE"
+            echo "跳过是**人的判断**, 不是事实: 本范围内的 $SRC_HITS 个 ${SRC_PREFIX}* 改动仍不会改变可发布产物。"
+            {
+              echo "⚠ 发布门被逃生口跳过: [$SKIP_LINE]"
+              echo "范围内 $SRC_HITS 个 ${SRC_PREFIX}* 文件改动; versionCode=$VC_HEAD, CHANGELOG 净增 $CL_ADD 行。"
+              echo "请复核这个理由: 跳过之后, 这批改动是否仍会随某次发布真正到达设备。"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -n "$SKIP_LINE" ]; then
+            echo "::warning::发现 [release-gate-skip] 但冒号后面没有理由, 不生效。要求格式: [release-gate-skip: 为什么不需要新的发布身份]" >&2
+          fi
+
+          # ---- 6. 失败 --------------------------------------------------------------
+
+          REASONS=""
+          if [ "$BUMPED" -eq 0 ]; then
+            REASONS="$REASONS
+          - versionCode 没有在本范围内递增 ($GRADLE: ${VC_BASE:-读不出} -> $VC_HEAD)"
+          fi
+          if [ "$DOCUMENTED" -eq 0 ]; then
+            REASONS="$REASONS
+          - CHANGELOG.md 在本范围内没有新增内容"
+          fi
+          REASONS="$REASONS
+          - 而 v$VM_HEAD (versionCode $VC_HEAD) 也不是一列尚未发布的发布: 最近可达 tag ${TAG_SHA:-无} 已经发到 versionCode $TAG_CODE"
+
+          {
+            echo "::error::改了 ${SRC_PREFIX}** 却没改发布身份 —— 这些改动会到 main, 但到不了手机"
+            echo "本范围动到 ${SRC_PREFIX}* 的文件:"
+            printf '%s\n' "$CHANGED" | grep "^$SRC_PREFIX" | sed 's/^/    /'
+            echo "$REASONS"
+            echo
+            echo "为什么不放行: 2fd067d (hold-to-talk + 实时音量表, 20 个 ${SRC_PREFIX}* 文件) 就是这个形状。"
+            echo "  它 CI 全绿, 永久躺在 main 上; 而 OTA 通道那份 APK 仍是它祖先 v2.1.0 的树 —— 用户报的"
+            echo "  五个症状里有两个其实早修好了, 学员只是从来没拿到。见 CHANGELOG.md v2.2.0。"
+            echo
+            echo "怎么过 (三选一):"
+            echo "  ① 同一范围内 bump: $GRADLE 的 versionCode 严格 +1 (versionName 同步),"
+            echo "     并在 $CHANGELOG 写清这一版用户能感知到什么;"
+            echo "  ② 并入尚未发布的同一版 (path B): 需要 CHANGELOG.md 已有 v$VM_HEAD 章节, 且该 versionCode 还没打过 tag;"
+            echo "     不满足就回到 ① —— 别把两个版本号的改动塞进一次发布;"
+            echo "  ③ 确实不改变可发布产物 (只改注释/话术/内部重构): commit message 里写"
+            echo "     [release-gate-skip: <一句话理由>]。"
+          } >&2
+
+          {
+            echo "❌ 发布门失败: 范围内有 $SRC_HITS 个 ${SRC_PREFIX}* 改动, 没有对应的发布身份变化。"
+            echo "versionCode ${VC_BASE:-?} → $VC_HEAD · CHANGELOG 净增 $CL_ADD 行 · 最近可达 tag ${TAG_SHA:-无} (versionCode $TAG_CODE)。"
+            echo "要么 bump versionCode 并在 CHANGELOG.md 记录, 要么用 commit message 逃生口并写明理由。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+    # ---- 门失败时把原因写进 job 输出, 便于直接在 Actions 页面读到 ------------
+      - name: 失败提示 (仅在上一步红时执行)
+        if: failure()
+        run: |
+          echo "本仓 Android 发版纪律: 改了 android/app/src/main/** 就必须在同一事件范围内"
+          echo "versionCode 递增 + CHANGELOG.md 记录, 否则这些改动到不了学员手机。"
+          echo "完整缘由与解法见上面一步的日志与本文件顶部注释、docs/operations.md 第 3 节。"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -106,7 +378,9 @@ jobs:
   build-debug-apk:
     name: Build Debug APK
     runs-on: ubuntu-latest
-    needs: test
+    # release-gate 在这里并进依赖链: 一道只在日志里红的门, 和 docs/operations.md
+    # 里那条靠人记的 SOP 没有本质区别 —— 让门也挡住产物。
+    needs: [test, release-gate]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
