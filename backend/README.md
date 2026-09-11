@@ -31,9 +31,14 @@ uv run alembic upgrade head           # 应用迁移到最新（含 history 表�
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-- `--host 0.0.0.0` **必须**：让 Android 模拟器（`10.0.2.2`）和真机（局域网 IP）都能连上。只绑 `127.0.0.1` 的话 app 连不上。
+> **边界：本节与下面的验证/连机地址都只适用于本机开发机。** 服务器（生产机）上**禁止**裸跑
+> uvicorn——那台机器唯一的后端跑法是下方「生产部署」的发布栈容器；`deploy.sh` 的
+> `start-legacy`/`stop-legacy` 裸进程子命令已于 2026-09-11 退役删除（原因见
+> `docs/operations.md` §1），宿主 ps 里"像裸跑的 uvicorn"一律先按 §6.1 判别归属再动手。
+
+- `--host 0.0.0.0` 对**裸进程开发**是**必须**的：此时 uvicorn 直接绑宿主网卡，Android 模拟器（`10.0.2.2`）和真机（局域网 IP）才连得上；只绑 `127.0.0.1` 的话 app 连不上。（这与**容器内**的 `--host 0.0.0.0` 是两回事、别互换理由：容器有自己的网络命名空间，那儿绑 `0.0.0.0` 是 Docker 发布端口的硬要求，见 `docs/operations.md` §6.1。）
 - 看到 `Uvicorn running on http://0.0.0.0:8000` + `Application startup complete.` 即成功。
-- `--reload` 改 Python 文件自动重启（开发用）；生产去掉。
+- `--reload` 改 Python 文件自动重启（开发用）；这个 argv（`--reload` + `.venv` 解释器 + cwd 在仓库里）也正是它和生产容器进程在 `ps` 里的区分指纹。
 
 ### 4. 验证
 
@@ -48,8 +53,8 @@ curl http://localhost:8000/api/v1/health
 
 | 设备 | app 里的 Backend Base URL |
 |---|---|
-| 模拟器 | `http://10.0.2.2:8000/api/v1/`（APK 默认值，无需改） |
-| 真机 | `http://<电脑局域网IP>:8000/api/v1/`（在 app「设置」页改，手机与电脑同 WiFi） |
+| 模拟器 | `http://10.0.2.2:8000/api/v1/`（APK 默认值，无需改；dev 栈绑 `127.0.0.1` 也照样可达——`10.0.2.2` NAT 到宿主 loopback） |
+| 真机 | 取决于后端怎么起的：**开发机裸跑** `uv run uvicorn --host 0.0.0.0`（见上，仅限开发机）时，在 app「设置」页改成 `http://<电脑局域网IP>:8000/api/v1/`（手机与电脑同 WiFi）；走 **dev compose 栈**则不行——两个发布端口自 2026-09-11 收紧为 `127.0.0.1:`，局域网不可达，真机调试改用 SSH 隧道 / `adb reverse` 或直接用模拟器 |
 
 ### MiMo TTS + 讯飞 ISE（可选，配了走真实服务）
 
@@ -73,8 +78,10 @@ XUNFEI_API_SECRET=...
 ### 备选：Docker Compose 开发栈一键起（≠ 发布栈，见「生产部署」）
 
 ```bash
-docker compose up -d        # 起 postgres + api 容器
+docker compose up -d        # 起 postgres + api 容器（api 的 uvicorn 带 --reload，仅本机开发用；生产机不跑这个栈）
 # API: http://localhost:8000   Docs: http://localhost:8000/docs
+# 2026-09-11 起两个宿主端口都是 loopback-only 绑定（127.0.0.1:8000 / 127.0.0.1:5432）：
+# 模拟器可达（10.0.2.2 → 宿主 loopback），真机走局域网 IP 不可达（见上「Android 客户端连接」）。
 ```
 
 > 注意：`api` 服务会 `build .`（需 Dockerfile）。本地开发推荐用上面的 `uv run` 方式，更快、改代码即时生效。
@@ -115,12 +122,12 @@ bash scripts/publish_apk.sh v2.1.0   # static/apk 不在 git → OTA 直链这�
                                      # （非 118.89.58.84 机器带 PUBLISH_APK_BASE_URL=<公网地址>）
 ```
 
-- 主实例：**端口 5173**（`.env API_PORT` 可配；云防火墙当前唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。
+- 主实例：**端口 5173**（`.env API_PORT` 可配；云防火墙当前唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。注意这是**宿主**端口，映射到**容器内 8000**；宿主上的 8000 属开发栈（已收紧 `127.0.0.1:8000`），别对号。
 - 生产库：同栈 `postgres:16-alpine`（容器 `english-postgres-prod`，库 `english_prod_5173`，卷 `english-prod-pgdata`——**切换后严禁对本项目 `down -v`**）。**不发布宿主 5432**：宿主 127.0.0.1:5432 永远是开发栈；运维 psql/备份一律 `docker exec english-postgres-prod psql -U english ...`。
-- 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate|logs}`——底层全是 docker compose。语义要点：`start/restart`=`up -d --build`（restart 另加强制 recreate）。**compose 原生 restart 不重读 .env、不换镜像**——改 `.env`（publish_apk 写 APP_*）后只有 recreate 才生效，脚本已统一。`start-legacy`/`stop-legacy` 是旧"裸 uvicorn + `.deploy.env`"拓扑的回滚逃生口。
+- 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate|logs [n]}`——底层全是 docker compose。语义要点：`start/restart`=`up -d --build`（restart 另加强制 recreate）。**compose 原生 restart 不重读 .env、不换镜像**——改 `.env`（publish_apk 写 APP_*）后只有 recreate 才生效，脚本已统一。本项目**只有 compose 这一种跑法**：旧 `start-legacy`/`stop-legacy`（裸 uvicorn + `.deploy.env`）回滚逃生口已于 2026-09-11 退役删除——那条 DSN 指向 dev postgres 容器内的同名陈旧库（实测 1 user / 0 sessions / 0 history），"回滚"过去等于把生产切到空库。后端回滚改走源码：`git checkout v<上一版> -- backend/ && scripts/deploy.sh restart`（跨迁移边界的 alembic 坑先查 `docs/operations.md` §1）。`status` 会打印生产容器的宿主 PID（回答"ps 里那个 uvicorn 是谁"，勿据此杀进程）。
 - 环境变量优先级：`--build` 构建与容器 env 均以 `backend/.env` 为唯一事实源（deploy.sh 启动前自动剥离同名 shell export，见 operations.md §6 血案）。
-- 本台机器首次（裸进程→compose 一次性切换 + 迁库）：`scripts/cutover_to_compose.sh`（停服在前、权威 dump 在后、逐表对账；旧库容器保留冷备）。
-- 日志：`docker logs english-api-prod`（json-file 10m×5 轮转）；旧 `backend/logs/*.log` 仅 start-legacy 回滚时使用。
+- **（史实，勿再找这个脚本）** 本台机器 2026-09-07 做过一次"裸进程→compose 一次性切换 + 迁库"，当时用 `scripts/cutover_to_compose.sh`（停服在前、权威 dump 在后、逐表对账）。该脚本已于 2026-09-11 删除：它内含仓库里最后一处按模式杀 uvicorn 的 `pkill -f`，且其第一步（pg_dump 那个陈旧库）在库被 drop 后永不可能再成功。过程记录在 git 历史（`git log --all -- backend/scripts/cutover_to_compose.sh`）；当时产出的旧库备份 `backend/logs/pre-compose-cutover-20260907T111032Z.dump` **保留**，是其内容的唯一既存备份。
+- 日志：`docker logs english-api-prod`（json-file 10m×5 轮转）。legacy 时代的 `backend/logs/english-backend-5173.log` / `english-backend-8000.log` 已随该路径删除；清 `backend/logs/` 时**按精确文件名删，勿用 `logs/*` 通配**（上面那份 dump 就在里面）。
 - OTA/发版：见仓库根 README「发布通道」+ `docs/operations.md`（push tag → GitHub Release → `scripts/publish_apk.sh <tag>` 自托管直发）。
 
 ### App 自动更新
@@ -170,7 +177,7 @@ backend/
 ├── Dockerfile.prod            # 发布镜像（锁定依赖，entrypoint 自动迁移）
 ├── docker-compose.yml         # 开发栈（postgres + 热重载 api）
 ├── docker-compose.prod.yml    # 发布栈（项目名 english-prod，卷钉名隔离）
-├── scripts/                   # deploy/cutover/publish_apk + 容器 entrypoint
+├── scripts/                   # deploy/publish_apk + 容器 entrypoint
 └── ...
 ```
 

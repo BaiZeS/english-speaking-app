@@ -6,18 +6,19 @@
 
 | 项 | 值 |
 |---|---|
-| 生产 API | **docker compose 发布栈**：容器 `english-api-prod`（`backend/docker-compose.prod.yml`，宿主端口 `${API_PORT:-5173}`→容器 8000；release 包内置 `http://118.89.58.84:5173/api/v1/`）|
-| 生产库 | 栈内 `postgres:16-alpine`（容器 `english-postgres-prod`，卷 `english-prod-pgdata`，库 **`english_prod_5173`**；**不发布宿主端口**）。宿主 127.0.0.1:5432 = 开发栈 `english-postgres`（库 `english_dev` + 旧生产库冷备）——**运维 SQL/备份一律 `docker exec english-postgres-prod psql -U english ...`** |
+| 生产 API | **docker compose 发布栈**：容器 `english-api-prod`（`backend/docker-compose.prod.yml`，宿主端口 `${API_PORT:-5173}`→容器 8000；release 包内置 `http://118.89.58.84:5173/api/v1/`）。**容器内 8000 不是宿主端口**：宿主 8000 属开发栈（`docker-compose.yml`，现只绑 `127.0.0.1:8000`），与生产无关 |
+| 生产库 | 栈内 `postgres:16-alpine`（容器 `english-postgres-prod`，卷 `english-prod-pgdata`，库 **`english_prod_5173`**；**不发布宿主端口**）。宿主 127.0.0.1:5432 = 开发栈 `english-postgres`（库 `english_dev` + 旧生产库冷备）——**运维 SQL/备份一律 `docker exec english-postgres-prod psql -U english ...`**。**dev 栈发布端口自 2026-09-11 收紧为 loopback-only**（postgres `127.0.0.1:5432`、api `127.0.0.1:8000`，`docker compose config` 已核）：局域网/其它机器不再可达；Android 模拟器不受影响（debug 包指 `http://10.0.2.2:8000/api/v1/`，`10.0.2.2` NAT 到宿主 loopback，`android/app/build.gradle.kts:39`），**真机局域网调试 dev 栈因此失效**——改用 SSH 隧道/`adb reverse` 或模拟器（局域网直连如今仅剩"开发机上裸跑 `uv run uvicorn --host 0.0.0.0`"这一条路，仅限开发机，见 backend/README 连接表）|
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
-| 进程方式 | `docker compose up -d` + `restart: unless-stopped`（随 docker daemon 自动拉起——裸进程时代没有的增益）；由 `backend/scripts/deploy.sh` 统一管理（每条 compose 命令前自动剥离与 .env 同名的陈旧环境变量，.env 唯一事实源）。回滚逃生口 `deploy.sh start-legacy` = 旧裸 uvicorn 拓扑（nohup + `</dev/null` + disown，**勿用 setsid**——本盒杀手实证，依赖保留的 `.deploy.env`）；日志 `docker logs english-api-prod`（json-file 10m×5），旧 `backend/logs/*.log` 仅 legacy 回滚时使用 |
-| 密钥 | 均在 `backend/.env`（gitignored，不入 git；发布栈的 `DATABASE_URL` 由 compose 服务名自动派生，`.deploy.env` 仅为 `start-legacy` 回滚保留）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填；**09-08 已真火冒烟过门**（`/api/v1/score` 17s 音频 3.3s 返回 `source=xunfei` 55 词真分 + 括号脏参考回归通过 + IAT 转写通过，容器日志 `xunfei ise ok`；app 端语音轮=待用户真机复确认，观察 `mission turn perf`）|
+| 进程方式 | **只有 docker compose 这一种跑法**。`docker compose up -d` + `restart: unless-stopped`（随 docker daemon 自动拉起——裸进程时代没有的增益）；由 `backend/scripts/deploy.sh` 统一管理（每条 compose 命令前自动剥离与 .env 同名的陈旧环境变量，.env 唯一事实源）；`start`/`restart` 都是 `up -d --build`（restart 另加 `--force-recreate`）——改 `.env` 后必须 recreate，compose 原生 restart 不重读 env_file、不换镜像；日志 `docker logs english-api-prod`（json-file 10m×5）。**回滚口径 = 源码回滚**：`git checkout v<上一版> -- backend/ && backend/scripts/deploy.sh restart`（走 compose、用**真**生产库）。⚠️ 跨迁移边界会失败：`scripts/docker-entrypoint.sh` 每次启动都跑 `alembic upgrade head`，库已在更新的 revision 上而旧代码的 `backend/app/db/migrations/versions/` 不认识它 → `Can't locate revision identified by …`。回滚前先 `git diff --name-only v<上一版>..HEAD -- backend/app/db/migrations/`，非空就必须先定 downgrade 方案（`v2.1.0..v2.2.0` 已核实未改任何迁移文件，故 2.2.0→2.1.0 安全）。已知缺口：`RELEASE_TAG` 没有任何脚本会设置 → 镜像恒为 `english-assistant-api:local`、每次 rebuild 覆盖，**今天没有基于镜像的后端回滚**。（旧 `deploy.sh start-legacy`/`stop-legacy` 裸进程逃生口已于 2026-09-11 退役删除——它依赖的 `.deploy.env` 指向 dev postgres 容器内的同名陈旧库，实测 1 user / 0 sessions / 0 history，"回滚"过去等于把生产切到空库；理由与过程见 CHANGELOG 同日条目与 §6.1。） |
+| 密钥 | 均在 `backend/.env`（gitignored，不入 git；发布栈的 `DATABASE_URL` 由 compose 服务名自动派生）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填；**09-08 已真火冒烟过门**（`/api/v1/score` 17s 音频 3.3s 返回 `source=xunfei` 55 词真分 + 括号脏参考回归通过 + IAT 转写通过，容器日志 `xunfei ise ok`；app 端语音轮=待用户真机复确认，观察 `mission turn perf`）|
 | OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存。**两目录 bind 进发布容器**（`/app/static/*`），宿主路径即唯一实体——host 侧 publish_apk.sh 写完 + `deploy.sh restart`（recreate）即生效；新机器该目录空，OTA 需跑 publish_apk.sh 补种 |
 
 ## 2. 日常操作
 
 ```bash
 S=backend/scripts/deploy.sh   # 仓库根目录下（底层 = docker compose -f docker-compose.prod.yml）
-bash $S status     # 栈容器状态 + :5173 health
+# 子命令全集: {start|stop|restart|status|migrate|logs [n]}——legacy 裸进程子命令已退役删除，见 §1/§6.1
+bash $S status     # 栈容器状态 + :5173 health + **生产容器的宿主 PID**（正面回答"ps 里那个 uvicorn 是谁"，勿据此杀进程，见 §6.1）
 bash $S start      # up -d --build（拉新代码/新配置，含 migrate 语义——entrypoint 自动跑）
 bash $S restart    # up -d --build --force-recreate api。**改 .env 后必用它**：
                    #   compose 原生 restart 不重读 env_file、不换镜像（静默失效陷阱）
@@ -200,7 +201,7 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 - **sqlite 只支持新链**（≥c9a1 两向）；整链 `d5ccd…` 含 `edb6eb8d27a1` drop-constraint 需 batch，PG16 跑整链无碍——CI/生产都是 PG。
 - `lintDebug` 本地≠CI（主干净也报 `MissingPermission` 2 处，CI check-run 全绿）——只以 ktlint.sh/gradle test/assembleDebug + 远端 CI 为准；ktlint 通过 ≠ 可编译（它不查类型）。
 - JUnit4 无 float 重载/assertThrows（用 Double+delta、runCatching+fail）。
-- 本盒工具超时与进程杀手：长跑任务一律 `nohup ... </dev/null & disown`；`pkill -f` 一律 `zcode[-]cli`/`uvicorn.*` 方括号自匹配免疫写法。
+- 本盒工具超时与进程杀手：长跑任务一律 `nohup ... </dev/null & disown`（勿用 setsid——本盒杀手实证）。`pkill -f` 的方括号自匹配免疫写法（如 `zcode[-]cli`）今后**只适用于非 uvicorn 模式**：**本项目已不存在任何按模式杀 uvicorn 的合法场景**——生产 API 本身就是容器里的 uvicorn，`pkill -f uvicorn.*` 在非 root 下只是被 EPERM 静默挡掉（容器进程 root 所有），而这台机器带免密 sudo，sudo 一穿就是直接打死生产；`fuser -k <宿主端口>/tcp` 也碰不到它——容器进程不持宿主监听（宿主 5173 的监听在 docker-proxy 上）。要停 API 只有 `bash backend/scripts/deploy.sh stop` 或 `docker stop english-api-prod`；宿主 ps 里看到"像是裸跑的 uvicorn"先按 §6.1 判别归属。
 - GitHub 直链测速：本盒→`release-assets.githubusercontent.com` 11-40KB/s，手机只会更差——OTA 永远走自托管；大文件拉取给 20-30min 耐心或 `--continue-at -` 续传。
 - Room 版本冻结：新表只建在 `EnglishContentDatabase`（v1 独立 DB），`AppDatabase` 保持 v3——删旧实体不 bump 会在 v2.6 老装上炸（已在 P8 用冻壳规避）；升级 Room ≥2.7 前不要动 HistoryCacheEntity 壳。
 - LLM 额度与降级：**全课生成 5-10min 仍属预期**（202 + 轮询的后台作业，`GEN_TIMEOUT_S=240s`/段，不受 30s 契约约束）；但「**判级 6-60s / 润色 6-60s 属预期**」这句**自 v2.2.0 起作废** —— 判级现在 20s 封顶（超时=诚实空态）、润色 10s 封顶（超时=`polish=null` + 一句「未做润色」）、文本步判分 20s 封顶、总评文案改由 45s 的后台作业慢慢写（请求本身亚秒级返回 202）。同步路径的时延一律按 §5.5 那张表算，不再用"6-60s 属预期"糊过去。偶发超时全部按设计诚实降级（不卡流程、不 500）。换 key/换模型后必做：`/llm/models` 若返回空列表 = 新模型不在代码内置目录且 `LLM_EXTRA_MODELS_JSON` 未填——判分不受影响（恒用 `LLM_DEFAULT_MODEL`），但客户端下拉框会空。
@@ -219,8 +220,27 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 - **宿主 5432 上也有一个同名 `english_prod_5173`**（切换前的冻结冷备）：直连 127.0.0.1:5432 查/改会命中过时副本毫无察觉。一切生产 DB 操作钉死 `docker exec english-postgres-prod ...`。
 - **`POSTGRES_PASSWORD` 只在数据卷首次初始化生效**：改 `.env` + restart 不改库口令。轮换 = 容器内 `ALTER USER` + 改 `.env` 两步（少一步 = 应用连不上或假象生效）。
 - **`down -v` 禁区**：`english-prod-pgdata` = 唯一生产数据卷。`compose down` 安全（数据留存），`down -v` 删库；仅允许在切换前的金丝雀阶段用 -v 清测试卷。
-- **`/docs`、`/redoc` 随 `ENV=production` 关闭**（`/openapi.json` 仍在）；接口契约以 CI 与 openapi 为准。回退 start-legacy 时宿主 `.env` 若仍 development 会重新暴露——注意环境差异别误判"功能回归"。
+- **`/docs`、`/redoc` 随 `ENV=production` 关闭**（`/openapi.json` 仍在）；接口契约以 CI 与 openapi 为准。本机若以 `ENV=development` 跑（dev 栈或开发机裸跑）会看得到 /docs——那是环境差异，不是"生产功能回归"。
 - **开发/发布共用一份 `backend/.env`**：release 栈把它当进程 env 全表注入。翻 `ENV=production` 会同时关掉本机裸开发实例的 /docs、改 `LLM_DEFAULT_MODEL` 两边同时生效——本机已以生产为先，开发临时用 `docker compose -f docker-compose.yml up` 或当场覆盖。
+
+### 6.1 进程归属判别（宿主 `ps` 里那个 uvicorn 到底是谁）
+
+生产 API 在宿主视角**长得就像一个滞留的裸进程**：`root /usr/local/bin/python3.11 /usr/local/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000`，cwd `/app`，而**宿主没有任何对应监听**（宿主 5173 的监听在 docker-proxy 上，容器有自己的网络命名空间）。不认识这个形状，就会把它误判成"僵尸裸进程"而动杀心——项目记忆里那条误判（见下方史案）正是这个形状造成的，也因此才会有 `deploy.sh status` 现在打印的归属行。三种 uvicorn 的指纹对照：
+
+| | 生产容器 | dev 容器 | 旧裸进程（**已退役**，2026-09-11） |
+|---|---|---|---|
+| 解释器 | `/usr/local/bin/python3.11` | `/usr/local/bin/python3.11` | `<repo>/backend/.venv/bin/python` |
+| argv | `uvicorn app.main:app --host 0.0.0.0 --port 8000` | 同上 **+ `--reload`** | `uvicorn app.main:app --host 0.0.0.0 --port 5173` |
+| cwd | `/app` | `/app` | `<repo>/backend` |
+| 宿主监听 | 无（docker-proxy 持 5173） | 无（docker-proxy 持 127.0.0.1:8000） | 曾持有 5173 |
+| 权威判据 | `docker top english-api-prod` | `docker top english-api` | 没了 |
+
+- **权威归属判别只有正道**：`docker top <容器>`；或 `docker inspect -f '{{.State.Pid}}' <容器>` 取宿主 PID，再与 `/proc/<pid>/cgroup`（应见 `docker-<id>.scope`）和父进程（`containerd-shim-runc-v2`）双证。`deploy.sh status` 现在直接打印生产容器的宿主 PID 并附"勿 kill/pkill/fuser"提示，就是为了不让人靠肉眼猜。
+- **杀得动它的向量**只有两条：容器进程 **root 所有**，非 root 用户连 `kill -0` 都得 **EPERM**——所以普通 `pkill -f uvicorn` 杀不掉生产，但那是**静默无效**而非安全，这台机器有**免密 sudo**（`sudo pkill -f` 成立），且操作者在 **docker 组**（`docker stop english-api-prod` 可行）。
+- **史案（对号入座用）**：PID 2117 曾被项目记忆记为「root 僵尸 uvicorn app:app，无监听，杀不动」。实测**那不是本项目的**：它的宿主 PID 与 `docker inspect -f '{{.State.Pid}}' bill-recognition-bill-recognition-1` 完全一致，cgroup 与该容器的 containerd-shim（PPID 2024）吻合，State 是 `S`（睡眠、10 线程）**不是 Z**——它是**另一个项目（bill-recognition）健康的容器 init 进程**，`app:app` 与 `--port 8000` 是那个项目自己的模块路径与容器内端口。杀它 = 打掉别的项目。"杀不动"恰恰是它是别的容器 init 的信号，不是该强杀的理由。
+- **别"顺手加固"容器内的 `--host 0.0.0.0`——它是必须的**：Docker 发布端口靠 DNAT 把包送到容器 **eth0 地址**，永远不会是它的 loopback。把 uvicorn 改绑 `127.0.0.1` 会让宿主 `${API_PORT:-5173}` 直接不可达，而容器内的 `HEALTHCHECK curl localhost:8000`（`backend/Dockerfile.prod:38`）**照样通过**——`docker ps` 显示 healthy、`deploy.sh start --wait` 也过，只有从宿主 curl 才发现挂了：**假绿陷阱**。（注意这与 `backend/README.md` 裸机开发里"`0.0.0.0` 必须"是两条不同的理由：裸进程绑 `0.0.0.0` 是为了模拟器/真机可达，那是宿主网络栈上的真监听。）
+- 端口对号：容器内 8000 **不是**宿主端口；宿主 8000 属 dev 栈且已收紧 `127.0.0.1:8000`（Android debug 包内置 `http://10.0.2.2:8000/api/v1/`，`10.0.2.2` NAT 到宿主 loopback，模拟器照常）；生产发布的是宿主 `${API_PORT:-5173}` → 容器 8000（`docker-compose.prod.yml:46`），`0.0.0.0` 绑定是刻意的（公开契约，烧进 release 包），云防火墙仅映射 TCP 5173/80/8080。
+
 
 ## 7. 文档索引
 

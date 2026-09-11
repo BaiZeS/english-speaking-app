@@ -67,6 +67,11 @@ uv run alembic upgrade head            # 跑数据库迁移
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 > `--host 0.0.0.0` 必须加，模拟器（`10.0.2.2`）/ 真机（局域网 IP）才能连上。
+> **仅限本机开发机**：这样的裸 uvicorn 不要在服务器（生产机）上跑——那台机器唯一的后端跑法是
+> 发布栈容器（见下与 `docs/operations.md` §1；`deploy.sh` 的 legacy 裸进程子命令已于 2026-09-11
+> 退役），宿主 `ps` 里"看起来像裸跑的 uvicorn"先按 §6.1 判别归属再动手。
+> 另注意 dev compose 栈的宿主 8000/5432 已收紧为 `127.0.0.1:` 绑定，真机局域网直连只在
+> 这条裸跑路上可用（见 backend/README）。
 > MiMo TTS + 讯飞 ISE 已接入：配 `.env` 凭据后走真实合成 + 逐词评分；未配则自动 fallback 到 stub，仍可跑通跟读闭环。
 >
 > **发布版（任意服务器一键起）**：`cd backend && cp .env.example .env`（填口令/密钥）
@@ -99,6 +104,9 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
   起停/迁移/日志见 `backend/scripts/deploy.sh`）。v2.1.0 起 release 包内置 URL
   即指 :5173，真机开箱即用。
   `:8000` 桥接已停止（云防火墙未映射公网，旧包外网不可达、也无必要）——
+  （史实备查：当年真正绑宿主 8000 的是裸进程实例；今天的宿主 8000 只属 dev 栈的
+  `127.0.0.1` 发布口，与公网、与生产容器都无关——证据与来龙去脉见 CHANGELOG 2026-09-11
+  「运维拓扑收敛」条与 docs/operations.md §6.1。）
   旧包（≤2.0.0，内置 :8000）过渡 = 从 GitHub Release 直链手动安装 v2.1.0
   一次，此后其自身经 :5173 全自动 OTA：
   `https://github.com/BaiZeS/english-speaking-app/releases/download/v2.1.0/EnglishAssistant-2.1.0.apk`
@@ -107,7 +115,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - 仓库里的 `apk/` 目录只是本机临时副本位（`*.apk` 已 gitignore、**无提交内容**），
   不是下载入口。
 
-装机后：**开发机自测**用 debug 包（内置 `http://10.0.2.2:8000/api/v1/`，模拟器）或真机「设置」页改成开发机局域网 IP；**生产设备**装 release 包（v2.1.0 起内置 `http://118.89.58.84:5173/api/v1/`，开箱即用）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分（未配凭据时返回带 `source=stub` 的占位分并在界面警示）。
+装机后：**开发机自测**用 debug 包（内置 `http://10.0.2.2:8000/api/v1/`，模拟器）或真机「设置」页改成开发机局域网 IP（**仅限本机自测**：局域网这条路只在开发机裸跑 `uv run uvicorn --host 0.0.0.0` 时存在，dev compose 栈的 8000 已只绑 `127.0.0.1`，真机改走 SSH 隧道/`adb reverse` 或用模拟器，见 backend/README）；**生产设备**装 release 包（v2.1.0 起内置 `http://118.89.58.84:5173/api/v1/`，开箱即用）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分（未配凭据时返回带 `source=stub` 的占位分并在界面警示）。
 
 ## 文档
 
