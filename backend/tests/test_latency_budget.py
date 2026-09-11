@@ -21,6 +21,12 @@ LLM **慢过预算**, 再断言两件事:
 外加两条静态锁: ``max_retries`` 必须为 0 (否则任何 ``timeout=`` 都不是真实上限),
 以及**新增**的 ``_judge`` 调用点不写预算就直接红 (AST 扫全 ``app/``, 后台作业模块
 ``course_generator`` 显式豁免 —— 它是 202 + 轮询, 30s 对它不成立)。
+
+§P6 之后本文件还多钉一件事: 收工路径**只许**在请求里算纯算术的数值骨架, 总评文案移出
+请求 → 于是总评有**两个**预算 (同步组合 20s / 后台作业 45s), 各自的调用点点名各自的常量,
+求和表里 "finish-mission" 只剩 DB 往返 (:func:`test_no_endpoint_waits_on_the_review_llm_any_more`
++ :func:`test_review_budgets_split_sync_composition_from_background_job`)。作业自身的终态
+与降级见 ``tests/test_review_async.py``。
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from typing import Any, ClassVar
 import pytest
 from httpx import AsyncClient
 
+from app.api.v1 import course_sessions as cs
 from app.config import settings
 from app.models.course import FoundationStep, SceneCourse
 from app.services import assessment_engine as ae
@@ -339,7 +346,13 @@ async def test_graded_text_step_degrades_within_budget(
 async def test_build_review_report_degrades_to_deterministic_copy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """总评 (``POST /sessions/{id}/finish-mission``) —— 学员报的那条: 必须在预算内出报告。
+    """**同步组合** ``build_review_report`` 必须在预算内出报告 (脚本/测试的入口).
+
+    §P6 之后端点不再走它: ``POST /sessions/{id}/finish-mission`` 只在请求里算数值骨架,
+    文案改由后台作业补 —— 那两条路径 (202 的即时可读骨架、作业自己的 ``REVIEW_COPY_JOB_BUDGET_S``
+    封顶与终态) 在 ``tests/test_review_async.py`` 里钉。本用例仍守着同步组合: 它是
+    ``REVIEW_LLM_BUDGET_S`` (20s) 的唯一使用者, 也就是"如果哪天有人把它塞回请求里"时
+    那堵 30s 墙的实际内容。
 
     断的不是"降级对不对" (既有行为, 生产日志已证它可用), 而是**多快**降级: 修复前
     ~68s, 而手机的 socket 在 30s 就死了, 于是报告落库了学员却永远看不到。
@@ -475,20 +488,22 @@ def test_background_generation_is_still_explicitly_unbounded() -> None:
 
 def test_handler_still_passes_the_mission_turn_budget() -> None:
     """``LLM_TURN_BUDGET_S`` 必须仍然真的传进 ``judge_turn``; 漏传 = 该路径重新裸奔。"""
-    from app.api.v1 import course_sessions
-
-    assert "hard_timeout_s=LLM_TURN_BUDGET_S" in Path(course_sessions.__file__).read_text(
-        encoding="utf-8"
-    )
+    assert "hard_timeout_s=LLM_TURN_BUDGET_S" in Path(cs.__file__).read_text(encoding="utf-8")
 
 
 def test_budgets_are_named_constants_at_the_call_sites() -> None:
-    """四个调用点必须引用常量名 (求和测试才读得到), 不许就地写字面量。"""
+    """调用点必须引用常量名 (求和测试才读得到), 不许就地写字面量。
+
+    第 5 项是 §P6 新加的**后台作业**: 它跟四个同步路径共用同一个 :func:`_judge` 预算接缝,
+    但报的是另一个数 (``REVIEW_COPY_JOB_BUDGET_S``) —— 两个预算各自对应各自的墙, 所以
+    两个调用点都得点名, 谁也不许顺手拿对方的常量。
+    """
     for fn, name in (
         (dg._graded_text_step, "STEP_LLM_BUDGET_S"),
         (me.build_review_report, "REVIEW_LLM_BUDGET_S"),
         (me.polish_text, "POLISH_BUDGET_S"),
         (ae.judge_level, "ASSESSMENT_JUDGE_BUDGET_S"),
+        (cs._run_review_copy_job, "REVIEW_COPY_JOB_BUDGET_S"),
     ):
         assert f"hard_budget_s={name}" in inspect.getsource(fn), (
             f"{fn.__name__} 应把硬预算写成 {name} (见 drill_grader 的硬预算块)"
@@ -499,11 +514,9 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
     """契约求和: 同请求内 ``其它 await + budget + 5s 余量 <= 30s``。
 
     "其它 await" 取该请求里**已封顶**的部分 (语音轮读 ``course_sessions`` 的
-    ``*_TURN_BUDGET_S``; DB/序列化算进余量)。求和**只许变小**: 已知装不下的两条
-    列在 ``OVER_BUDGET`` 并给了 ceiling 与归属, 涨上去就红。
+    ``*_TURN_BUDGET_S``; DB/序列化算进余量)。求和**只许变小**: 已知装不下的那条
+    列在 ``over_budget`` 并给了 ceiling 与归属, 涨上去就红。
     """
-    from app.api.v1 import course_sessions as cs
-
     # 音频步的 IAT 只有服务层自己的 8s + ws open_timeout 5s (调用点没包预算)。
     iat_service_worst_s = float(settings.xunfei_iat_timeout_s) + 5.0
     mission_turn_s = cs.IAT_TURN_BUDGET_S + max(cs.ISE_TURN_BUDGET_S, cs.LLM_TURN_BUDGET_S)
@@ -512,7 +525,11 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
         "step (文本回答)": dg.STEP_LLM_BUDGET_S,
         "step (read_along: 只有 ISE)": float(settings.xunfei_ise_timeout_s),
         "mission 单轮": mission_turn_s,
-        "finish-mission": dg.REVIEW_LLM_BUDGET_S,
+        # §P6: 收工与"到轮次上限自动收工"都**不再同步等总评文案** —— 请求里只剩
+        # DB/聚合, 文案交给后台作业。自动收工因此从下面的 over_budget 搬回这里:
+        # 它的最坏时长就是那一轮本身的 mission_turn_s, 不再叠加一次总评 LLM。
+        "finish-mission (202, 只有 DB/聚合)": 0.0,
+        "mission 到轮次上限自动收工 (总评已异步)": mission_turn_s,
         "polish": dg.POLISH_BUDGET_S,
         "assessment/complete": dg.ASSESSMENT_JUDGE_BUDGET_S,
     }
@@ -522,16 +539,14 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
             f"{CLIENT_READ_TIMEOUT_S:.0f}s readTimeout"
         )
 
-    # 已记录在案、本次**不**修的两条 (缘由见 drill_grader 硬预算块的 (*) 与 (**))。
+    # 已记录在案、本次**不**修的一条 (缘由见 drill_grader 硬预算块的 (*)).
     over_budget: dict[str, tuple[float, float]] = {
-        # IAT 挂死的角落才吃穿余量 (常规 <=8s 时是 28s); P6 之后一起收掉。
+        # IAT 挂死的角落才吃穿余量 (常规 <=8s 时是 28s)。这是讯飞侧的调用点没包预算,
+        # 不是 LLM 预算问题, 修法见 drill_grader 硬预算块的那一行注记。
         "step (音频作答: IAT 未包调用点预算)": (iat_service_worst_s + dg.STEP_LLM_BUDGET_S, 33.0),
-        # 结构性装不进 30s: 那一轮已花掉 mission_turn_s, 再挂一次总评 -> §P6 异步化。
-        "mission 到轮次上限自动收工": (mission_turn_s + dg.REVIEW_LLM_BUDGET_S, 43.0),
     }
     assert set(over_budget) == {
         "step (音频作答: IAT 未包调用点预算)",
-        "mission 到轮次上限自动收工",
     }, "同步路径的'装不下'名单变了: 收紧预算或走异步, 别默默多一条超时路径"
     for name, (worst, ceiling) in over_budget.items():
         assert worst <= ceiling + 1e-6, (
@@ -540,17 +555,45 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
         )
 
 
-def test_review_budget_keeps_the_sync_handler_inside_the_socket() -> None:
-    """``REVIEW_LLM_BUDGET_S`` 单独钉一次: 它是学员报的那条, 也最容易被"放宽"。
+def test_review_budgets_split_sync_composition_from_background_job() -> None:
+    """§P6 之后总评有**两个**预算, 各管一件事, 谁也不能替谁背书。
 
-    计划 §P5 建议 45s —— 那只在未来 (§P6) 总评改由后台作业时成立。今天它仍在同步
-    handler 里, 45 > 30 会把学员报告的超时原样留下。所以本用例是"P6 未完成"的
-    看门狗: 做 §P6 时给后台作业另开一个更大的预算并同步改这里, 而不是把这个值抬到
-    45s 却让 finish-mission 继续同步返回。
+    历史: 计划 §P5 曾建议把总评预算直接放到 45s —— 那只在"文案已经不在请求里"时
+    成立。当时 ``finish-mission`` 还是同步的, 45 > 30 会把学员报的超时原样留下, 所以
+    P5 把它压在 20s 并留了看门狗。P6 真的把文案搬进后台作业之后, 看门狗要盯的东西
+    变了, 于是本用例取代它:
+
+    * ``REVIEW_LLM_BUDGET_S`` (20s) 仍必须装得进 socket —— 它现在是**同步组合**
+      ``build_review_report`` 的预算, 那个入口给脚本/测试用, 端点已不再走它;
+    * ``REVIEW_COPY_JOB_BUDGET_S`` (45s) **故意**大于 socket 超时: 后台作业没有人在
+      等它, 它的墙不是用来给 30s 交差的, 而是保证一条挂死的 LLM 不会把会话永远留在
+      ``generating``。所以它必须存在、必须比同步预算大, 且必须真的被作业用上。
     """
     assert dg.REVIEW_LLM_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
     # 单次尝试的 socket 超时也必须单独装得进 30s: max_retries=0 之后它才是真上限。
     assert dg.LLM_TIMEOUT_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    assert dg.REVIEW_COPY_JOB_BUDGET_S > dg.REVIEW_LLM_BUDGET_S, (
+        "后台作业的预算若不比同步组合大, 异步化就没换来任何东西 —— 文案还是会在原来的时间内被砍掉"
+    )
+    # 重派水位必须真的给作业留够跑完的时间, 否则 GET 会在作业还在写时就再派一个。
+    assert cs.REVIEW_REDISPATCH_AFTER_S >= dg.REVIEW_COPY_JOB_BUDGET_S
+
+
+def test_no_endpoint_waits_on_the_review_llm_any_more() -> None:
+    """机器检查: 收工路径里不许再出现"同步等总评文案"的调用。
+
+    这是防止 R2 复发的看门狗 —— 本次事故的形状就是"某个端点里挂了一次没人封顶的
+    LLM 调用"。端点只许调纯算术的 ``build_review_skeleton``; 会调 LLM 的
+    ``build_review_report`` 只能出现在后台作业之外的脚本/测试入口。
+    """
+    src = Path(cs.__file__).read_text(encoding="utf-8")
+    assert "build_review_skeleton(" in src, "收工路径应改用数值骨架"
+    assert "build_review_report(" not in src, (
+        "端点里又出现同步的 build_review_report —— 那会把总评 LLM 拉回请求里, "
+        "学员报的 30s 超时原样复发"
+    )
+    # 文案只允许在后台作业里取, 且必须显式报作业预算。
+    assert "hard_budget_s=REVIEW_COPY_JOB_BUDGET_S" in src
 
 
 def _direct_chat_call_sites() -> list[tuple[str, int, bool]]:
