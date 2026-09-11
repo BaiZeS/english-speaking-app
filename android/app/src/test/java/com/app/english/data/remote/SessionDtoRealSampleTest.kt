@@ -4,6 +4,7 @@ import com.app.english.domain.model.ReviewReportData
 import com.app.english.ui.scenes.taskProgressLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -188,6 +189,42 @@ class SessionDtoRealSampleTest {
         assertEquals(1, report.transcriptPairs.size)
         assertEquals("换成大杯用 change ... to a large。", report.transcriptPairs[0].explanationCn)
         assertFalse(report.cleared)
+    }
+
+    /**
+     * `step.last_grade` 曾被映射层悄悄丢掉: DTO 解得出来、`BriefingStepState` 没有这个
+     * 字段, 于是重进/崩溃恢复后每一步的反馈(逐词分、转写、建议)全部消失, 只剩一个数。
+     * 后端 `_apply_step_grade` 是**特意**逐步存整份评分的, 这里锁住它确实到手。
+     */
+    @Test
+    fun briefingStepCarriesItsPersistedWholeGrade() {
+        val payload = """
+            {"total":2,"done":0,"passed":0,"skipped":0,"skips_used":0,
+             "skip_limit":2,"skips_remaining":2,"next_step_id":"f1",
+             "unlocked_mission":false,
+             "steps":[{"id":"f1","index":0,"type":"read_along","status":"pending",
+               "attempts":1,"best_score":48.0,"last_score":48.0,"last_source":"xunfei",
+               "last_grade":{"step_id":"f1","step_type":"read_along","score":48.0,
+                 "passed":false,"pass_score":60.0,"feedback_cn":"morning 的尾音收住了。",
+                 "pronunciation":45.0,"fluency":52.0,"completeness":null,
+                 "grammar":null,"vocabulary":null,
+                 "transcript":"Good morning everyone",
+                 "word_details":[{"word":"good","score":88.0,"ipa":"/ɡʊd/"},
+                   {"word":"morning","score":31.0,"ipa":"/ˈmɔːnɪŋ/"}],
+                 "key_points_hit":[],"mistakes":[],"speech_rate_wpm":96.0,
+                 "ise_ref_mode":"read_along","source":"xunfei","llm_source":null}}]}
+        """.trimIndent()
+        val progress = json.decodeFromString<BriefingProgressDto>(payload).toDomain()
+        val grade = progress.steps.first().lastGrade
+        assertNotNull(grade)
+        assertEquals(48.0, grade!!.score, 0.01)
+        assertFalse(grade.passed)
+        assertEquals("Good morning everyone", grade.transcript)
+        assertEquals(2, grade.wordDetails.size)
+        assertEquals("/ˈmɔːnɪŋ/", grade.wordDetails[1].ipa)
+        // null 维度保持 null: "这一轮没测到"不是 0 分, 界面据此跳过不画。
+        assertNull(grade.completeness)
+        assertTrue(grade.isRealEvidence)
     }
 
     @Test
