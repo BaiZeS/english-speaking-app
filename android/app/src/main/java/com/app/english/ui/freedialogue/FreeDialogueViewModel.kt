@@ -106,6 +106,8 @@ class FreeDialogueViewModel @Inject constructor(
     val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
 
     init {
+        // 同 PlayerViewModel: 这一局的评分面从零开始, 上一局的残档不能跨局复用(E5)。
+        scoreSessionHolder.clear()
         loadScenes()
     }
 

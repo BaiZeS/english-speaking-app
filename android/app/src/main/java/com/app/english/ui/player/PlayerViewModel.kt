@@ -160,6 +160,9 @@ class PlayerViewModel @Inject constructor(
     private var shadowDurationMs = emptyList<Long>()
 
     init {
+        // 新的一局练习开始: 先把上一局留在磁盘上的成绩擦掉(E5)。不清的话, 这一局万一
+        // 在成绩页之前就被杀掉, 而导航又回到成绩页, 学员看到的会是**上一课**的总分。
+        scoreSessionHolder.clear()
         loadLesson()
     }
 
