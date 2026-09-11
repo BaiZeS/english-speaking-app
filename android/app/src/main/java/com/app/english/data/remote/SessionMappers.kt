@@ -22,6 +22,7 @@ import com.app.english.domain.model.ScriptExchange
 import com.app.english.domain.model.SessionSnapshot
 import com.app.english.domain.model.TaskChip
 import com.app.english.domain.model.VocabCard
+import com.app.english.domain.model.WordScore
 
 /**
  * 会话状态机 / 生成任务 / 表达库的 DTO -> 领域模型映射(计划 §6.5)。
@@ -182,7 +183,10 @@ fun MissionTurnResponseDto.toDomain(): MissionTurnResult = MissionTurnResult(
         suggestion = suggestion,
         polish = polish?.toDomain(),
         newlyDone = newlyDone.map { NewlyDoneTask(it.id, it.evidence) },
-        costsScore = costsScore
+        costsScore = costsScore,
+        subScores = subScores,
+        wordDetails = wordDetails.map { WordScore(it.word, it.score, it.ipa) },
+        speechRateWpm = speechRateWpm
     ),
     checklist = checklist.map { it.toDomain() },
     cleared = cleared,

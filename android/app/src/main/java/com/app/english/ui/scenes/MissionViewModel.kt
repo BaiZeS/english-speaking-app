@@ -40,11 +40,18 @@ sealed interface MissionBubble {
     /** AI 台词(点击播 TTS)。 */
     data class Ai(val text: String, override val turnIndex: Int) : MissionBubble
 
-    /** 用户台词; 无转写时诚实显示占位(不再编造字面量)。 */
+    /**
+     * 用户台词; 无转写时诚实显示占位(不再编造字面量)。
+     *
+     * [speech] 是这一轮的发音读数(维度分/语速/没读准的词)。语音轮才有, 纯文本轮为
+     * null —— **恢复快照里没有逐轮评分**(mission.turns 只存转写与润色), 所以重进实战页
+     * 时旧的轮次不再挂条: 这不是客户端丢数据, 是服务端还没把它们存下来。
+     */
     data class User(
         val text: String,
         val hasTranscript: Boolean,
         val polish: PolishBubble?,
+        val speech: SpeechStrip? = null,
         override val turnIndex: Int
     ) : MissionBubble
 }
@@ -248,6 +255,7 @@ class MissionViewModel @Inject constructor(
                     text = turn.transcript,
                     hasTranscript = turn.transcript.isNotBlank(),
                     polish = turn.polish.toBubbleOrNull(),
+                    speech = speechStripOf(turn),
                     turnIndex = turn.turnIndex
                 ) + MissionBubble.Ai(text = turn.reply, turnIndex = turn.turnIndex),
                 checklist = result.checklist,

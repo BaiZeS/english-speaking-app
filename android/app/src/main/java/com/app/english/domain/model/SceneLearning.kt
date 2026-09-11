@@ -159,7 +159,17 @@ data class MissionTurn(
     val suggestion: String,
     val polish: PolishSuggestion? = null,
     val newlyDone: List<NewlyDoneTask> = emptyList(),
-    val costsScore: Boolean = false
+    val costsScore: Boolean = false,
+    /**
+     * 本轮的发音/语法证据(键与 [DrillGradeResult] 的五维同名, null = 这一维没测到)。
+     * 实战用的是语音轮, 讯飞 ISE 的分本来就在响应里 (`sub_scores`/`word_details`),
+     * 以前映射层直接丢掉 -> 实战语音轮和打基础一样, 说完听不到任何发音反馈。
+     * 逐词分只用来提炼"哪几个词没读准", 不在气泡里铺开整排芯片(一屏 6-12 轮会把台词
+     * 本身盖掉)。
+     */
+    val subScores: Map<String, Double?> = emptyMap(),
+    val wordDetails: List<WordScore> = emptyList(),
+    val speechRateWpm: Double? = null
 )
 
 data class NewlyDoneTask(val id: String, val evidence: String)

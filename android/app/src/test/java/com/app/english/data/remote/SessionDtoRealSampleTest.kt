@@ -1,6 +1,7 @@
 package com.app.english.data.remote
 
 import com.app.english.domain.model.ReviewReportData
+import com.app.english.ui.scenes.subScoreReadout
 import com.app.english.ui.scenes.taskProgressLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -153,6 +154,37 @@ class SessionDtoRealSampleTest {
         assertEquals("1/2", taskProgressLabel(result.checklist))
         assertTrue(result.checklist.first().done)
         assertFalse(result.cleared)
+    }
+
+    /**
+     * 实战轮的 `sub_scores` 曾被映射层丢掉 -> 语音说完在聊天流里看不到任何发音证据,
+     * 和打基础是同一个病。这里锁住"到了领域层", 以及 null 维度**没被补成 0**。
+     */
+    @Test
+    fun missionTurnCarriesPerTurnSpeechEvidence() {
+        val payload = """
+            {"session_id":"s2","revision":9,"stage":"mission","status":"active",
+             "turn_index":2,"transcript":"Can I get a medium coffee?",
+             "reply":"Sure, for here?","suggestion":"","polish":null,
+             "sub_scores":{"pronunciation":76.5,"grammar":null,"vocabulary":88.0,
+               "fluency":null},
+             "word_details":[{"word":"croissant","score":34.0,"ipa":"/kwaˈsɑ̃/"}],
+             "speech_rate_wpm":137.6,"newly_done":[],"checklist":[],
+             "cleared":false,"turn_count":2,"max_turns":14,"auto_finished":false,
+             "finished":false,"ability_events":[],"source":"llm",
+             "llm_source":"qwen3.8-max","costs_score":false,"review":null}
+        """.trimIndent()
+        val turn = json.decodeFromString<MissionTurnResponseDto>(payload).toDomain().turn
+        assertEquals(4, turn.subScores.size)
+        assertEquals(76.5, turn.subScores["pronunciation"]!!, 0.01)
+        assertNull(turn.subScores["grammar"])
+        assertEquals(1, turn.wordDetails.size)
+        assertEquals(137.6, turn.speechRateWpm!!, 0.01)
+        // 界面读数: 只有有证据的两个维度, 顺序固定。
+        assertEquals(
+            listOf("发音" to 76.5, "词汇" to 88.0),
+            subScoreReadout(turn.subScores).map { it.label to it.score }
+        )
     }
 
     @Test

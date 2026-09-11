@@ -40,16 +40,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.TaskChip
 import com.app.english.ui.components.HoldToTalkButton
 import com.app.english.ui.components.RecordingGuard
 import com.app.english.ui.components.RecordingWaveform
 import com.app.english.ui.components.WaveformGeometry
 import com.app.english.ui.theme.Spacings
+import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -281,7 +284,49 @@ private fun BubbleRow(
                 content = MaterialTheme.colorScheme.onPrimaryContainer,
                 onClick = null
             )
+            bubble.speech?.let { strip -> SpeechStripRow(strip) }
             bubble.polish?.let { polish -> PolishInlineCard(polish, onCollect) }
+        }
+    }
+}
+
+/**
+ * 逐轮发音条。
+ *
+ * 后端每轮都发 `sub_scores`/`speech_rate_wpm`, 以前映射层丢掉 -> 实战语音说完听不到任何
+ * 发音反馈(与打基础同一个病)。这里刻意做得很扁: 实战一屏 6-12 轮, 每轮铺开一张反馈卡
+ * 会把对话本身挤没, 所以只留"哪个维度低、说多快、哪几个词没读准"。配色与打基础同源。
+ */
+@Composable
+private fun SpeechStripRow(strip: SpeechStrip) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(Spacings.tiny)
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacings.s1)) {
+            strip.dims.forEach { dim ->
+                Text(
+                    text = "${dim.label} ${dim.score.toInt()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = ScoreColorMapper.level(dim.score).color()
+                )
+            }
+            strip.rateLabel?.let { rate ->
+                Text(
+                    text = rate,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (strip.weakWords.isNotEmpty()) {
+            Text(
+                text = "没读准：${strip.weakWords.joinToString("、")}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error
+            )
         }
     }
 }

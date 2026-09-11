@@ -304,25 +304,5 @@ private fun BriefingProgress.resumableGrade(): DrillGradeResult? {
     return steps.lastOrNull { it.lastGrade != null }?.lastGrade
 }
 
-/** 五维子分的显示项(界面只画有证据的, null 绝不是 0)。 */
-data class SubScoreReadout(val label: String, val score: Double)
-
-/**
- * 子分标签表 + 逐维取值。
- *
- * null 的语义是"这一轮这个维度没有证据"(讯飞没跑 ISE、LLM 没判语法), 渲染成 0 就是
- * 给学员扣了一个没发生的分。所以这里**丢掉 null**, 而不是补 0。
- *
- * 标签一律两字: 五枚胶囊并排, 宽度预算只有播读页三维那排的 3/5, "流利度"这种三字词
- * 在窄屏上会折行, 把整排挤歪。
- */
-fun drillSubScoreReadout(grade: DrillGradeResult): List<SubScoreReadout> = listOf(
-    "发音" to grade.pronunciation,
-    "流利" to grade.fluency,
-    "完整" to grade.completeness,
-    "语法" to grade.grammar,
-    "词汇" to grade.vocabulary
-).mapNotNull { (label, score) -> score?.let { SubScoreReadout(label, it) } }
-
 fun BriefingProgress.toUiState(): BriefingUiState =
     reduceBriefing(BriefingUiState(), BriefingEvent.Loaded(this))
