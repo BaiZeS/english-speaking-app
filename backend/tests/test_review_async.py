@@ -57,7 +57,7 @@ from app.services import mission_engine as me
 from tests.test_course_sessions import BRIEFING6
 from tests.test_drill_grader import install_llm
 from tests.test_latency_budget import HANG_S, install_slow_llm, shrink_budget
-from tests.test_mission import DEV, _finish, _mission, _ready, mission_json
+from tests.test_mission import DEV, _finish, _mission, _ready, _report, mission_json
 from tests.test_scene_store import make_course_dict
 
 #: 假 LLM 的默认模型 id (``install_llm`` 写死), 作业的 ``llm_source`` 该等于它.
@@ -295,9 +295,9 @@ async def test_the_202_skeleton_is_already_a_readable_report(
     外加两句非空白文案 (``source="heuristic"``, 复盘页已有的降级横幅会说明来源)。
     """
     sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
-    view = await _snapshot(client, sid)
-    assert view["review_status"] == "generating"
-    report = view["review"]
+    assert (await _snapshot(client, sid))["review_status"] == "generating"
+    # _report(run_copy_job=False) 就是"只看骨架、不驱动作业"那条通道 (test_mission 的用法).
+    report = await _report(client, sid, run_copy_job=False)
 
     assert report["cleared"] is True and report["auto_finished"] is False
     assert report["turn_count"] == 2 and report["max_turns"] == 8
@@ -691,7 +691,8 @@ async def test_the_report_stays_reachable_after_the_session_is_completed(
     做条件写会被这个坑), 而且列表端点能把这局找回来。
     """
     sid = await _scored_session(client, monkeypatch, course_root, [REVIEW_A])
-    await cs.run_review_copy_job(sid)
+    # _report 驱动作业并断言 ready, 读的就是客户端会读的那份快照。
+    assert (await _report(client, sid))["source"] == "llm"
     spawned = _record_spawns(monkeypatch)
 
     first = await _snapshot(client, sid)
