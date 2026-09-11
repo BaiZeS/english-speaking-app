@@ -55,6 +55,7 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from app.api.v1.deps import get_db
 from app.core.errors import AppError
+from app.db.session import get_sessionmaker
 from app.models.course import FoundationStep, SceneCourse
 from app.models.db import History, PracticeSession, PracticeStep, User
 from app.models.schema import WordScore
@@ -64,6 +65,7 @@ from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
     PASS_SCORE,
+    REVIEW_COPY_JOB_BUDGET_S,
     SKIP_SOURCE,
     AbilityEvidence,
     DrillGrade,
@@ -89,6 +91,31 @@ router = APIRouter(tags=["course-sessions"])
 ISE_TURN_BUDGET_S = 8.0
 IAT_TURN_BUDGET_S = 8.0
 LLM_TURN_BUDGET_S = 15.0
+
+# ====== 总评文案的后台作业 (§P6: 收工改 202 + review_status 轮询) ======
+#
+# 为什么异步: ``finish-mission`` 曾经在请求里同步调总评 LLM —— 生产日志 (session
+# 719833d1…, 2026-09-10) 里它烧了 ~68s 才降级, 客户端 socket 在 30s 就死了, 于是
+# **报告落库了而学员永远看不到**, 猛点"收工"只换来 4 连 409。到轮次上限的自动收工更糟
+# (那一轮已经花掉 23s)。所以: 数值骨架在请求内算完并 commit, 文案交给下面这个作业。
+#
+# ``REVIEW_COPY_JOB_BUDGET_S`` (``drill_grader`` 的硬预算块) 是作业自己的封顶, 45s 这个
+# 数就是给"慢慢写文案"留的 —— 它不在 30s 契约里, 因为学员的 socket 早就关了。
+#
+# ``REVIEW_REDISPATCH_AFTER_S`` = **重启兜底**的水位: ``asyncio.create_task`` 不持久,
+# 进程死在作业中途时 ``review_status`` 会永远停在 ``generating``。GET 读到 ``generating``
+# 且快照 ``updated_at`` 老过这个水位就地重派一次 (幂等门见 ``_REVIEW_IN_FLIGHT``)。
+# 取 **2 倍作业预算** (水位跟着预算走, 别让改一个数忘了改另一个): 单 ``_judge`` 最坏 =
+# 两次 20s 尝试 (``max_retries=0``) ≈ 40s, 再加事件循环排队与并发作业挤占, 一个**还活着**
+# 的作业完全可能跑过一整个预算周期 —— 水位低于 2 倍就会把在跑的作业判成死的重派, 白烧
+# 一次 LLM 还多 bump 一次 revision。反过来 90s 仍是"当晚打开复盘页就看得到总评"的量级。
+REVIEW_REDISPATCH_AFTER_S = REVIEW_COPY_JOB_BUDGET_S * 2
+
+#: ``doc["review_status"]`` 的取值域 (JSON 列里的新键, **无迁移**).
+#:   ``generating`` = 数值骨架已落库, 文案作业在途 (或已 stranded, 由 GET 重派)
+#:   ``ready``      = 文案已补 (``review.source`` 告诉客户端是 llm 还是 heuristic)
+#:   ``failed``     = 作业遇到预期外异常; 数值与确定性文案仍在 ``review`` 里, 可渲染
+ReviewStatus = Literal["generating", "ready", "failed"]
 
 # ====== 状态机常量 ======
 
@@ -177,7 +204,16 @@ class SessionView(BaseModel):
     #: ``opening``. 首轮 ``/mission`` 之前是空 dict; 恢复页面直接按它重绘气泡与清单.
     mission: dict[str, Any] = Field(default_factory=dict)
     #: 收工后的复盘报告 (``doc["review"]``); 未收工为 null. 崩溃恢复复盘页不必重算.
+    #: §P6: 收工当场它就已经是**数值完整**的报告 (总分/四维/清单/逐词/生词都在), 缺的
+    #: 只是 highlights/improvements 那两句 AI 文案 —— 配合下面的 review_status 渲染
+    #: "数值已在, 文案在写" 的第三态, 而不是整页空着转圈。
     review: dict[str, Any] | None = None
+    #: 总评文案的作业状态 (``generating`` / ``ready`` / ``failed``; 未收工为 null).
+    #: 客户端拿它当**轮询键** (搭本端点的便车, §P6 不新增端点): ``generating`` -> 隔几秒
+    #: 再 GET。数值不依赖这个字段 —— 作业失败也不会让报告变空, 见 ``failed`` 的说明。
+    #: 类型为 ``str | None`` 而不是字面量: 这是 JSON 列里的旧数据, 脏值该降级成"不可知",
+    #: 不该在响应模型校验时把 GET 打成 500。
+    review_status: str | None = None
     #: 整课内容: 开场与恢复都要回, 客户端画词汇卡/题干不必再打一次 /scenes/{id}.
     course: SceneCourse | None = None
 
@@ -283,8 +319,13 @@ class MissionTurnResponse(BaseModel):
     llm_source: str | None = None
     #: 本轮是否因之前"要提示"被标记 (提示过的回合分数可信度打折, §5.3).
     costs_score: bool = False
-    #: 仅 ``auto_finished`` 时有值: 服务端已生成的复盘报告 (§5.3 ReviewReport).
+    #: 仅 ``auto_finished`` 时有值: 服务端已生成的复盘报告 (§5.3 ReviewReport)。
+    #: §P6: 这是**数值骨架** —— 分数/清单/逐词全在, ``source`` 仍为 ``heuristic``,
+    #: 因为 AI 文案改由后台作业补 (见 ``review_status``), 本请求不再为此多等一次 LLM。
     review: ReviewReport | None = None
+    #: 仅 ``auto_finished`` 时有值: 总评文案作业状态 (§P6; 本端到点恒为 ``generating``).
+    #: 客户端据此跳到复盘页并轮询 ``GET /sessions/{id}``。
+    review_status: str | None = None
 
 
 class HintRequest(_Identity):
@@ -319,12 +360,19 @@ class FinishMissionRequest(_Identity):
 
 
 class FinishMissionResponse(BaseModel):
+    """``POST /sessions/{id}/finish-mission`` 的 202 载荷 (§P6).
+
+    **没有 report 字段**: 收工不再在请求里等总评文案 (§2 问题 5 的根因)。数值在
+    ``GET /sessions/{id}`` 的 ``review`` 里 (202 返回前就已落库), 文案写完时同一个快照的
+    ``review_status`` 翻 ``ready`` —— 客户端跳复盘页 + 轮询即可。
+    """
+
     session_id: str
     revision: int
     stage: str
     status: str
-    #: §5.3 复盘报告 (持久化在 ``doc["review"]``, ``GET /sessions/{id}`` 亦返回).
-    report: ReviewReport
+    #: 恒为 ``generating`` (确定性部分已在本次 commit 里落库, 只欠文案)。
+    review_status: ReviewStatus
 
 
 # ====== doc 快照 schema ======
@@ -344,9 +392,23 @@ class FinishMissionResponse(BaseModel):
 #     "mission": { P3: v / turns / tasks(累积状态) / turn_count / max_turns /
 #                  cleared / auto_finished / finished / hints_used / pending_costs
 #                  / opening },   首轮 /mission 时才初始化
-#     "review": { ReviewReport.model_dump() },    # P3: 收工后写入 (此前不存在)
+#     "review": { ReviewReport.model_dump() },    # P3: 收工后写入 (此前不存在)。§P6:
+#                  收工当场写的是**数值骨架** (source="heuristic"), 文案由后台作业
+#                  就地覆盖那四个字段 (highlights/improvements/source/llm_source)
+#     "review_status": "generating"|"ready"|"failed",
+#                                                 # §P6: 总评文案的作业状态。放在 JSON 列
+#                  里而不是加列/表 = **零 alembic 迁移** (计划 §P6 的选型: 报告本就住在
+#                  doc["review"], _view() 已回传, 客户端已在读)
+#     "review_facts": {…},                        # §P6: 喂文案作业的**已裁剪** prompt 输入
+#                  (_review_facts 裁过: ≤12 条转写 x 200 字), 落库是为了让"进程重启后
+#                  重派"的作业不必重算; 文案落终态 (ready) 时删掉它 —— failed 留着,
+#                  重派还要用。**别**在这里落未裁剪的 utterances 或整份 step 行
 #     "stage": ..., "status": ..., "created_at": ..., "updated_at": ...
 #   }
+#
+# 冗余列 ``status`` / ``stage`` 在总评文案还没写完时就已经是 ``completed`` / ``review``:
+# 练习**确实**打完了, 欠的只是那两句 AI 文案。所以「继续学习」列表 (只查 active) 不会
+# 把它当未完局, 复盘页也能立刻进来渲染数值 —— 这是异步化刻意要的行为, 不是投影漂移。
 
 
 def _now() -> datetime:
@@ -825,6 +887,7 @@ def _view(row: PracticeSession, course: SceneCourse) -> SessionView:
         briefing=_briefing_progress(doc),
         mission=dict(doc.get("mission") or {}),
         review=dict(review) if isinstance(review, dict) else None,
+        review_status=_review_status_of(doc),
         course=course,
     )
 
@@ -939,6 +1002,13 @@ async def get_session(
 
     顺带做一次**投影自愈**: 快照派生出的 stage/status 与冗余列不一致时 (崩在两步之间),
     把列修回与 doc 一致再返回 —— 客户端永远看不到"清单打完了但 stage 还是 briefing"。
+
+    §P6 又顺带一件同样的"把中间态推回合法"的活: 总评文案作业停在 ``generating`` (或
+    ``failed``) 且已过重派水位时**就地重派**一次 :func:`run_review_copy_job`。
+    ``asyncio.create_task`` 不持久, 进程重启/被杀会把文案丢在半路, 而学员面对的是一句
+    永远"生成中"的总评。这里不写库 (自愈那次才写), 数值也早在 202 之前落好了 —— 重派只
+    关乎那两句文案; 幂等由 ``_REVIEW_IN_FLIGHT`` + 作业开头的状态复查共同保证
+    (理由与取舍见 :func:`resume_stranded_review_copy` 的 docstring)。
     """
     row = await _load_owned_session(
         db,
@@ -955,6 +1025,7 @@ async def get_session(
             doc.get("stage"),
         )
         await _save_doc(db, row, doc)
+    resume_stranded_review_copy(str(row.id), doc)
     return _view(row, _course_of(doc))
 
 
@@ -1151,7 +1222,13 @@ async def _finish_mission_state(
     *,
     auto: bool,
 ) -> ReviewReport:
-    """收工: 生成 ReviewReport、落 ``doc["review"]``、投影 ``review/completed``、写历史行.
+    """收工的**确定性**部分: 数值骨架落 ``doc["review"]``、投影 ``review/completed``、写历史行.
+
+    §P6  splitting: 这里**一次 LLM 都不调** —— 复盘报告只有四个字段来自模型
+    (highlights / improvements / source / llm_source), 其余全是 step 行与 doc 的算术。
+    所以本函数可以在 ``for_update`` 事务里跑完并由调用方 :func:`_save_doc` 立即提交
+    (行锁就此释放, 不再被文案写作占用), 文案交给 :func:`run_review_copy_job` 慢慢补,
+    ``doc["review_status"]="generating"`` 是学员看到的"AI 正在写总评"的那盏灯。
 
     调用方负责 ``_save_doc`` 提交; 这里所有 ``db.add`` / flush 都留在同一事务里
     (报告聚合需要刚写入的 step/事件行, 所以先 flush 再 SELECT)。
@@ -1192,10 +1269,8 @@ async def _finish_mission_state(
     ]
     after = await ability_engine.get_snapshot(db, row.user_id)
     before_raw = doc.get("ability_before")
-    briefing_done = all(
-        str(step.get("status")) == "passed" for step in cast("list[dict[str, Any]]", doc["steps"])
-    ) and bool(doc["steps"])
-    report = await mission_engine.build_review_report(
+    briefing_passed, briefing_skipped = _briefing_outcome(doc)
+    skeleton = mission_engine.build_review_skeleton(
         course=course,
         session_id=row.id,
         mission=mission,
@@ -1204,10 +1279,16 @@ async def _finish_mission_state(
         if isinstance(before_raw, dict)
         else None,
         ability_after=after.snapshot(),
-        briefing_passed=briefing_done,
+        briefing_passed=briefing_passed,
+        briefing_skipped=briefing_skipped,
         hints_used=_as_int(mission.get("hints_used")),
     )
+    report = skeleton.report
     doc["review"] = report.model_dump(mode="json")
+    #: 骨架阶段就把**已裁剪**的 prompt 输入一起存盘 (:func:`mission_engine._review_facts`):
+    #: 后台作业 (以及进程重启后重派的那一次) 因此不必再查一遍 step 行就能还原同一份料。
+    doc["review_facts"] = skeleton.facts
+    doc["review_status"] = "generating"
     doc["stage"] = "review"
     doc["status"] = "completed"
     _push_event(doc, "mission_review" + ("_auto" if auto else ""), "", report.overall)
@@ -1215,6 +1296,22 @@ async def _finish_mission_state(
     # §5.2 M3: 通关进度物化 (画廊三字段变真), 与本事务同 commit/回滚.
     await _record_course_progress(db, row, course, mission, report)
     return report
+
+
+def _briefing_outcome(doc: dict[str, Any]) -> tuple[bool, int]:
+    """打基础清单的两种"完了": ``(全部真过关, 跳过了几步)`` (§P6 次因二).
+
+    以前这里只有一个 ``all(status == "passed")`` 布尔, 于是**一次正当的跳过** (清单上限
+    2 次, 见 :data:`SKIP_LIMIT`) 就静默把"清单全部走完"这句话吃掉 —— 学员明明把整场流程
+    走完了, 报告里却像缺席了什么。门禁 (:func:`_reconcile_stage`) 认的是 passed|skipped,
+    文案口径必须一致: 走完就说走完, 含跳过就把步数说出来, 别假装有缺席。
+    """
+    steps = cast("list[dict[str, Any]]", doc["steps"])
+    statuses = [str(step.get("status") or "pending") for step in steps]
+    if not statuses:
+        return False, 0
+    skipped = sum(1 for status in statuses if status == "skipped")
+    return skipped == 0 and all(status == "passed" for status in statuses), skipped
 
 
 async def _record_course_progress(
@@ -1434,15 +1531,23 @@ async def submit_mission_turn(
         evidence=events,
     )
 
-    report: ReviewReport | None = None
+    skeleton: ReviewReport | None = None
     # 到回合上限 -> 服务端自动收工 (§5.1 max_turns: "到顶仍未集齐必选任务则按未通关
-    # 收口"), 报告随本响应一并返回, 客户端不用再打一次 finish-mission.
+    # 收口"), 客户端不用再打一次 finish-mission.
+    #
+    # §P6: 本请求**只落数值骨架**。这一轮已经花掉 iat(8) + max(ise 8, llm 15) = 23s 在
+    # 语音与判分上, 再挂一次总评 LLM 就是结构性超时 (43s > 30s, 而且"聊到轮次上限自然
+    # 收工"恰是每日练习结束最常发生的时刻) —— 压预算救不了它 (压到 7s 以下等于总评每次
+    # 都退化成模板文案), 所以把文案整体移出请求: 本端点回到 23s 预算内, 文案由后台作业补。
     if turn_index >= _as_int(mission.get("max_turns")):
-        report = await _finish_mission_state(db, row, doc, course, mission, auto=True)
+        skeleton = await _finish_mission_state(db, row, doc, course, mission, auto=True)
+    turn_session_id = str(row.id)  # commit 之后不再读 ORM 属性 (见 _save_doc 的坑注)
     revision = await _save_doc(db, row, doc)
+    if skeleton is not None:
+        spawn_review_copy_job(turn_session_id)
     logger.info(
         "mission turn graded | session={} turn={} source={} llm={} newly_done={} cleared={}",
-        row.id,
+        turn_session_id,
         turn_index,
         score_source,
         llm_source,
@@ -1450,10 +1555,10 @@ async def submit_mission_turn(
         bool(mission["cleared"]),
     )
     return MissionTurnResponse(
-        session_id=row.id,
+        session_id=turn_session_id,
         revision=revision,
-        stage=row.stage,
-        status=row.status,
+        stage=str(doc.get("stage") or "mission"),
+        status=str(doc.get("status") or "active"),
         turn_index=turn_index,
         transcript=user_text,
         reply=judgement.reply,
@@ -1473,7 +1578,8 @@ async def submit_mission_turn(
         source=score_source,
         llm_source=llm_source,
         costs_score=costs_score,
-        review=report,
+        review=skeleton,
+        review_status=_review_status_of(doc),
     )
 
 
@@ -1525,13 +1631,26 @@ async def request_hint(
     )
 
 
-@router.post("/sessions/{session_id}/finish-mission", response_model=FinishMissionResponse)
+@router.post(
+    "/sessions/{session_id}/finish-mission", status_code=202, response_model=FinishMissionResponse
+)
 async def finish_mission(
     session_id: str,
     req: FinishMissionRequest,
     db: AsyncSession = Depends(get_db),
 ) -> FinishMissionResponse:
-    """主动收工 -> ReviewReport (§5.3)."""
+    """主动收工 -> **202** + 数值骨架 (§5.3 / §P6).
+
+    为什么不是 200 + 完整报告: 报告的 AI 文案要一次 LLM 调用, 生产上它烧过 ~68s (最坏
+    ~125s), 而手机端 OkHttp ``readTimeout`` 只有 30s —— 结果是**服务端把活干完了、报告
+    也落库了, 学员却永远看不到** (2026-09-10 的 session 719833d1… 之后用户猛点"收工"吃了
+    4 连 409)。现在: 确定性部分在 ``for_update`` 事务里算完 → :func:`_save_doc` 立即提交
+    (行锁就此释放, 不再被写作占用) → 才派生后台作业。请求因此只剩 DB 往返。
+
+    重复收工仍然 409 ``MISSION_FINISHED`` (``_require_mission_actionable``), 但那道门
+    现在秒级返回; 客户端**不等报告**, 直接跳复盘页轮询 ``GET /sessions/{id}``
+    (载荷 ``review_status``; 文案补完时同一份快照里的 ``review`` 就换成 AI 版本)。
+    """
     row = await _load_owned_session(db, session_id, req, for_update=True)
     doc = _reconcile_stage(_doc_of(row))
     _require_mission_actionable(row, doc)
@@ -1540,19 +1659,288 @@ async def finish_mission(
     mission: dict[str, Any] = (
         mission_raw if isinstance(mission_raw, dict) and mission_raw else _initial_mission(course)
     )
+    doc["mission"] = mission
     report = await _finish_mission_state(db, row, doc, course, mission, auto=False)
+    # 行锁与作业不能共存: 先拿到 revision (commit 之后 ORM 属性可能过期, 见 _save_doc 注释)。
+    finished_session_id = str(row.id)
     revision = await _save_doc(db, row, doc)
+    spawn_review_copy_job(finished_session_id)
     logger.info(
-        "mission finished | session={} cleared={} overall={} source={}",
-        row.id,
+        "mission finished | session={} cleared={} overall={} review_status=generating",
+        finished_session_id,
         report.cleared,
         report.overall,
-        report.source,
     )
     return FinishMissionResponse(
-        session_id=row.id,
+        session_id=finished_session_id,
         revision=revision,
-        stage=row.stage,
-        status=row.status,
-        report=report,
+        stage="review",
+        status="completed",
+        review_status="generating",
     )
+
+
+# ====== 总评文案的后台作业 (§P6) ======
+#
+# 范式照抄本仓已有的整课生成作业 (``app.services/course_generator.py`` 的
+# ``run_generation_job`` / ``spawn_job`` / ``_bump``, 端点是 ``POST /scenes/generate``
+# 的 202 + ``job_id`` 轮询), 四条纪律一条不落:
+#   1. **自开 AsyncSession** (``get_sessionmaker()``) —— 请求会话会随响应一起关掉;
+#   2. **模块级集合持有 task** —— ``asyncio.create_task`` 返回的对象只被弱引用, 不留神
+#      就会被 GC, 作业静默死掉;
+#   3. **每次状态变更立即 commit** —— 轮询的 GET 在**另一个**会话里读, 不落库客户端
+#      就永远看不见 (``_bump`` 的原话);
+#   4. **一切异常收敛成终态** —— 绝不让后台任务无声死去 (docstring 的"绝不让后台任务
+#      无声死去"), 否则学员面对的是一条永远停在 ``generating`` 的会话。
+#
+# 与生成作业的唯一区别: 这里**没有独立的任务表** (计划 §P6 的选型: 报告天然属于某个
+# session 行, 而 ``doc`` 是 JSON 列 → 零迁移), 所以状态就写在 ``doc["review_status"]``,
+# 一致性与归属校验直接继承会话行。代价是丢掉独立任务表自带的 retry/GC 语义, 由下面的
+# 就地幂等重派 (:func:`resume_stranded_review_copy`) 承担。
+
+#: 模块级持有在途 task: asyncio 只弱引用 ``create_task`` 的返回值, 不接住就会被 GC。
+_REVIEW_JOBS: set[asyncio.Task[None]] = set()
+
+#: **本进程内**已经派生过的 session: 幂等门, 防"用户猛点收工 / 两个 GET 同时到达"
+#: 各开一个作业 (跨进程不去重 —— 那靠作业开头的状态复查与落库时的乐观锁收敛)。
+_REVIEW_IN_FLIGHT: set[str] = set()
+
+#: 可以被"救回来"的非终态: 这两种值都可能停在那儿没人管了, 所以 GET 允许重派。
+#: ``ready`` 不在其内 —— 写完的文案不该被下一次轮询重写一遍。
+_REVIEW_RESUME_STATUSES: tuple[str, ...] = ("generating", "failed")
+
+
+def spawn_review_copy_job(session_id: str) -> bool:
+    """派生总评文案作业 (必须在 ``_save_doc`` **之后**); 返回**是否真的派生了**.
+
+    幂等门是 :data:`_REVIEW_IN_FLIGHT`: 同一会话在途只允许一个作业。作业自己还会在事务里
+    再判一次 ``review_status == "generating"`` —— 那才是跨重派/跨进程的那道门, 这里的集合
+    只是省掉一次注定白跑的 LLM 调用。
+
+    测试把本函数换成 no-op 后直接 ``await run_review_copy_job(sid)`` 驱动作业 (同
+    ``course_generator.spawn_job`` 的口径; 全局替身见 ``tests/conftest.py``)。
+    """
+    if session_id in _REVIEW_IN_FLIGHT:
+        return False
+
+    def _finish(task: asyncio.Task[None]) -> None:
+        _REVIEW_JOBS.discard(task)
+        _REVIEW_IN_FLIGHT.discard(session_id)
+
+    _REVIEW_IN_FLIGHT.add(session_id)
+    task = asyncio.create_task(run_review_copy_job(session_id))
+    _REVIEW_JOBS.add(task)
+    task.add_done_callback(_finish)
+    return True
+
+
+async def load_review_snapshot(db: AsyncSession, session_id: str) -> dict[str, Any] | None:
+    """作业专用读路径: 取快照的**私有深拷贝** (纪律同 :func:`_doc_of`, 但不校验清单).
+
+    作业跑在请求之外, 拿不到 :func:`_load_owned_session` 那套身份/归属判定 —— 身份早在
+    收工那次 202 里验过了, 而快照里的 ``review_status`` 才是本作业唯一关心的门。
+    """
+    stmt = (
+        select(PracticeSession)
+        .where(PracticeSession.id == session_id)
+        .execution_options(populate_existing=True)
+    )
+    row = (await db.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        return None
+    raw: Any = row.doc
+    return None if not isinstance(raw, dict) else copy.deepcopy(raw)
+
+
+async def run_review_copy_job(session_id: str) -> None:
+    """后台把总评**文案**补进 ``doc["review"]``: 只动四个字段, 必落终态.
+
+    三条出口 (§P6 的设计核心是"学员永远看得到一份能读的报告"):
+
+    * LLM 回了合规文案 -> 并进去, ``source="llm"``, ``review_status="ready"``;
+    * LLM 不可用 / 超预算 / 回来两套空文案 -> :func:`mission_engine.review_copy` 自己
+      退回确定性文案 (降级本就是它的正常出口), 于是 ``source="heuristic"`` +
+      ``ready`` —— 复盘页已有的降级横幅会说明"这是模板文案", 但**不会**空白;
+    * 预期外异常 (代码 bug / 快照坏了 / 数据库抖动) -> ``review_status="failed"``,
+      数值与确定性文案**照旧可渲染**, 客户端可以选择显示一个可重试的错误态。
+
+    ``REVIEW_COPY_JOB_BUDGET_S`` 是这堵墙 (45s, 同步 handler 的 20s 装不下"慢慢写文案";
+    见 ``drill_grader`` 硬预算块)。它不是给 socket 交差的 —— 请求在 202 就返回了 ——
+    而是保证一条挂死的 LLM 不会把会话永远留在 ``generating``。
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        try:
+            await _run_review_copy_job(db, session_id)
+        except Exception as exc:
+            logger.exception("review copy job crashed | session={}", session_id)
+            await _fail_review_copy(db, session_id, exc)
+
+
+async def _run_review_copy_job(db: AsyncSession, session_id: str) -> None:
+    """作业主体 (与 :func:`run_review_copy_job` 分开: 兜底要能接住这里任何一步的抛错)."""
+    doc = await load_review_snapshot(db, session_id)
+    if doc is None:
+        logger.warning("review copy job skipped | session={} reason=session row gone", session_id)
+        return
+    status = str(doc.get("review_status") or "")
+    if status != "generating":
+        # 重派/并发已经有人写完; 幂等退出 (别把 ready 覆盖回 generating)。
+        logger.info("review copy job skipped | session={} status={}", session_id, status or "-")
+        return
+    review_raw: Any = doc.get("review")
+    facts_raw: Any = doc.get("review_facts")
+    if not isinstance(review_raw, dict):
+        raise AppError(500, "review skeleton is missing from the snapshot", "SESSION_DOC_CORRUPT")
+    if not isinstance(facts_raw, dict):
+        # §P6 之前收的工 (骨架里没有 prompt 输入), 或快照被动过: 没有可补的料, 诚实收尾。
+        logger.warning("review copy job has no prompt facts | session={}", session_id)
+        doc["review_status"] = "ready"
+        await _commit_review_copy(db, session_id, doc)
+        return
+    course = _course_of(doc)
+    text = await mission_engine.review_copy(
+        course,
+        facts_raw,
+        hard_budget_s=REVIEW_COPY_JOB_BUDGET_S,
+    )
+    merged = mission_engine.merge_review_copy(
+        ReviewReport.model_validate(review_raw),
+        text,
+    )
+    # JSON 列的**整体换新**由 _save_doc 负责 (deepcopy 一份塞回去); 这里连 review_facts
+    # 一起改完, 一次 commit = 文案 + 终态同时可见 (分两次写会让轮询读到 ready 却没文案)。
+    doc["review"] = merged.model_dump(mode="json")
+    doc["review_status"] = "ready"
+    doc.pop("review_facts", None)  # 终态了, 这堆 prompt 料不必再占快照 (failed 分支留着)
+    await _commit_review_copy(db, session_id, doc)
+    logger.info(
+        "review copy published | session={} source={} llm={} highlights={} improvements={}",
+        session_id,
+        merged.source,
+        merged.llm_source,
+        len(merged.highlights),
+        len(merged.improvements),
+    )
+
+
+async def _commit_review_copy(db: AsyncSession, session_id: str, doc: dict[str, Any]) -> None:
+    """写回快照 (整体换新 + 乐观锁 + 立即 commit), 与请求路径共用 :func:`_save_doc`.
+
+    复用而不是另写一份 is the point: ``_save_doc`` 里那两条踩过的坑 (JSON 列原地改不脏、
+    commit 后读 ORM 属性触发同步刷新 -> ``MissingGreenlet``) 加上 ``StaleDataError`` →
+    409 的翻译, 一行都不该在后台作业里重新发明。
+    """
+    row = (
+        await db.execute(
+            select(PracticeSession)
+            .where(PracticeSession.id == session_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        logger.warning("review copy write skipped | session={} reason=session row gone", session_id)
+        return
+    try:
+        revision = await _save_doc(db, row, doc)
+    except AppError as exc:
+        if exc.code != "SESSION_CONCURRENT_UPDATE":
+            raise
+        # 谁赢谁的话: 另一个写者 (多半是重派出来的第二个作业) 已经把同一份 doc 落库了,
+        # 数值不受影响, 状态由它决定 —— 我们不再补第二刀, 快照停在 generating 也无所谓,
+        # 下一次过水位的 GET 会重派 (§P6 的兜底闭环)。
+        logger.warning(
+            "review copy write lost the race | session={} err={}", session_id, exc.message
+        )
+        return
+    logger.debug("review copy state committed | session={} revision={}", session_id, revision)
+
+
+async def _fail_review_copy(db: AsyncSession, session_id: str, exc: Exception) -> None:
+    """把作业收敛成 ``failed`` 终态 (照抄 ``course_generator._fail`` 的 rollback-再写).
+
+    写不动也要留话: 连终态都写不进去通常是数据库本身的事, 那时能做的只有把栈打全 ——
+    比"无声死去"至少多一条线索 (轮询端与运维都靠这条日志定位)。
+    """
+    try:
+        await db.rollback()
+        doc = await load_review_snapshot(db, session_id)
+        if doc is None or str(doc.get("review_status") or "") not in ("", "generating"):
+            return  # 已经有终态了, 别把 ready 改回 failed
+        # review_facts **留着**: failed 的会话还能被 GET 重派, 重派需要同一份输入。
+        doc["review_status"] = "failed"
+        await _commit_review_copy(db, session_id, doc)
+        logger.warning(
+            "review copy job marked failed | session={} reason={} (数值与确定性文案仍可渲染)",
+            session_id,
+            _truncate(str(exc)),
+        )
+    except Exception:  # pragma: no cover - 只剩日志可依赖的角落
+        logger.exception("review copy failed-state write itself died | session={}", session_id)
+
+
+def _doc_updated_at(doc: dict[str, Any]) -> datetime | None:
+    """快照里的 ``updated_at`` (:func:`_save_doc` 每次 commit 盖的章) -> aware datetime."""
+    raw = doc.get("updated_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def review_copy_is_stranded(doc: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """这份快照的总评作业是不是**没人管了** (§P6 的重派水位; 纯函数, 便于单测).
+
+    非终态只有 ``generating`` (作业在途或已随进程死掉) 与 ``failed`` (预期外异常) 两种,
+    区分它们只靠时刻: ``generating`` 要求老过 **2 倍作业预算** —— 一个还活着的作业完全
+    可能跑过一整个预算周期 (见 :data:`REVIEW_REDISPATCH_AFTER_S` 的算法), 判早了会重派一
+    次白烧的 LLM 并多 bump 一次 revision。``failed`` 则相反: 那一刻作业**已经停了**, 所以
+    一个预算周期 (= 本会话最早 possible 的另一次作业时长) 之后就该允许学员再试一次, 而不
+    是等下一次重启。读不出时刻按"已过水位"处理: 重派是幂等的, 宁可多写一次文案, 也别把
+    学员永久留在"生成中"。
+    """
+    status = str(doc.get("review_status") or "")
+    if status not in _REVIEW_RESUME_STATUSES:
+        return False
+    threshold = REVIEW_REDISPATCH_AFTER_S if status == "generating" else REVIEW_COPY_JOB_BUDGET_S
+    updated_at = _doc_updated_at(doc)
+    if updated_at is None:
+        return True
+    reference = now or _now()
+    return (reference.astimezone(UTC) - updated_at.astimezone(UTC)).total_seconds() >= threshold
+
+
+def resume_stranded_review_copy(session_id: str, doc: dict[str, Any]) -> bool:
+    """§P6 的重启兜底: 停在 ``generating``/``failed`` 且已过水位 -> 就地重派. 返回是否派生.
+
+    为什么允许一个 GET 有副作用: 本端点在 §P6 之前**就已经会写库**了 —— 快照与冗余列
+    不一致时它调 :func:`_save_doc` 做"投影自愈" (见 :func:`get_session`), 所以"读到一个
+    不合法的中间态就把它推回合法"是这个端点既有的职责, 不新开的先例。再说代价与风险:
+    这里**一个字都不写**, 只是 :func:`spawn_review_copy_job` 一下; 幂等门 (在途集合 +
+    作业开头的 ``review_status`` 复查 + 落库时的乐观锁) 三层守着重复派生; 而数值早在 202
+    之前就已落库, 重不重派都不影响总分, 只影响那两句文案 —— 最坏情况是"文案永远停在
+    确定性版本", 不是"报告丢了"。
+    """
+    if not review_copy_is_stranded(doc):
+        return False
+    if not spawn_review_copy_job(session_id):
+        return False  # 本进程已经在跑了 (两个 GET 同时到达)
+    logger.warning(
+        "review copy job re-dispatched from GET | session={} status={}",
+        session_id,
+        doc.get("review_status"),
+    )
+    return True
+
+
+def _review_status_of(doc: dict[str, Any]) -> str | None:
+    """快照里的作业状态 -> API 字段 (§P6; 脏值一律收敛成 ``None``, 别让 GET 变 500)."""
+    status = str(doc.get("review_status") or "")
+    if status in ("generating", "ready", "failed"):
+        return status
+    # ``doc["review"]`` 在而状态缺席 = 这条会话收工于 §P6 之前, 报告本身就是完整品:
+    # 报 ready 而不是 generating, 免得老会话被客户端无限轮询。
+    return "ready" if isinstance(doc.get("review"), dict) else None

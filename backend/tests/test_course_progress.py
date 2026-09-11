@@ -25,7 +25,7 @@ from app.services import scene_store
 from app.services.llm_provider import get_llm_provider
 from tests.test_course_sessions import BRIEFING6, _open, _pass_briefing
 from tests.test_drill_grader import install_llm
-from tests.test_mission import mission_json
+from tests.test_mission import _finish, _report, mission_json
 from tests.test_scene_store import write_course
 
 DEV = "dev-session"  # 与 test_course_sessions 的 helper 共用身份 (_open/_pass_briefing 写死了它)
@@ -98,9 +98,10 @@ async def test_finish_mission_writes_course_progress(
     assert second.status_code == 200
     assert second.json()["cleared"] is True
 
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    assert finish.status_code == 200
-    report = finish.json()["report"]
+    await _finish(client, sid)
+    # cleared/overall 都是确定性聚合, 202 的骨架里就有 —— 本用例关心的是
+    # course_progress 落行, 不必等后台文案作业。
+    report = await _report(client, sid, run_copy_job=False)
     assert report["cleared"] is True and report["overall"] == pytest.approx(68.0)
 
     row = await _row(db)
@@ -131,10 +132,8 @@ async def test_unfinished_session_still_counts_attempt(
     """没通关也计数: best_total=0 不拉低旧值, cleared 取或."""
     sid = await _open(client)
     await _pass_briefing(client, sid)
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    assert finish.status_code == 200
-    report = finish.json()["report"]
-    assert report["cleared"] is False
+    await _finish(client, sid)
+    assert (await _report(client, sid, run_copy_job=False))["cleared"] is False
 
     row = await _row(db)
     assert row is not None
@@ -161,8 +160,7 @@ async def test_best_total_monotonic_across_sessions(
             json={"device_id": DEV, "text": "A small coffee, please."},
         )
         assert res.status_code == 200
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    assert finish.status_code == 200
+    await _finish(client, sid)
     row = await _row(db)
     assert row is not None and row.best_total == pytest.approx(68.0)
 
@@ -172,8 +170,7 @@ async def test_best_total_monotonic_across_sessions(
     llm_provider.reset_llm_provider_for_tests()
     sid2 = await _open(client)
     await _pass_briefing(client, sid2)
-    finish2 = await client.post(f"/api/v1/sessions/{sid2}/finish-mission", json={"device_id": DEV})
-    assert finish2.status_code == 200
+    await _finish(client, sid2)
     row2 = await _row(db)
     assert row2 is not None
     assert row2.attempts == 2

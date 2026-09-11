@@ -12,9 +12,12 @@
    自由对话) 没有标准答案, 发音维度拿 **IAT 转写当 ISE 参考文本** 打分。
    讯飞没配凭据时**直接不产出** —— StubASR 面对 "ref == 它自己吐的文本" 恒给 95,
    那是回声不是证据。
-3. **ReviewReport** (§5.3): 聚合 practice_steps 与 doc 里的任务/润色/词汇命中,
-   highlights/improvements 走 **1 次批量 LLM 调用** (§5.5-3 同一纪律), 失败给
-   诚实的确定性文案 (按最低维度排序 ≤3 条)。
+3. **ReviewReport** (§5.3): 聚合 practice_steps 与 doc 里的任务/润色/词汇命中。
+   §P6 起这个模块把报告**劈成两半**: :func:`build_review_skeleton` 是纯算术的数值骨架
+   (同步、无网络, 收工请求当场就能给完), :func:`review_copy` 只做那四个来自模型的文案
+   字段 (1 次批量调用, §5.5-3 同一纪律), 再由 :func:`merge_review_copy` 并回骨架 ——
+   端点在 202 之后用后台作业慢慢补文案。任何一侧不可用都是**诚实的确定性文案**
+   (按最低维度排序 ≤3 条), 不是空白。
 
 判分模型**恒为服务端默认** (``LLM_DEFAULT_MODEL``, 不开放客户端选): 任务判定与
 语法/词汇分要进能力画像, 口径必须稳定 (T3 先例)。人设/润色这类纯文本调用可以
@@ -26,7 +29,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator
@@ -173,7 +176,10 @@ class ReviewReport(BaseModel):
       只统计带 ``ise_ref_mode`` 的行;
     * ``ability_delta``: 开局基线 vs 当前画像快照 (服务端写画像前后差, §5.3),
       维度 None = 没测过 —— 别渲染成 0;
-    * ``source``: ``llm`` = 文案来自模型, ``heuristic`` = 确定性降级文案。
+    * ``source``: ``llm`` = 文案来自模型, ``heuristic`` = 确定性降级文案。§P6 之后收工
+      响应里拿到的那份**总是** ``heuristic`` (数值骨架), 后台文案作业补完才翻 ``llm``;
+      判断"文案到底补没补"要看 ``doc["review_status"]``, 不要拿 ``source`` 当依据 ——
+      作业正常跑完但 LLM 挂掉时, ``ready`` + ``heuristic`` 就是最终的诚实答案。
     """
 
     session_id: str
@@ -186,6 +192,10 @@ class ReviewReport(BaseModel):
     overall: float | None = None
     dims: dict[str, float | None] = Field(default_factory=dict)
     pronunciation_subs: dict[str, float | None] = Field(default_factory=dict)
+    #: 无可信评分证据时的**诚实标注** ("" = 有证据). ``overall is None`` 时客户端若只
+    #: 渲染破折号, 学员会以为自己考了 0 分 —— 实际是这场**没有可信证据可打分**
+    #: (讯飞/LLM 没配或全部降级), 那句话得由服务端说清楚, 不要让 UI 猜 (§2.6 次因)。
+    evidence_note_cn: str = ""
     highlights: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
     checklist: list[MissionTaskView] = Field(default_factory=list)
@@ -655,8 +665,11 @@ def review_prompt(course: SceneCourse, facts: Mapping[str, Any]) -> list[LlmMess
         f"实战任务: {facts.get('done_count')}/{facts.get('task_count')} 完成"
         f"{' (已通关)' if facts.get('cleared') else ' (未通关)'}",
         f"维度分: {_fmt_dims(facts.get('dims', {}))}",
-        "学员在实战对话里说过的话:",
     ]
+    if facts.get("evidence_note_cn"):
+        # 别让模型拿"无证据"当低分去编造短板: 分数缺席是**部署没配评测**, 不是练得差。
+        lines.append(f"证据说明: {facts['evidence_note_cn']}")
+    lines.append("学员在实战对话里说过的话:")
     for utterance in cast("list[str]", facts.get("utterances", []))[:12]:
         lines.append(f"- {utterance}")
     return [
@@ -676,15 +689,26 @@ def _fmt_dims(dims: Mapping[str, Any]) -> str:
 def deterministic_review(
     facts: Mapping[str, Any],
 ) -> tuple[list[str], list[str]]:
-    """无 LLM 时的诚实文案 (全部从真实数据拼, 不吹牛不编造)."""
+    """无 LLM 时的诚实文案 (全部从真实数据拼, 不吹牛不编造).
+
+    两个"不撒谎"的细节 (§2.6 / §P6 次因): ① ``dims_note_cn`` 非空 = 本场**没有可信
+    评分证据**, 那它就是第一条亮点 —— 分数留空不是 0 分, 别让学员以为练砸了;
+    ② ``briefing_skipped > 0`` 时不能说"全部过关", 要说"走完了, 其中 N 步跳过"。
+    """
     dims = cast("Mapping[str, Any]", facts.get("dims", {}))
     highlights: list[str] = []
+    note = str(facts.get("dims_note_cn") or "")
+    if note:
+        highlights.append(note)
     if facts.get("cleared"):
         highlights.append("实战任务全部达成 —— 沟通目的完成了, 这是最重要的。")
     elif facts.get("done_count"):
         highlights.append(f"实战里做成了 {facts['done_count']} 项沟通任务; 开口的每一轮都是进步。")
+    skipped = int(facts.get("briefing_skipped") or 0)
     if facts.get("briefing_passed"):
         highlights.append("打基础清单全部走完。")
+    elif skipped and facts.get("briefing_done"):
+        highlights.append(f"打基础清单全部走完 (其中 {skipped} 步选择跳过, 也算推进)。")
     scored = {dim: float(value) for dim, value in dims.items() if isinstance(value, (int, float))}
     if len(scored) >= 2 and min(scored.values()) >= 60:
         best = max(scored, key=lambda d: scored[d])
@@ -831,6 +855,55 @@ def collect_new_tokens(course: SceneCourse, utterances: Sequence[str]) -> list[s
     return hits[:12]
 
 
+def _review_facts(facts: Mapping[str, Any]) -> dict[str, Any]:
+    """喂给 LLM 前收敛一下列表 (prompt 大小可控), 存的也就是这一份."""
+    clipped = dict(facts)
+    clipped["utterances"] = [
+        _truncate(str(item), 200) for item in cast("list[str]", facts.get("utterances") or [])[:12]
+    ]
+    return clipped
+
+
+#: 四维与总分**全无可信证据**时给学员的那句话 (§2.6 次因). 破折号 "—" 会被读成"考了
+#: 0 分", 而事实是这场**没有可信的评分来源** (讯飞/LLM 未配置或全部降级) —— 缺席要按
+#: 缺席说, 别让它长成一个数字的形状。
+NO_EVIDENCE_NOTE_CN = (
+    "本场没有可信评分证据 (外部评测 / LLM 判分未参与), 总分与四维留空 —— 不是练得差。"
+)
+
+
+@dataclass(frozen=True)
+class ReviewSkeleton:
+    """确定性骨架 + 喂给文案作业的**已裁剪** prompt 输入.
+
+    ``facts`` 是给 :func:`review_copy` 的料: 骨架阶段已经把转写列表裁到 12 条 x 200 字
+    (整场不设限会把 prompt 吹大, 而文案质量根本吃不下那么多)。端点把它落到
+    ``doc["review_facts"]``, 这样进程重启后**重派**的作业拿得到同一份输入, 不必再查一次
+    ``practice_steps`` —— 也别落未裁剪的那份, doc 是整场会话都要带着的快照。
+    """
+
+    report: ReviewReport
+    facts: dict[str, Any]
+
+
+class ReviewCopy(NamedTuple):
+    """报告里**唯一**来自 LLM 的四个字段 (§P6 拆分后, 文案作业的全部产物).
+
+    命名成元组是为了把"整份复盘报告只有这四件是问模型才知道的"这件事写进签名; 消费方一律
+    按字段名取用, 合并只走 :func:`merge_review_copy`。
+    """
+
+    highlights: list[str]
+    improvements: list[str]
+    source: GradeSource
+    llm_source: str | None
+
+
+def _dim_evidence_note(dims: Mapping[str, Any]) -> str:
+    """四维里**一个数都没有** -> 给学员的诚实标注; 只要有任何一个可信数就留空."""
+    return "" if any(value is not None for value in dims.values()) else NO_EVIDENCE_NOTE_CN
+
+
 async def build_review_report(
     *,
     course: SceneCourse,
@@ -840,15 +913,117 @@ async def build_review_report(
     ability_before: Mapping[str, float | None] | None,
     ability_after: Mapping[str, float | None] | None,
     briefing_passed: bool,
+    briefing_skipped: int = 0,
     hints_used: int = 0,
 ) -> ReviewReport:
-    """汇总一份复盘报告 (§5.3); 文案走**一次**批量 LLM 调用, 失败诚实降级.
+    """**同步**出一份完整复盘报告 = :func:`build_review_skeleton` + :func:`review_copy`.
 
-    ``REVIEW_LLM_BUDGET_S``: 总评文案的墙钟硬预算 —— ``finish-mission`` 是**同步**
-    handler (改 202 是 §P6 的事), 不封顶就是学员看到的 "timeout" (生产日志 2026-09-10
-    烧了 ~68s 才降级, 而 200 OK 从未打印)。超时翻成 ``LlmUnavailableError`` → 走下面
-    既有分支: 数值骨架照出, 文案退回 :func:`deterministic_review`, ``source="heuristic"``
-    (复盘页已有的降级横幅), **绝不 500、绝不丢报告**。
+    §P6 之后**端点不再用它**: 收工路径改成"请求里只算数值骨架, 文案交给后台作业"
+    (``app.api.v1.course_sessions._finish_mission_state`` /
+    ``run_review_copy_job``) —— 这条组合的墙钟含一次 LLM 调用 (``REVIEW_LLM_BUDGET_S``),
+    留在同步 handler 里就是把学员报的超时原样留下。它仍是"给脚本/测试一次拿全量报告"
+    的公开入口, 也是 :func:`review_copy` 同步预算 (20s) 的唯一使用者。
+    """
+    skeleton = build_review_skeleton(
+        course=course,
+        session_id=session_id,
+        mission=mission,
+        steps=steps,
+        ability_before=ability_before,
+        ability_after=ability_after,
+        briefing_passed=briefing_passed,
+        briefing_skipped=briefing_skipped,
+        hints_used=hints_used,
+    )
+    text = await review_copy(
+        course,
+        skeleton.facts,
+        hard_budget_s=REVIEW_LLM_BUDGET_S,
+    )
+    return merge_review_copy(skeleton.report, text)
+
+
+def merge_review_copy(report: ReviewReport, text: ReviewCopy) -> ReviewReport:
+    """把文案四件套并进数值骨架 (§P6: 同步组合与后台作业**共用**同一个合并点).
+
+    只覆盖 ``highlights`` / ``improvements`` / ``source`` / ``llm_source`` —— 四个字段是
+    报告里**唯一**来自 LLM 的部分, 数值 (dims / overall / checklist / 逐词 …) 一律不动,
+    所以后台作业重跑或失败都不会改动学员已经看到的分数。
+    """
+    return report.model_copy(
+        update={
+            "highlights": list(text.highlights),
+            "improvements": list(text.improvements),
+            "source": text.source,
+            "llm_source": text.llm_source,
+        }
+    )
+
+
+async def review_copy(
+    course: SceneCourse,
+    facts: Mapping[str, Any],
+    *,
+    hard_budget_s: float,
+) -> ReviewCopy:
+    """复盘**文案** (§5.5-3 一次批量调用); 任何不可用都诚实退回确定性文案.
+
+    永不抛 ``LlmUnavailableError`` —— 降级就是它的正常出口 (``source="heuristic"``,
+    ``llm_source="stub"``, 复盘页已有的降级横幅)。``hard_budget_s`` **故意没有默认值**:
+    同步组合 (:func:`build_review_report`) 报 ``REVIEW_LLM_BUDGET_S``, 后台作业
+    (:func:`app.api.v1.course_sessions.run_review_copy_job`) 报
+    ``REVIEW_COPY_JOB_BUDGET_S``, 谁也别想拿"默认预算"蒙过
+    ``tests/test_latency_budget.py`` 的求和与 AST 扫描。
+
+    ``facts`` 收**已裁剪**的那份 (:func:`_review_facts`): prompt 大小是这条调用的成本主项,
+    骨架期裁一次就够了, 后台作业直接复用落库的那份。
+    """
+    try:
+        judgement = await _judge(
+            ReviewTextJudgement,
+            review_prompt(course, facts),
+            max_tokens=REVIEW_MAX_TOKENS,
+            hard_budget_s=hard_budget_s,
+        )
+        highlights = [_truncate(item, 300) for item in judgement.highlights if item.strip()][:3]
+        improvements = [_truncate(item, 300) for item in judgement.improvements if item.strip()][:3]
+        if not highlights and not improvements:
+            raise LlmUnavailableError("复盘文案为空")
+        return ReviewCopy(highlights, improvements, "llm", _resolve_judge_model())
+    except LlmUnavailableError as exc:
+        # _judge 自身已消化解析/校验错误 + 超硬预算; 这里同时兜 "合法 JSON 但两套文案全空".
+        fallback_high, fallback_improve = deterministic_review(facts)
+        logger.warning("review copy degraded to deterministic | reason={}", exc)
+        return ReviewCopy(fallback_high, fallback_improve, "heuristic", "stub")
+
+
+def build_review_skeleton(
+    *,
+    course: SceneCourse,
+    session_id: str,
+    mission: Mapping[str, Any],
+    steps: Sequence[Mapping[str, Any]],
+    ability_before: Mapping[str, float | None] | None,
+    ability_after: Mapping[str, float | None] | None,
+    briefing_passed: bool,
+    briefing_skipped: int = 0,
+    hints_used: int = 0,
+) -> ReviewSkeleton:
+    """复盘报告的**确定性骨架** (§P6: 同步、无网络、无 LLM, 因此不会超时).
+
+    除了 ``highlights`` / ``improvements`` / ``source`` / ``llm_source`` 这四件文案,
+    报告里没有一个是"必须问了模型才知道"的: 四维聚合、ISE 子维度、任务清单、通关判定、
+    总分 (= 四维均值)、原话对照、生词命中、画像增量全是 ``practice_steps`` 行与 doc
+    快照的算术。所以收工请求可以立刻给学员一份**数值完整**的报告, 文案慢慢后台补
+    (``doc["review_status"]``), 而不是让学员对着 30s 的 socket 干等一次 LLM 写作。
+
+    文案先按 :func:`deterministic_review` **填实**: 骨架本身就是一份可渲染的完整报告
+    (复盘页已有的降级横幅), 后台作业成功就覆盖成 LLM 文案, 失败/超时也是
+    ``review_status="ready"`` —— 学员永远不会拿到空白。
+
+    返回的 :class:`ReviewSkeleton` 里带着**已裁剪**的 prompt 输入 (``facts``), 落进
+    ``doc["review_facts"]`` 供后台作业复用: 骨架阶段已经把转写列表裁到 12 条 x 200 字,
+    重算一遍既费代码又要再查一次 step 行。
     """
     dims = aggregate_step_dims(steps)
     subs = aggregate_pronunciation_subs(steps)
@@ -868,34 +1043,20 @@ async def build_review_report(
         "task_count": len(checklist),
         "utterances": utterances,
         "briefing_passed": bool(briefing_passed),
+        "briefing_skipped": int(briefing_skipped),
+        # 跳过也算"走完清单" —— 门禁 (_reconcile_stage) 认 passed|skipped, 文案口径必须
+        # 一致, 否则一次正当跳过就把"清单走完了"这句话静默吃掉了 (§2.6 次因二)。
+        "briefing_done": bool(briefing_passed) or int(briefing_skipped) > 0,
         "open_required": [view.desc_cn for view in checklist if view.required and not view.done],
+        "evidence_note_cn": _dim_evidence_note(dims),
     }
+    facts = _review_facts(facts)
+    highlights, improvements = deterministic_review(facts)
     delta = ability_delta(
         dict(ability_before) if ability_before else None,
         dict(ability_after) if ability_after else None,
     )
-    source: GradeSource
-    llm_source: str | None
-    try:
-        judgement = await _judge(
-            ReviewTextJudgement,
-            review_prompt(course, _review_facts(facts)),
-            max_tokens=REVIEW_MAX_TOKENS,
-            hard_budget_s=REVIEW_LLM_BUDGET_S,
-        )
-        highlights = [_truncate(item, 300) for item in judgement.highlights if item.strip()][:3]
-        improvements = [_truncate(item, 300) for item in judgement.improvements if item.strip()][:3]
-        if not highlights and not improvements:
-            raise LlmUnavailableError("复盘文案为空")
-        source, llm_source = "llm", _resolve_judge_model()
-    except LlmUnavailableError as exc:
-        # _judge 自身已消化解析/校验错误 + 超硬预算; 这里同时兜 "合法 JSON 但两套文案全空".
-        fallback_high, fallback_improve = deterministic_review(facts)
-        highlights, improvements = fallback_high, fallback_improve
-        source, llm_source = "heuristic", "stub"
-        logger.warning("review copy degraded to deterministic | reason={}", exc)
-    overall = mean_of(list(dims.values()))
-    return ReviewReport(
+    report = ReviewReport(
         session_id=session_id,
         scene_id=course.id,
         title=course.title,
@@ -903,28 +1064,21 @@ async def build_review_report(
         auto_finished=bool(mission.get("auto_finished")),
         turn_count=int(mission.get("turn_count") or 0),
         max_turns=int(mission.get("max_turns") or course.mission.max_turns),
-        overall=overall,
+        overall=mean_of(list(dims.values())),
         dims=dims,
         pronunciation_subs=subs,
+        evidence_note_cn=str(facts["evidence_note_cn"]),
         highlights=highlights,
         improvements=improvements,
         checklist=checklist,
         transcript_pairs=collect_transcript_pairs({"mission": dict(mission)}, steps),
-        new_tokens=collect_new_tokens(course, utterances),
+        new_tokens=collect_new_tokens(course, utterances),  # 语料用未裁剪的那份
         ability_delta=delta,
         hints_used=hints_used,
-        source=source,
-        llm_source=llm_source,
+        source="heuristic",
+        llm_source="stub",
     )
-
-
-def _review_facts(facts: Mapping[str, Any]) -> Mapping[str, Any]:
-    """喂给 LLM 前收敛一下列表 (prompt 大小可控)."""
-    clipped = dict(facts)
-    clipped["utterances"] = [
-        _truncate(str(item), 200) for item in cast("list[str]", facts.get("utterances") or [])[:12]
-    ]
-    return clipped
+    return ReviewSkeleton(report=report, facts=facts)
 
 
 __all__ = sorted(
@@ -934,7 +1088,9 @@ __all__ = sorted(
         "MissionTurnJudgement",
         "Polish",
         "REVIEW_MAX_TOKENS",
+        "ReviewCopy",
         "ReviewReport",
+        "ReviewSkeleton",
         "TASK_HEURISTIC_COVERAGE",
         "TURN_MAX_TOKENS",
         "TranscriptPair",
@@ -943,6 +1099,7 @@ __all__ = sorted(
         "all_required_done",
         "anchored_pronunciation",
         "build_review_report",
+        "build_review_skeleton",
         "coerce_polish",
         "coerce_score",
         "collect_new_tokens",
@@ -951,9 +1108,11 @@ __all__ = sorted(
         "fallback_turn",
         "initial_task_states",
         "judge_turn",
+        "merge_review_copy",
         "merge_task_progress",
         "polish_prompt",
         "polish_text",
+        "review_copy",
         "task_views",
         "turn_ability_events",
         "turn_prompt",

@@ -97,13 +97,13 @@ LLM_MAX_TOKENS = 400
 # 课程生成**故意不在**本契约内: 它是 202 + 轮询的后台作业, 单次调用给 240s
 # (``course_generator.GEN_TIMEOUT_S``), 30s 对它不成立 —— 给它加硬预算等于让骨架段必然降级。
 #
-# 最坏求和 (契约要求 < 30s; 装不下的两行标了 (*) / (**) 并写明归属, 由
+# 最坏求和 (契约要求 < 30s; 装不下的一行标了 (*) 并写明归属, 由
 # tests/test_latency_budget.py 钉死这张表):
 #   POST /sessions/{id}/step      文本回答: 0          + STEP 20           = 20
 #   POST /sessions/{id}/step      音频回答: IAT <=13 (服务层) + STEP 20    = 33  见 (*)
 #   POST /sessions/{id}/mission                  iat 8 + max(ise 8, llm 15) = 23
-#   POST /sessions/{id}/finish-mission           DB    + REVIEW 20         = 20
-#   POST /mission 聊到轮次上限自动收工              23    + REVIEW 20         = 43  见 (**)
+#   POST /sessions/{id}/finish-mission           DB + 数值骨架 (零 LLM)     = DB  见 (§P6)
+#   POST /mission 聊到轮次上限自动收工              23 + 数值骨架 (零 LLM)    = 23  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10
 #   POST /assessment/{id}/complete             DB    + ASSESSMENT 20      = 20
 #
@@ -112,19 +112,31 @@ LLM_MAX_TOKENS = 400
 #     没有。常规 (IAT <=8s) 下 28s 仍在 30s 内, 只有 IAT 挂死的角落会吃穿余量 —— 闭合
 #     办法是把 ``grade_step`` 里的转写也包进 ``IAT_TURN_BUDGET_S`` (讯飞侧的活, 不是
 #     LLM 预算, 故不在本次改动里)。
-# (**) 自动收工**装不进** 30s: 那一轮的判分已经花掉 23s, 再挂一次总评 LLM 是结构性的
-#     (而"聊到轮次上限自然收工"恰是每日练习结束最常发生的时刻)。治法是把它异步化
-#     (202 + ``review_status`` 轮询, 计划 §P6), 不是继续压预算 —— 压到 7s 以下只会让
-#     总评每次都退化成确定性文案。本阶段先给它封顶 (125s → 43s), P6 再消除这一段。
+# (§P6) 两条收工路径**不再在请求里调总评 LLM**: ``finish-mission`` 改 202 + 数值骨架,
+#     文案由后台作业 ``run_review_copy_job`` 慢慢写 (``REVIEW_COPY_JOB_BUDGET_S``)。
+#     曾经"到轮次上限自动收工"是 23 + 20 = 43s, 结构性超出 30s (而聊到轮次上限恰是每日
+#     练习结束最常发生的时刻); 压预算救不了它 (压到 7s 以下等于总评每次都退化成确定性
+#     文案), 所以 P5 先封顶 43s, P6 用异步化把这一段整体移出请求。
 #: 文本步判分 (retell / translate / make_sentence; 输出 ``LLM_MAX_TOKENS=400``) 的整调用
 #: 硬预算。坏 JSON 的重试落在同一堵墙里, 装不下即降级为确定性启发式分.
 STEP_LLM_BUDGET_S = 20.0
 
 #: 总评文案 (``mission_engine.REVIEW_MAX_TOKENS=500``) 的硬预算。计划 §P5 建议 45s ——
-#: 那是 **P6 异步化之后**后台作业慢慢写文案的数字; 在 ``finish-mission`` 仍是同步
-#: handler 的今天, 45s 等于把学员报告的超时原样留下 (45 > 30 直接违反上面的契约),
-#: 所以这里取同步能装下的值。P6 落地后请给后台作业另开一个更大的预算, 别抬这个。
+#: 那是 **P6 异步化之后**后台作业慢慢写文案的数字; ``build_review_report`` (同步组合:
+#: 骨架 + 文案, 供离线脚本/测试一次拿全量报告) 里那一次 LLM 调用仍用它封顶, 45 > 30
+#: 会直接把学员报告的超时原样留下。**HTTP 端点已不再调这个同步组合** —— 收工路径走
+#: 下面的 ``REVIEW_COPY_JOB_BUDGET_S``。
 REVIEW_LLM_BUDGET_S = 20.0
+
+#: 后台总评文案作业 (:func:`app.api.v1.course_sessions.run_review_copy_job`) 的硬预算。
+#: 与上面那条的区别是**它在请求之外跑**: 收工已经用 202 + 数值骨架答复了学员, 端点
+#: 早退、行锁早放 (§P6), 所以这里不受 ``30s - 其它 await - 5s`` 那条契约约束, 可以给
+#: 文案足够写完的时间 —— 计划 §P5 的 45s 就是给它的。**别把它塞进任何同步 handler**,
+#: 也别反过来把这里改成 20 (那等于总评文案永远在超时边缘降级)。
+#: 为什么还要封顶而不是 ``hard_budget_s=None``: 作业是 ``asyncio.create_task`` 派生的,
+#: 挂死的 LLM 会留下一条永远停在 ``generating`` 的会话; 封顶 = 最坏 45s 后必落终态,
+#: 轮询与重启兜底 (``course_sessions.REVIEW_REDISPATCH_AFTER_S``) 才有确定的口径。
+REVIEW_COPY_JOB_BUDGET_S = 45.0
 
 #: 独立润色 (``POST /polish``; 单句 + 300 token) 的硬预算: 输出最短, 等待也该最短。
 #: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。
@@ -475,10 +487,17 @@ async def _judge(
     ``hard_budget_s``: **整个调用 (含坏 JSON 的重试那一次) 的墙钟硬预算**, 同步 HTTP
     路径必填 —— 取值与求和见模块顶部的硬预算块. 用 ``asyncio.wait_for`` 封顶, 并且
     **在这里**就把 ``TimeoutError`` 翻成 ``LlmUnavailableError``: 四个同步调用点
-    (``_graded_text_step`` / ``mission_engine.build_review_report`` /
-    ``mission_engine.polish_text`` / ``assessment_engine.judge_level``) 只
-    ``except LlmUnavailableError``, 让裸 ``TimeoutError`` 逃逸会把"降级"变成 500,
-    比不封顶更糟. 反过来, 只把 ``timeout=`` 调小是没用的: 那只是单次尝试的上限.
+    (``_graded_text_step`` / ``mission_engine.review_copy`` 的同步入口
+    ``build_review_report`` / ``mission_engine.polish_text`` /
+    ``assessment_engine.judge_level``) 只 ``except LlmUnavailableError``, 让裸
+    ``TimeoutError`` 逃逸会把"降级"变成 500, 比不封顶更糟. 反过来, 只把 ``timeout=``
+    调小是没用的: 那只是单次尝试的上限.
+
+    ``mission_engine.review_copy`` 是**唯一两处共用一个 LLM 入口**的先例 (同步组合
+    ``build_review_report`` 给 ``REVIEW_LLM_BUDGET_S``, 后台作业
+    ``run_review_copy_job`` 给 ``REVIEW_COPY_JOB_BUDGET_S``): 该函数自己**不给默认预算**,
+    预算必须由调用点报出来, 上面那条 AST 扫描 + ``tests/test_latency_budget.py`` 一起
+    守着. 转换点仍然只有这里一处, 所以两条路的降级分支写法完全一样.
 
     P3 起该模式被 mission/polish/dialogue 复用 (见 ``app.services.mission_engine``):
     ``max_tokens`` 给更大的综合 JSON 留预算; ``model`` **只允许纯文本用途**

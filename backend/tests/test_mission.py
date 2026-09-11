@@ -31,6 +31,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1 import course_sessions
 from app.config import settings
 from app.main import app
 from app.models.db import AbilityEvent, AbilityProfile, AnnotatedDiff, History, PracticeStep
@@ -108,6 +109,41 @@ async def _mission(client: AsyncClient, sid: str, payload: dict[str, Any]) -> An
     return await client.post(f"/api/v1/sessions/{sid}/mission", json=body)
 
 
+async def _finish(client: AsyncClient, sid: str) -> dict[str, Any]:
+    """主动收工 —— §P6 之后是 **202** + 确定性数值骨架, AI 文案改由后台作业补。
+
+    这里的断言就是新契约本身: 请求**不再**同步等 LLM (那正是学员看到 "timeout"
+    的原因), 所以响应里没有 ``report``, 只有一盏 ``review_status="generating"`` 的灯。
+    """
+    res = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
+    assert res.status_code == 202, res.text
+    body = res.json()
+    assert body["stage"] == "review" and body["status"] == "completed"
+    assert body["review_status"] == "generating"
+    assert "report" not in body
+    return body
+
+
+async def _report(client: AsyncClient, sid: str, *, run_copy_job: bool = True) -> dict[str, Any]:
+    """取复盘报告: 先驱动后台文案作业, 再走客户端真正会走的 ``GET /sessions/{id}``。
+
+    测试直接 ``await run_review_copy_job`` 而不是让它真 ``create_task`` —— conftest 的
+    ``_no_detached_review_jobs`` 已把 spawn 换成 no-op (与 ``test_course_generator``
+    驱动 ``run_generation_job`` 同一手法)。``run_copy_job=False`` 用来看**骨架态**:
+    数值齐全、文案是确定性模板, 这正是 202 返回后学员立刻能读到的那份。
+    """
+    if run_copy_job:
+        await course_sessions.run_review_copy_job(sid)
+    snap = await client.get(f"/api/v1/sessions/{sid}", params={"device_id": DEV})
+    assert snap.status_code == 200, snap.text
+    view = snap.json()
+    if run_copy_job:
+        assert view["review_status"] == "ready", view["review_status"]
+    report = view["review"]
+    assert isinstance(report, dict), report
+    return report
+
+
 # ============================================================ 阶段门禁
 
 
@@ -176,10 +212,8 @@ async def test_mission_loop_clears_tasks_and_finishes_with_report(
     optional_task = next(view for view in second["checklist"] if view["id"] == "t3")
     assert optional_task["required"] is False and optional_task["done"] is False
 
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    assert finish.status_code == 200, finish.text
-    report = finish.json()["report"]
-    assert finish.json()["stage"] == "review" and finish.json()["status"] == "completed"
+    await _finish(client, sid)
+    report = await _report(client, sid)
 
     assert report["cleared"] is True and report["auto_finished"] is False
     assert report["turn_count"] == 2 and report["max_turns"] == 8
@@ -398,8 +432,10 @@ async def test_no_llm_creds_run_the_loop_on_heuristic_task_matching(
     assert off["newly_done"] == []
     second = (await _mission(client, sid, {"text": "How much is that?"})).json()
     assert second["cleared"] is True  # t2 的 hint_en 就是这句话
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    report = finish.json()["report"]
+    await _finish(client, sid)
+    # 无 LLM 凭据: 后台文案作业走确定性降级, 但**照样落 ready** —— 学员永远能读到
+    # 一份报告, 只是复盘页的降级横幅会说明这是模板文案。
+    report = await _report(client, sid)
     assert report["source"] == "heuristic" and report["llm_source"] == "stub"
     assert report["cleared"] is True and report["highlights"] and report["improvements"]
     assert report["ability_delta"]["grammar"] is None
@@ -582,8 +618,9 @@ async def test_hint_marks_next_turn_costs_score_without_judging(
     assert mission_rows[0].annotated_json["costs_score"] is True
     assert mission_rows[1].annotated_json["costs_score"] is False
 
-    finish = await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
-    assert finish.json()["report"]["hints_used"] == 1
+    await _finish(client, sid)
+    # hints_used 是确定性字段, 202 的骨架里就有 (不必等文案作业)。
+    assert (await _report(client, sid, run_copy_job=False))["hints_used"] == 1
 
 
 @pytest.mark.asyncio

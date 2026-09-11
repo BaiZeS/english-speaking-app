@@ -60,6 +60,24 @@ def _hermetic_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(settings, field, default, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_detached_review_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """收工 (202) 不真的 ``create_task`` 派生总评文案作业: 测试自己 ``await`` runner.
+
+    §P6 之后 ``POST /sessions/{id}/finish-mission`` 与到轮次上限的自动收工都会派生一个
+    后台任务。让它真跑起来会在**用例结束、内存 sqlite 被 dispose 之后**仍然去开一个
+    AsyncSession, 于是收到的是 ``no active connection`` 这种和的产品无关的噪声 (踩过一次:
+    报错出现在 teardown 栈里, 看着像数据库坏了)。换成 no-op 之后:
+
+    * 断言"202 派生了作业"的用例: 自己 monkeypatch 本函数记调用 (:func:`_record_spawns`);
+    * 断言作业终态的用例: 直接 ``await course_sessions.run_review_copy_job(sid)``
+      —— 与 ``test_course_generator`` 驱动 ``run_generation_job`` 的同一手法。
+    """
+    from app.api.v1 import course_sessions
+
+    monkeypatch.setattr(course_sessions, "spawn_review_copy_job", lambda session_id: False)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _init_db() -> AsyncIterator[None]:
     """Create all tables in fresh in-memory sqlite for each test."""
