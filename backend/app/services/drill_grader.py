@@ -106,6 +106,8 @@ LLM_MAX_TOKENS = 400
 #   POST /mission 聊到轮次上限自动收工              23 + 数值骨架 (零 LLM)    = 23  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10
 #   POST /assessment/{id}/complete             DB    + ASSESSMENT 20      = 20
+#     (老客户端同步路径; 新客户端 async_judge=true -> 202 + 后台作业
+#      ASSESSMENT_JUDGE_JOB_BUDGET_S=120, 不在本契约内, 见 §P6 同款说明)
 #
 # (*) 音频步的 IAT 只有**服务层**自己的 8s (``settings.xunfei_iat_timeout_s``) 加
 #     ``open_timeout=5s``; mission 轮在调用点又包了一层 ``IAT_TURN_BUDGET_S``, 这一步
@@ -144,8 +146,16 @@ POLISH_BUDGET_S = 10.0
 
 #: CEFR 判级 (``POST /assessment/{id}/complete``; 一次批量 7 题, 600 token) 的硬预算。
 #: 逐题判会被 "7 题 x 20s" 拖爆, 本来就是一次批量调用; 超时 = 诚实空态 (cefr=null,
-#: 零画像写入), 不是 500。
+#: 零画像写入), 不是 500。仅对**不传 ``async_judge`` 的老客户端**同步路径生效 ——
+#: 新客户端走下面的后台作业预算。
 ASSESSMENT_JUDGE_BUDGET_S = 20.0
+
+#: CEFR 判级**后台作业** (:func:`app.api.v1.assessment.run_assessment_judge_job`) 的硬预算。
+#: 关系与 REVIEW_* 那对完全一样: 作业在请求之外跑 (complete 已用 202 + "judging" 答复),
+#: 不受 30s readTimeout 契约约束, 但必须封顶 —— 挂死的 LLM 不能把 attempt 永远留在
+#: ``judging``。生产实锤 (2026-09): 免费额度限速把批量判级两次都在 20s 处撞墙 → stub,
+#: 120s 给限速下的慢回复留足空间。**别把它塞进任何同步 handler**。
+ASSESSMENT_JUDGE_JOB_BUDGET_S = 120.0
 
 #: 文本型 drill 答案的取材上限 (手敲英文或 IAT 转写).
 ANSWER_MAX_CHARS = 2000

@@ -78,6 +78,18 @@ def _no_detached_review_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(course_sessions, "spawn_review_copy_job", lambda session_id: False)
 
 
+@pytest.fixture(autouse=True)
+def _no_detached_judge_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """判级 (202) 不真的 ``create_task`` 派作业: 口径同上面的总评作业替身.
+
+    * 断言"202 派生了判级作业"的用例: 自己 monkeypatch 记调用;
+    * 断言判级终态的用例: 直接 ``await assessment.run_assessment_judge_job(attempt_id)``。
+    """
+    from app.api.v1 import assessment
+
+    monkeypatch.setattr(assessment, "spawn_assessment_judge_job", lambda attempt_id: False)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _init_db() -> AsyncIterator[None]:
     """Create all tables in fresh in-memory sqlite for each test."""

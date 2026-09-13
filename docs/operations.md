@@ -166,7 +166,8 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 | `REVIEW_LLM_BUDGET_S` | 20.0 s | **同步组合** `build_review_report` | **HTTP 端点已不再调它**（只剩脚本/测试）。计划 §P5 建议的 45s 只在"文案不在请求里"时成立 |
 | `REVIEW_COPY_JOB_BUDGET_S` | 45.0 s | 后台总评文案作业 `run_review_copy_job` | **故意大于 30s**：收工已用 202 + 数值骨架答复，没人在 socket 上等它。但仍必须封顶 —— 挂死的 LLM 会让会话永远停在 `generating`。**别把它塞进任何同步 handler，也别反过来把 45 改成 20**（那等于总评文案永远在超时边缘降级）|
 | `POLISH_BUDGET_S` | 10.0 s | `POST /polish` | 润色**没有**确定性降级（规则改写容易改错意思），超时 = 诚实返回 `polish=null`，不是 500 |
-| `ASSESSMENT_JUDGE_BUDGET_S` | 20.0 s | `POST /assessment/{id}/complete`（7 题**一次**批量调用）| 逐题判会被 7×20s 拖爆；超时 = 诚实空态（`cefr=null`，零画像写入）|
+| `ASSESSMENT_JUDGE_BUDGET_S` | 20.0 s | `POST /assessment/{id}/complete` **同步路径**（7 题**一次**批量调用；仅老客户端/不传 `async_judge`）| 逐题判会被 7×20s 拖爆；超时 = 诚实空态（`cefr=null`，零画像写入）|
+| `ASSESSMENT_JUDGE_JOB_BUDGET_S` | 120.0 s | 后台判级作业 `run_assessment_judge_job`（v2.2.2 起：新客户端 `async_judge=true` → 202 + 轮询 `GET /assessment/{id}/result`）| 与 `REVIEW_COPY_JOB_BUDGET_S` 同款：在请求之外跑，**故意大于 30s**，但仍必须封顶——挂死的 LLM 会把 attempt 永远留在 `judging`。动机是生产实锤：免费额度限速把同步判级两次都在 20s 撞墙（stub 又被幂等回放固化，学员只见发音维）。stub 结果可经新客户端「重新判级」翻案；日志关键字 `assessment judging accepted` / `assessment judge job published` / `lost the race` |
 | `ISE_TURN_BUDGET_S` / `IAT_TURN_BUDGET_S` / `LLM_TURN_BUDGET_S` | 8 / 8 / 15 s | 实战语音轮（`course_sessions.py`）| 契约的**另一半**，与上表同一次求和；改任何一边都要重算 |
 | `REVIEW_REDISPATCH_AFTER_S` | 45 × 2 = **90 s** | 重启兜底水位 | `GET /sessions/{id}` 读到 `generating` 且快照老过 90s 就就地**幂等重派**（`asyncio.create_task` 不持久）。取 2 倍是因为单 `_judge` 最坏 ≈ 40s（两次 20s 尝试）+ 排队/并发挤占，水位低于一整个周期会把**还在跑**的作业判死再烧一次 LLM |
 | `GEN_TIMEOUT_S` | 240 s/段 | 整课生成 | **故意在本契约之外**：那是 202 + 轮询的后台作业，给它加 30s 硬预算 = 骨架段必然降级。豁免在测试里是**显式**的（`ASYNC_JOB_MODULES`），不是漏网 |

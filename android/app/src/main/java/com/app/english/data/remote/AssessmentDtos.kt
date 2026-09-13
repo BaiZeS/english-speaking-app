@@ -58,8 +58,16 @@ data class AssessmentAnswerResponseDto(
     val transcript: String = ""
 )
 
+/**
+ * `POST /assessment/{attempt_id}/complete` 的请求(`CompleteRequest`)。
+ * `async_judge=true` = 判级交给后台作业, 端点立即 202; 老后端忽略该字段走同步路径
+ * (直接回完整结果), 两种响应都落在 [AssessmentCompleteResponseDto] 里按 status 区分。
+ */
 @Serializable
-data class AssessmentCompleteRequestDto(@SerialName("device_id") val deviceId: String)
+data class AssessmentCompleteRequestDto(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("async_judge") val asyncJudge: Boolean = false
+)
 
 /** 测评雷达的一轴(`RadarAxis`); score=null = 该维没有可信证据。 */
 @Serializable

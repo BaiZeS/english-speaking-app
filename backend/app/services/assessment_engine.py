@@ -164,20 +164,27 @@ def judge_messages(facts: list[dict[str, str]], pronunciation_note: str) -> list
 
 
 async def judge_level(
-    facts: list[dict[str, str]], pronunciation_note: str
+    facts: list[dict[str, str]],
+    pronunciation_note: str,
+    *,
+    hard_budget_s: float | None = None,
 ) -> tuple[Judgement, str] | None:
     """一次批量判级; 返回 ``(judgement, llm_source)``; LLM 不可用 -> ``None`` (诚实空态).
 
-    ``ASSESSMENT_JUDGE_BUDGET_S``: 整调用墙钟硬预算 —— ``POST /assessment/{id}/complete``
-    是同步 handler (30s OkHttp readTimeout), 超预算翻成 ``LlmUnavailableError`` 后走
-    下面既有分支: 返回 ``None`` → 端点给"CEFR 待定 / 零画像写入"的诚实空态, 不是 500。
+    ``hard_budget_s``: 整调用墙钟硬预算; 缺省 = 同步 handler 的
+    ``ASSESSMENT_JUDGE_BUDGET_S`` (30s OkHttp readTimeout 契约), 后台判级作业
+    (:func:`app.api.v1.assessment.run_assessment_judge_job`) 传
+    ``ASSESSMENT_JUDGE_JOB_BUDGET_S`` 覆写 —— 作业在请求之外跑, 不给 socket 交差。
+    超预算翻成 ``LlmUnavailableError`` 后返回 ``None`` → 调用方给"CEFR 待定 /
+    零画像写入"的诚实空态, 不是 500。
     """
+    budget = ASSESSMENT_JUDGE_BUDGET_S if hard_budget_s is None else hard_budget_s
     try:
         judgement = await _judge(
             Judgement,
             judge_messages(facts, pronunciation_note),
             max_tokens=JUDGE_MAX_TOKENS,
-            hard_budget_s=ASSESSMENT_JUDGE_BUDGET_S,
+            hard_budget_s=budget,
         )
     except LlmUnavailableError as exc:
         logger.warning("assessment judging unavailable | reason=%s", exc)

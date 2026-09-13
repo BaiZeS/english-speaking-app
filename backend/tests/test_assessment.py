@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -502,3 +503,250 @@ async def test_bank_missing_questions_key_degrades_to_empty(
     (tmp_path / "assessment" / "bank.json").write_text('{"version": 1}', encoding="utf-8")
     monkeypatch.setattr(assessment_engine, "_BANK_ROOT", tmp_path)
     assert assessment_engine.load_bank() == []
+
+
+# ============================================================ async 判级 (202 + 后台作业)
+#
+# 生产事故 (2026-09): 免费额度限速把同步判级两次在 20s 撞墙 -> stub, 幂等回放又把
+# stub 固化, 学员只看得到发音维。async_judge 路径把判级挪进后台作业 (120s 预算),
+# stub 结果允许重判。这里锁: 202 契约 / 作业终态必收敛 / 写入门与同步路径一致 /
+# 重复驱动与并发双跑都不双计画像。
+
+
+class _JudgeSpawnRecorder:
+    """把 ``spawn_assessment_judge_job`` 换成**只记账不真开任务**的替身 (覆盖 conftest 的 no-op)."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def __call__(self, attempt_id: str) -> bool:
+        self.calls.append(attempt_id)
+        return True
+
+
+async def _complete_async(client: AsyncClient, attempt_id: str) -> Any:
+    return await client.post(
+        f"/api/v1/assessment/{attempt_id}/complete",
+        json={"device_id": DEV, "async_judge": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_async_returns_pending_and_spawns_job(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """async_judge=true: 立即 202 judging + 派作业; 判级未发生, LLM 未调、画像零写入."""
+    from app.api.v1 import assessment
+
+    fake = install_llm(monkeypatch, [judgement_json()])
+    recorder = _JudgeSpawnRecorder()
+    monkeypatch.setattr(assessment, "spawn_assessment_judge_job", recorder)
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+
+    res = await _complete_async(client, attempt_id)
+    assert res.status_code == 202, res.text
+    assert res.json() == {"attempt_id": attempt_id, "status": "judging"}
+    assert recorder.calls == [attempt_id]
+
+    row = (
+        await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one()
+    assert row.status == "judging" and row.result is None
+    assert fake.requests == []  # 判级还没发生 (作业由测试显式驱动)
+    assert (await db.execute(select(func.count()).select_from(AbilityEvent))).scalar_one() == 0
+    assert (await db.execute(select(func.count()).select_from(AbilityProfile))).scalar_one() == 0
+
+    # judging 期间答案被锁住 (answer 只放行 running)
+    locked = await _answer(client, attempt_id, question_no=5, text="late")
+    assert locked.status_code == 409 and locked.json()["error"]["code"] == "ATTEMPT_NOT_ACTIVE"
+
+    # 在途幂等: 再点 complete (判级还没完) -> 仍是 202 pending, 不派第二个作业
+    recorder.calls.clear()
+    again = await _complete_async(client, attempt_id)
+    assert again.status_code == 202 and again.json()["status"] == "judging"
+    assert recorder.calls == []  # 在飞门挡住, 不重复派工
+
+
+@pytest.mark.asyncio
+async def test_complete_async_requires_answers(client: AsyncClient) -> None:
+    attempt_id = await _start(client)
+    res = await _complete_async(client, attempt_id)
+    assert res.status_code == 400 and res.json()["error"]["code"] == "ASSESSMENT_NO_ANSWERS"
+
+
+@pytest.mark.asyncio
+async def test_judge_job_completes_and_get_result_replays(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """作业成功: 画像/事件/cefr_level 与同步路径同款; GET result 回放同一份结果."""
+    from app.api.v1 import assessment
+
+    fake = install_llm(monkeypatch, [judgement_json(grammar=76.0, vocabulary=69.0, fluency=61.0)])
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+    res = await _complete_async(client, attempt_id)
+    assert res.status_code == 202
+
+    await assessment.run_assessment_judge_job(attempt_id)
+
+    row = (
+        await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one()
+    assert row.status == "completed" and row.result["source"] == "llm"
+    assert len(fake.requests) == 1
+
+    # 轮询收敛点: completed -> 200 回放
+    got = await client.get(
+        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
+    )
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["status"] == "completed" and body["source"] == "llm" and body["cefr"] == "B1"
+    assert body["dims"]["grammar"] == 76.0
+
+    # 写入门控与同步路径一致: 事件流水 + 画像 + 权威徽章
+    events = (
+        (
+            await db.execute(
+                select(AbilityEvent).where(AbilityEvent.user_id == await _uid_of(db, DEV))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert sorted(e.dimension for e in events) == ["fluency", "grammar", "vocabulary"]
+    assert all(e.source_kind == "assessment" and e.weight == 1.0 for e in events)
+    profile = (await db.execute(select(AbilityProfile))).scalar_one()
+    assert profile.grammar == 76.0
+    assert profile.assessment_cefr == "B1" and profile.band_locked is True
+
+    # 归属: 别人的 403, 不存在的 404
+    forbidden = await client.get(
+        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": OTHER}
+    )
+    assert forbidden.status_code == 403
+    missing = await client.get("/api/v1/assessment/no-such/result", params={"device_id": DEV})
+    assert missing.status_code == 404
+
+    # 幂等: 判完后 async complete 再点 -> 回放真结果 (不再判)
+    again = await _complete_async(client, attempt_id)
+    assert again.status_code == 200 and again.json()["cefr"] == "B1"
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_result_on_running_attempt_is_conflict(client: AsyncClient) -> None:
+    """complete 从未成功提交过 -> 轮询没有意义, 409 (客户端按可重试失败处理)."""
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+    res = await client.get(
+        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
+    )
+    assert res.status_code == 409
+    assert res.json()["error"]["code"] == "ASSESSMENT_NOT_JUDGING"
+
+
+@pytest.mark.asyncio
+async def test_judge_job_llm_failure_lands_stub_terminal_then_rejudge(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """作业路径 LLM 失败 -> stub 终态 (零写入) 收敛轮询; stub 可再触发重判翻案."""
+    from app.api.v1 import assessment
+
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+    await _complete_async(client, attempt_id)
+    await assessment.run_assessment_judge_job(attempt_id)
+
+    row = (
+        await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one()
+    assert row.status == "completed" and row.result["source"] == "stub"
+    assert (await db.execute(select(func.count()).select_from(AbilityEvent))).scalar_one() == 0
+    assert (await db.execute(select(func.count()).select_from(AbilityProfile))).scalar_one() == 0
+    got = await client.get(
+        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
+    )
+    assert got.status_code == 200 and got.json()["source"] == "stub"
+    assert "未配置" in got.json()["rationale_cn"]
+
+    # 重判入口: stub 存量 + async -> judging -> 作业 -> 真判级 (学员不用重做题)
+    install_llm(monkeypatch, [judgement_json()])
+    res = await _complete_async(client, attempt_id)
+    assert res.status_code == 202
+    await assessment.run_assessment_judge_job(attempt_id)
+
+    got2 = await client.get(
+        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
+    )
+    assert got2.status_code == 200 and got2.json()["source"] == "llm"
+    # 画像只写过这一次 (stub 阶段零写入)
+    assert sorted(
+        e.dimension for e in (await db.execute(select(AbilityEvent))).scalars().all()
+    ) == ["fluency", "grammar", "vocabulary"]
+
+
+@pytest.mark.asyncio
+async def test_judge_job_redispatch_after_completion_skips(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重复驱动作业 (重启重派撞上已收卷) 只判一次: 状态门跳过, 事件不双计."""
+    from app.api.v1 import assessment
+
+    fake = install_llm(monkeypatch, [judgement_json()])
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+    await _complete_async(client, attempt_id)
+
+    await assessment.run_assessment_judge_job(attempt_id)
+    await assessment.run_assessment_judge_job(attempt_id)  # 第二次 = GET 重派到的孤儿
+
+    assert len(fake.requests) == 1
+    assert (await db.execute(select(func.count()).select_from(AbilityEvent))).scalar_one() == 3
+
+
+@pytest.mark.asyncio
+async def test_judge_commit_gate_discards_loser_events(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """条件写回门: 赢家先收卷后, 输家带着未落库事件来写 -> rowcount=0 -> 全部回滚.
+
+    生产是两个 Postgres 连接的真并发; 内存 sqlite (StaticPool 单连接) 跑不了并发
+    会话, 所以这里用"赢家已落终态 + 输家在途事件"的时序等价物钉门语义。
+    """
+    from app.api.v1 import assessment
+    from app.services.drill_grader import AbilityEvidence
+    from app.services.ability_engine import record_step_evidence
+
+    install_llm(monkeypatch, [judgement_json()])
+    attempt_id = await _start(client)
+    await _answer(client, attempt_id, question_no=4)
+    await _complete_async(client, attempt_id)  # -> judging
+
+    # 赢家: 直接把终态落库 (等价于另一作业已 commit)。
+    await db.execute(
+        assessment.update(AssessmentAttempt)
+        .where(AssessmentAttempt.id == attempt_id)
+        .values(status="completed", finished_at=datetime.now(UTC), result={"winner": True})
+    )
+    await db.commit()
+
+    # 输家: 同一事务里先记事件 (未 commit), 再走条件写回。
+    user_id = await _uid_of(db, DEV)
+    await record_step_evidence(
+        db,
+        user_id=user_id,
+        step_id=f"assessment:{attempt_id[:20]}",
+        evidence=[AbilityEvidence(dimension="grammar", score=70.0, source="assessment", weight=1.0)],
+        alpha=assessment_engine.ASSESSMENT_ALPHA,
+    )
+    loser = assessment.CompleteResponse(attempt_id=attempt_id, source="llm")
+    await assessment._commit_judged_result(db, attempt_id, loser)
+
+    # 输家的事件随回滚作废, attempt.result 还是赢家的。
+    assert (await db.execute(select(func.count()).select_from(AbilityEvent))).scalar_one() == 0
+    row = (
+        await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one()
+    assert row.result == {"winner": True} and row.status == "completed"

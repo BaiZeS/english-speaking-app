@@ -1,5 +1,6 @@
 package com.app.english.ui.assessment
 
+import com.app.english.domain.model.AbilityProfile
 import com.app.english.domain.model.AssessmentQuestion
 import com.app.english.domain.model.abilityDimensionLabel
 import kotlin.math.ceil
@@ -133,43 +134,78 @@ fun estimatedAssessmentMinutes(questions: List<AssessmentQuestion>): Int =
 data class DimensionAdvice(
     val dimension: String,
     val label: String,
+    /** 本次判级的分(null = 判级没给出); 界面渲染数字用 [displayScore]。 */
     val score: Double?,
-    val adviceCn: String
-)
+    val adviceCn: String,
+    /** 画像兜底分: 仅 stub 且画像该维有证据时非空(来自日常练习, 非本次测评)。 */
+    val profileScore: Double? = null
+) {
+    val displayScore: Double? get() = score ?: profileScore
+
+    val isFromProfile: Boolean get() = score == null && profileScore != null
+}
 
 /**
  * 四维建议(对照「能力测评截图」的文案风格: 一维一句, 先说现状再给动作)。
- * `score = null` 是诚实空态(该维本轮没有可信证据), 不编建议。
+ *
+ * `score = null` 是诚实空态(该维本轮没有可信证据), 不编建议; 但文案按成因分两路:
+ * - `isStub = true`(AI 判级没完成): 说「判级未完成 + 可重新判级」—— 缺的是判级
+ *   LLM 可用度, 不是练习, 老文案"补一次练习或测评就会点亮"在这里误导学员;
+ *   此时若画像该维有证据, 用画像分兜底展示并注明来源。
+ * - `isStub = false`(真判级里该维无证据, 如发音没录真音): 沿用"补一次练习"口径。
  */
-fun assessmentDimensionAdvice(dims: Map<String, Double?>): List<DimensionAdvice> =
+fun assessmentDimensionAdvice(
+    dims: Map<String, Double?>,
+    isStub: Boolean = false,
+    profile: AbilityProfile? = null
+): List<DimensionAdvice> =
     listOf("pronunciation", "grammar", "vocabulary", "fluency").map { dimension ->
         val score = dims[dimension]
+        val profileScore = score ?: profile
+            ?.takeIf { isStub && it.sampleCount(dimension) > 0 }
+            ?.dimension(dimension)
         DimensionAdvice(
             dimension = dimension,
             label = abilityDimensionLabel(dimension),
             score = score,
-            adviceCn = dimensionAdviceCn(dimension, score)
+            adviceCn = dimensionAdviceCn(dimension, score, isStub, profileScore),
+            profileScore = profileScore.takeIf { score == null }
         )
     }
 
-private fun dimensionAdviceCn(dimension: String, score: Double?): String = when {
-    score == null -> when (dimension) {
-        "pronunciation" -> "本轮没有拿到发音分(跟读题要录真音)。开麦完成跟读, 发音维就有证据了。"
-        else -> "本轮没有拿到这一维的可信证据, 补一次练习或测评就会点亮。"
-    }
-    dimension == "pronunciation" -> when {
+private fun dimensionAdviceCn(
+    dimension: String,
+    score: Double?,
+    isStub: Boolean,
+    profileScore: Double?
+): String = when {
+    score == null && profileScore != null ->
+        "本次测评未判出该维; ${profileScore.toInt()} 分来自日常练习画像, 仅供参考。"
+    score == null -> nullScoreAdviceCn(dimension, isStub)
+    else -> scoredAdviceCn(dimension, score)
+}
+
+/** 没有判级分时的空态文案: stub(判级没完成)与真缺证据(如发音没录真音)分开说。 */
+private fun nullScoreAdviceCn(dimension: String, isStub: Boolean): String = when {
+    isStub -> "AI 判级未完成, 本次没有这一维的分数; 可以点「重新判级」或稍后再来。"
+    dimension == "pronunciation" -> "本轮没有拿到发音分(跟读题要录真音)。开麦完成跟读, 发音维就有证据了。"
+    else -> "本轮没有拿到这一维的可信证据, 补一次练习或测评就会点亮。"
+}
+
+private fun scoredAdviceCn(dimension: String, score: Double): String = when (dimension) {
+    "pronunciation" -> when {
         score >= 85 -> "发音很扎实, 注意重音与连读细节就能更上一层。"
         score >= 70 -> "发音清晰。挑几篇课文做影子跟读, 磨平个别吞音。"
         score >= 50 -> "发音有基础。每天 5 分钟跟读, 先求准再求快。"
         else -> "发音还在起步, 从慢速课文跟读开始, 一句一句过。"
     }
-    dimension == "grammar" -> when {
+    "grammar" -> when {
         score >= 85 -> "语法功底扎实, 时态与长句都稳, 可以挑战更高级的场景课。"
         score >= 70 -> "语法整体正确, 留意三单、时态这类小错误。"
         score >= 50 -> "基本句型没问题, 复杂从句还会出错, 复盘时多看润色对照。"
         else -> "语法错误较多, 先把课文句型练熟, 再做造句练习。"
     }
-    dimension == "vocabulary" -> when {
+    "vocabulary" -> when {
         score >= 85 -> "词汇量大而且用得准, 试试同义替换升级表达。"
         score >= 70 -> "常用词够用, 每天积累几个新说法收进表达库。"
         score >= 50 -> "核心词汇还行, 卡壳时换个简单说法, 别停下。"

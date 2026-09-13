@@ -30,8 +30,9 @@ import timber.log.Timber
 
 /**
  * 结果页与做题页之间的一次性交接(T7 的 SelectedHistoryHolder 同款做法):
- * 判级结果是 `/complete` 的一次性响应, 没有按 attempt 读回的 GET 端点, 用单例
- * holder 搬运; holder 为空时结果页自读 `GET /ability` 兜底(判级已写入画像)。
+ * 判级结果是 `/complete` 的一次性响应, 首屏数据经单例 holder 搬运(异步判级下
+ * 也可经 `GET /assessment/{id}/result` 读回, 但 holder 仍是零延迟的首选路径);
+ * holder 为空时结果页自读 `GET /ability` 兜底(判级已写入画像)。
  */
 @Singleton
 class AssessmentResultHolder @Inject constructor() {
@@ -214,13 +215,24 @@ class AssessmentViewModel @Inject constructor(
         }
     }
 
-    /** 收卷判级(分钟级 LLM 调用, 界面挂 spinner); 幂等, 失败可重试。 */
+    /** 收卷判级: 202 在途就轮询 GET result 到终态; 幂等, 失败可重试。 */
     fun complete() {
         if (attemptId.isEmpty()) return
         viewModelScope.launch {
             _flow.update { reduceAssessment(it, AssessmentEvent.CompleteStarted) }
             try {
-                val judgement = assessmentRepository.complete(attemptId)
+                val judgement = pollJudgeResult(
+                    assessmentRepository,
+                    attemptId,
+                    assessmentRepository.complete(attemptId)
+                )
+                if (judgement == null) {
+                    // 轮询超时: 判级作业仍在服务端跑(画像最终会亮), 诚实告知而不是报错。
+                    _flow.update {
+                        reduceAssessment(it, AssessmentEvent.Failed(JUDGE_STILL_RUNNING_CN))
+                    }
+                    return@launch
+                }
                 resultHolder.put(judgement)
                 _flow.update { reduceAssessment(it, AssessmentEvent.Judged) }
             } catch (e: Exception) {
@@ -271,15 +283,18 @@ data class AssessmentResultUiState(
     val isLoading: Boolean = true,
     /** holder 里的一次性判级结果(直接来自 /complete 响应)。 */
     val judgement: AssessmentJudgement? = null,
-    /** 判级写入后的权威画像(含 CEFR 徽章值); 拉不到也不影响主结果展示。 */
+    /** 判级写入后的权威画像(含 CEFR 徽章值); 拉不到不影响主结果, stub 时兜底四维。 */
     val profile: AbilityProfile? = null,
+    /** 「重新判级」在途: 防重入, 按钮置 busy。 */
+    val isPolling: Boolean = false,
     val error: String? = null
 )
 
 @HiltViewModel
 class AssessmentResultViewModel @Inject constructor(
     private val resultHolder: AssessmentResultHolder,
-    private val abilityRepository: AbilityRepository
+    private val abilityRepository: AbilityRepository,
+    private val assessmentRepository: AssessmentRepository
 ) : ViewModel() {
     private val _state = MutableStateFlow(AssessmentResultUiState())
     val state: StateFlow<AssessmentResultUiState> = _state.asStateFlow()
@@ -292,13 +307,47 @@ class AssessmentResultViewModel @Inject constructor(
         viewModelScope.launch {
             val judgement = resultHolder.consume()
             _state.update { it.copy(isLoading = false, judgement = judgement) }
-            // 判级已写画像 -> 顺手刷新权威徽章; 失败不阻塞结果展示。
+            refreshProfile()
+        }
+    }
+
+    /**
+     * 「重新判级」(stub 结果的翻案入口): 重跑 complete + 轮询, 到终态就刷新结果。
+     * 服务端只对 source=stub 的存量允许重判; 防重入靠 [AssessmentResultUiState.isPolling]。
+     */
+    fun rejudge() {
+        val current = _state.value.judgement ?: return
+        if (_state.value.isPolling) return
+        viewModelScope.launch {
+            _state.update { it.copy(isPolling = true, error = null) }
             try {
-                val profile = abilityRepository.getProfile(DEFAULT_ABILITY_DAYS)
-                _state.update { it.copy(profile = profile) }
+                val judgement = pollJudgeResult(
+                    assessmentRepository,
+                    current.attemptId,
+                    assessmentRepository.complete(current.attemptId)
+                )
+                if (judgement == null) {
+                    _state.update { it.copy(isPolling = false, error = JUDGE_STILL_RUNNING_CN) }
+                    return@launch
+                }
+                _state.update { it.copy(isPolling = false, judgement = judgement) }
+                refreshProfile()
             } catch (e: Exception) {
-                Timber.w(e, "ability refresh after assessment failed")
+                Timber.w(e, "assessment rejudge failed")
+                _state.update {
+                    it.copy(isPolling = false, error = e.message ?: "重新判级失败, 请稍后再试")
+                }
             }
+        }
+    }
+
+    private suspend fun refreshProfile() {
+        // 判级已写画像 -> 顺手刷新权威徽章; 失败不阻塞结果展示。
+        try {
+            val profile = abilityRepository.getProfile(DEFAULT_ABILITY_DAYS)
+            _state.update { it.copy(profile = profile) }
+        } catch (e: Exception) {
+            Timber.w(e, "ability refresh after assessment failed")
         }
     }
 }

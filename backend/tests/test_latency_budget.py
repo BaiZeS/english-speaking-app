@@ -497,17 +497,31 @@ def test_budgets_are_named_constants_at_the_call_sites() -> None:
     第 5 项是 §P6 新加的**后台作业**: 它跟四个同步路径共用同一个 :func:`_judge` 预算接缝,
     但报的是另一个数 (``REVIEW_COPY_JOB_BUDGET_S``) —— 两个预算各自对应各自的墙, 所以
     两个调用点都得点名, 谁也不许顺手拿对方的常量。
+
+    判级是同一形状的第二个例子 (2026-09 免费额度限速实锤): ``judge_level`` 的**签名
+    默认值**是同步预算 (None -> 回落常量), 后台作业的调用点报
+    ``ASSESSMENT_JUDGE_JOB_BUDGET_S``。
     """
     for fn, name in (
         (dg._graded_text_step, "STEP_LLM_BUDGET_S"),
         (me.build_review_report, "REVIEW_LLM_BUDGET_S"),
         (me.polish_text, "POLISH_BUDGET_S"),
-        (ae.judge_level, "ASSESSMENT_JUDGE_BUDGET_S"),
         (cs._run_review_copy_job, "REVIEW_COPY_JOB_BUDGET_S"),
     ):
         assert f"hard_budget_s={name}" in inspect.getsource(fn), (
             f"{fn.__name__} 应把硬预算写成 {name} (见 drill_grader 的硬预算块)"
         )
+    # 判级同步预算 = judge_level 的签名默认值; 缺省 None -> 函数体回落到常量。
+    default = inspect.signature(ae.judge_level).parameters["hard_budget_s"].default
+    assert default is None and "ASSESSMENT_JUDGE_BUDGET_S" in inspect.getsource(ae.judge_level), (
+        "judge_level 应以 ASSESSMENT_JUDGE_BUDGET_S 为缺省预算 (见 drill_grader 的硬预算块)"
+    )
+    # 作业调用点必须点名作业预算 (在 app.api.v1.assessment 的作业主体里)。
+    from app.api.v1 import assessment
+
+    assert "hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S" in inspect.getsource(
+        assessment._run_judge_job
+    ), "判级作业应把硬预算写成 ASSESSMENT_JUDGE_JOB_BUDGET_S (见 drill_grader 的硬预算块)"
 
 
 def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
@@ -531,6 +545,7 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
         "finish-mission (202, 只有 DB/聚合)": 0.0,
         "mission 到轮次上限自动收工 (总评已异步)": mission_turn_s,
         "polish": dg.POLISH_BUDGET_S,
+        # 老客户端同步路径; async_judge=true 走 202 + 120s 后台作业 (见 split 测试)。
         "assessment/complete": dg.ASSESSMENT_JUDGE_BUDGET_S,
     }
     for name, worst in fits.items():
@@ -577,6 +592,51 @@ def test_review_budgets_split_sync_composition_from_background_job() -> None:
     )
     # 重派水位必须真的给作业留够跑完的时间, 否则 GET 会在作业还在写时就再派一个。
     assert cs.REVIEW_REDISPATCH_AFTER_S >= dg.REVIEW_COPY_JOB_BUDGET_S
+
+
+def test_assessment_budgets_split_sync_judging_from_background_job() -> None:
+    """判级与总评同款: 同步预算装得进 socket, 作业预算**故意**比同步大且真的被用上.
+
+    生产实锤 (2026-09): 免费额度限速把批量判级两次都在 20s 撞墙 -> stub, 而幂等回放
+    又把 stub 固化。异步化之后: 同步路径只服务老客户端 (行为不变), 新客户端的判级走
+    ``ASSESSMENT_JUDGE_JOB_BUDGET_S`` (120s) —— 若不比同步大, 异步化就没换来任何东西。
+    """
+    from app.api.v1 import assessment
+
+    assert dg.ASSESSMENT_JUDGE_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    assert dg.ASSESSMENT_JUDGE_JOB_BUDGET_S > dg.ASSESSMENT_JUDGE_BUDGET_S, (
+        "判级作业的预算若不比同步路径大, 异步化就没换来任何东西 —— "
+        "限速下的判级还是会在原来的时间内被砍成 stub"
+    )
+    assert "hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S" in inspect.getsource(
+        assessment._run_judge_job
+    )
+
+
+def test_no_assessment_endpoint_waits_on_the_judge_llm() -> None:
+    """机器检查: async 分支里不许出现"同步等判级"的调用 (R2 复发看门狗, 测评版).
+
+    ``complete_assessment`` / ``get_assessment_result`` 只许走 202 + 后台作业;
+    会调 LLM 的 ``judge_level`` 只能出现在 ``_judge_inline`` (老客户端同步路径)
+    与作业主体里。按**函数体**切范围 (作业自己也调 judge_level, 不能按文件切)。
+    """
+    from app.api.v1 import assessment
+
+    src = Path(assessment.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    handlers = {"complete_assessment", "get_assessment_result"}
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name not in handlers:
+            continue
+        for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+            called = getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+            if called == "judge_level":
+                offenders.append(f"{node.name}:{call.lineno} 等了 judge_level()")
+    assert offenders == [], (
+        f"测评 async 入口的函数体里出现了会等判级 LLM 的调用: {offenders}; "
+        "202 -> run_assessment_judge_job, 别把它拉回请求里"
+    )
 
 
 def test_no_endpoint_waits_on_the_review_llm_any_more() -> None:

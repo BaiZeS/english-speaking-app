@@ -60,6 +60,14 @@ fun AssessmentCompleteResponseDto.toDomain(): AssessmentJudgement = AssessmentJu
     cefrLevel = cefrLevel
 )
 
+/**
+ * complete / GET result 的联合形状 -> 领域结果; `status="judging"` (202 判级在途) 返回 null。
+ * 在途响应只有 attempt_id + status, 其余字段全是默认值 —— 不看 status 直接映射会把
+ * "判级中" 误当成一份 stub 结果。
+ */
+fun AssessmentCompleteResponseDto.toJudgementOrNull(): AssessmentJudgement? =
+    if (status == "judging") null else toDomain()
+
 fun AbilityResponseDto.toDomain(): AbilityProfile = AbilityProfile(
     pronunciation = profile["pronunciation"],
     grammar = profile["grammar"],

@@ -1,5 +1,6 @@
 package com.app.english.ui.assessment
 
+import com.app.english.domain.model.AbilityProfile
 import com.app.english.domain.model.AssessmentQuestion
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -172,5 +173,61 @@ class AssessmentFlowTest {
         assertTrue(advice[3].adviceCn.contains("跟读"))
         assertEquals(null, advice[0].score)
         assertEquals(90.0, advice[1].score!!, 0.0)
+    }
+
+    @Test
+    fun stubAdviceNamesTheRealCauseInsteadOfBlamingPractice() {
+        // 生产事故文案修复: stub(判级没完成)不能再说"补一次练习或测评就会点亮" ——
+        // 缺的是判级 LLM 可用度, 说"补练"会误导学员去白练一轮。
+        val dims = mapOf<String, Double?>(
+            "pronunciation" to null,
+            "grammar" to null,
+            "vocabulary" to null,
+            "fluency" to null
+        )
+        val advice = assessmentDimensionAdvice(dims, isStub = true)
+        assertTrue(advice[1].adviceCn.contains("AI 判级未完成"))
+        assertTrue(advice[1].adviceCn.contains("重新判级"))
+        assertFalse("stub 空态不许再引导去补练", advice[1].adviceCn.contains("补一次练习"))
+        // 非 stub 的 null(真判级里发音没录真音)沿用"补一次练习"口径。
+        val realNull = assessmentDimensionAdvice(dims, isStub = false)
+        assertTrue(realNull[0].adviceCn.contains("没有拿到发音分"))
+    }
+
+    @Test
+    fun stubAdviceFallsBackToProfileEvidenceWithHonestSource() {
+        // 画像兜底: stub 且画像该维有证据 -> 展示画像分 + 注明"来自日常练习, 非本次测评"。
+        val profile = AbilityProfile(
+            grammar = 62.0,
+            vocabulary = 58.0,
+            sampleCounts = mapOf("grammar" to 4, "vocabulary" to 2)
+        )
+        val advice = assessmentDimensionAdvice(
+            mapOf(
+                "pronunciation" to null,
+                "grammar" to null,
+                "vocabulary" to null,
+                "fluency" to null
+            ),
+            isStub = true,
+            profile = profile
+        )
+        // 语法/词汇: 有画像证据 -> 兜底展示; 发音(n=0)/流利度(无分)仍走判级未完成文案。
+        assertTrue(advice[1].isFromProfile)
+        assertEquals(62.0, advice[1].displayScore!!, 0.0)
+        assertEquals(null, advice[1].score)
+        assertTrue(advice[1].adviceCn.contains("62 分来自日常练习画像"))
+        assertTrue(advice[2].isFromProfile && advice[2].displayScore == 58.0)
+        assertFalse(advice[0].isFromProfile)
+        assertTrue(advice[0].adviceCn.contains("AI 判级未完成"))
+        assertFalse(advice[3].isFromProfile)
+        // 真判级(非 stub)永不兜底: 该维 null 就诚实地空着。
+        val real = assessmentDimensionAdvice(
+            mapOf("grammar" to null),
+            isStub = false,
+            profile = profile
+        )
+        assertFalse(real[1].isFromProfile)
+        assertNull(real[1].displayScore)
     }
 }

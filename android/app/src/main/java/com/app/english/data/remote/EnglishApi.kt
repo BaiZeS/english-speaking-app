@@ -168,11 +168,18 @@ interface EnglishApi {
         @Body request: AssessmentAnswerRequestDto
     ): AssessmentAnswerResponseDto
 
-    /** 一次批量 LLM 判级; 幂等(已完成重放同形状)。 */
+    /** 一次批量 LLM 判级; 幂等(已完成重放同形状)。`status="judging"` = 202 判级在途。 */
     @POST("assessment/{attemptId}/complete")
     suspend fun completeAssessment(
         @Path("attemptId") attemptId: String,
         @Body request: AssessmentCompleteRequestDto
+    ): AssessmentCompleteResponseDto
+
+    /** 判级结果轮询(async_judge 提交后的收敛通道); completed 回放完整结果。 */
+    @GET("assessment/{attemptId}/result")
+    suspend fun getAssessmentResult(
+        @Path("attemptId") attemptId: String,
+        @Query("device_id") deviceId: String
     ): AssessmentCompleteResponseDto
 
     // ====== 能力画像(§5.6; days 只接受 7/30/90) ======

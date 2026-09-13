@@ -4,11 +4,23 @@
 ``GET  /assessment``                            题库摘要 (题目本体下发, 参考要点不下发)
 ``POST /assessment/start``                      开一次测评 -> attempt 行 + 题目列表
 ``POST /assessment/{attempt_id}/answer``        逐题作答 (文本直给; 音频走 IAT/ISE)
-``POST /assessment/{attempt_id}/complete``      一次批量 LLM 判级 -> CEFR + 三维 + 画像写入
+``POST /assessment/{attempt_id}/complete``      收卷判级 -> CEFR + 三维 + 画像写入
+``GET  /assessment/{attempt_id}/result``        判级结果轮询 (async_judge 客户端专用)
 ==============================================  =================================================
 
 门禁语义: attempt 归属看 ``user_id`` (别人的 403, 不存在的 404); 已完成的 attempt
 ``complete`` 幂等返回已存结果, ``answer`` 则 409 ``ATTEMPT_NOT_ACTIVE``。
+
+``complete`` 有两条判级路径 (生产实锤: 免费额度限速把 20s 同步预算两次撞墙, stub
+结果又被幂等回放固化, 学员只看得到发音维):
+
+* **同步** (老客户端, 不传 ``async_judge``): 请求内等 LLM, 硬预算
+  ``ASSESSMENT_JUDGE_BUDGET_S`` —— 行为与历史版本完全一致;
+* **异步** (新客户端, ``async_judge=true``): 置 ``status="judging"`` -> 派后台作业
+  (:func:`run_assessment_judge_job`, 预算 ``ASSESSMENT_JUDGE_JOB_BUDGET_S``) ->
+  立即 202 ``{"status": "judging"}``; 客户端轮询 ``GET .../result`` 到 completed。
+  stub 结果 (source="stub") 允许**重判** —— 幂等回放只对真结果生效, 学员不用重做
+  整套题就能把上次失败的判级救回来。
 
 判级诚实边界见 ``assessment_engine`` 模块 docstring (stub 零事件零画像;
 发音维只取真实 ISE)。
@@ -16,17 +28,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
 from app.core.errors import AppError
+from app.db.session import get_sessionmaker
 from app.models.course import FoundationStep
 from app.models.db import AssessmentAnswer, AssessmentAttempt, User
 from app.services import ability_engine, assessment_engine
@@ -39,6 +54,7 @@ from app.services.assessment_engine import (
 from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
+    ASSESSMENT_JUDGE_JOB_BUDGET_S,
     AbilityEvidence,
     Dimension,
     grade_read_along,
@@ -270,74 +286,75 @@ class CompleteResponse(BaseModel):
 
 
 class CompleteRequest(_Identity):
-    pass
+    #: 新客户端 opt-in: 判级交给后台作业, 端点立即 202; 老客户端不传 -> 同步等 (历史行为).
+    async_judge: bool = False
 
 
-@router.post("/assessment/{attempt_id}/complete", response_model=CompleteResponse)
+class JudgeAccepted(BaseModel):
+    """判级中的响应 (202): 只是轮询信号, 不是结果 —— 结果从 ``GET .../result`` 拿."""
+
+    attempt_id: str
+    status: str = "judging"
+
+
+@router.post(
+    "/assessment/{attempt_id}/complete",
+    response_model=CompleteResponse | JudgeAccepted,
+)
 async def complete_assessment(
     attempt_id: str,
     req: CompleteRequest,
     db: AsyncSession = Depends(get_db),
-) -> CompleteResponse:
-    """收卷: **一次批量** LLM 判级 (§5.5-3) -> CEFR + 三维 + rationale.
+) -> CompleteResponse | JudgeAccepted:
+    """收卷判级 (§5.5-3): 老客户端同步等, 新客户端 202 + 后台作业慢慢判.
 
     写入门控 (T5 任务书): 真判级才写 ``ability_profiles`` (alpha=0.6 种子/重拉) +
     ``ability_events`` (``source_kind="assessment"``, w=1) + ``assessment_cefr`` +
-    ``band_locked=True``; LLM 不可用 -> 结果照常返回但全部维度 null + 零写入。
+    ``band_locked=True``; LLM 不可用 -> 结果照常返回但维度 null (发音维除外) + 零写入。
     """
     attempt = await _load_owned_attempt(db, attempt_id, req)
-    if attempt.status == "completed" and isinstance(attempt.result, dict):
-        # 幂等: 客户端重试/断线重连直接回放已存结果.
-        return CompleteResponse.model_validate(dict(attempt.result))
 
-    answers = list(
-        (
-            await db.execute(
-                select(AssessmentAnswer)
-                .where(AssessmentAnswer.attempt_id == attempt.id)
-                .order_by(AssessmentAnswer.question_no.asc())
-            )
-        ).scalars()
-    )
+    if attempt.status == "completed" and isinstance(attempt.result, dict):
+        stored = dict(attempt.result)
+        if str(stored.get("source")) != "stub":
+            # 幂等: 真判级结果原样回放 (客户端重试/断线重连).
+            return CompleteResponse.model_validate(stored)
+        # stub 存量 -> 落到下面的重判分支: 幂等回放不保护失败结果, 学员不用重做题.
+
+    if attempt.status == "judging":
+        # 判级已在途 (双击/另一端重试): 幂等回 pending, 不再派第二个作业.
+        return _pending(attempt.id)
+
+    if req.async_judge:
+        if not await _answers_count(db, attempt.id):
+            raise AppError(400, "no answers submitted for this attempt", "ASSESSMENT_NO_ANSWERS")
+        # 先落 judging 再派工: 作业主体的状态门与 GET 的重派都认这个持久化状态.
+        attempt.status = "judging"
+        await db.commit()
+        if spawn_assessment_judge_job(attempt.id):
+            logger.info("assessment judging accepted | attempt={}", attempt.id)
+        return _pending(attempt.id)
+
+    return await _judge_inline(db, attempt)
+
+
+async def _judge_inline(db: AsyncSession, attempt: AssessmentAttempt) -> CompleteResponse:
+    """同步判级 (老客户端路径): 请求内等 LLM (20s 预算), 行为与历史版本一致."""
+    answers = await _answers_of(db, attempt.id)
     if not answers:
         raise AppError(400, "no answers submitted for this attempt", "ASSESSMENT_NO_ANSWERS")
-    questions = assessment_engine.load_bank()
-
     pronunciation, ise_n = assessment_engine.pronunciation_evidence(answers)
-    facts = _judge_facts(questions, answers)
-    note = (
-        f"发音维证据: {ise_n} 道跟读题有真实 ISE 分, 均分 {pronunciation}。"
-        if pronunciation is not None
-        else "发音维证据: 没有真实 ISE 分 (外部评测未配置), 请不要虚构发音分。"
+    facts = _judge_facts(assessment_engine.load_bank(), answers)
+    judged = await assessment_engine.judge_level(
+        facts, _pronunciation_note(pronunciation, ise_n)
     )
-    judged = await assessment_engine.judge_level(facts, note)
-
     if judged is None:
-        # 诚实空态: LLM 未配置/两次输出都不合规 -> 零事件、零画像、cefr=null.
-        result = CompleteResponse(
-            attempt_id=attempt.id,
-            cefr=None,
-            dims={dim: (pronunciation if dim == "pronunciation" else None) for dim in DIMENSIONS},
-            radar=[
-                RadarAxisDto(
-                    dimension=dim,
-                    score=pronunciation if dim == "pronunciation" else None,
-                    n=ise_n if dim == "pronunciation" else 0,
-                )
-                for dim in DIMENSIONS
-            ],
-            rationale_cn="LLM 未配置或输出不可用, 本次没有判级。分维度都为空, 不计入能力画像。",
-            pronunciation_source="ise" if pronunciation is not None else None,
-            source="stub",
-            llm_source="stub",
-            cefr_level=None,
-        )
+        result = _stub_response(attempt.id, pronunciation, ise_n)
     else:
         judgement, llm_source = judged
         result = await _write_judged_profile(
             db, attempt, judgement, llm_source, pronunciation, ise_n
         )
-
     attempt.status = "completed"
     attempt.finished_at = datetime.now(UTC)
     attempt.result = result.model_dump(mode="json")
@@ -349,6 +366,98 @@ async def complete_assessment(
         result.cefr,
     )
     return result
+
+
+@router.get(
+    "/assessment/{attempt_id}/result",
+    response_model=CompleteResponse | JudgeAccepted,
+)
+async def get_assessment_result(
+    attempt_id: str,
+    device_id: str | None = Query(default=None, min_length=1, max_length=128),
+    user_id: str | None = Query(default=None, min_length=1, max_length=36),
+    db: AsyncSession = Depends(get_db),
+) -> CompleteResponse | JudgeAccepted:
+    """判级结果轮询: completed 回放 result; judging 且作业不在飞 (重启孤儿) 重派后回 202."""
+    attempt = await _load_owned_attempt(
+        db, attempt_id, _Identity(device_id=device_id, user_id=user_id)
+    )
+    if attempt.status == "completed" and isinstance(attempt.result, dict):
+        return CompleteResponse.model_validate(dict(attempt.result))
+    if attempt.status == "judging":
+        if attempt_id not in _JUDGE_IN_FLIGHT:
+            # 在飞集合是进程内的: 重启后它必空, 孤儿 judging 重派一次
+            # (条件写回门保证与任何幸存作业只有一个赢家, 不会双计).
+            if spawn_assessment_judge_job(attempt_id):
+                logger.info("assessment judge job redispatched | attempt={}", attempt_id)
+        return _pending(attempt_id)
+    # running: complete 还没成功提交过, 轮询没有意义.
+    raise AppError(
+        409, "this assessment attempt has not been submitted for judging", "ASSESSMENT_NOT_JUDGING"
+    )
+
+
+def _pending(attempt_id: str) -> JSONResponse:
+    """202 + 判级中信号 (finish-mission 的 202 同款语义): 结果去 ``GET .../result`` 轮询."""
+    return JSONResponse(
+        status_code=202,
+        content=JudgeAccepted(attempt_id=attempt_id).model_dump(mode="json"),
+    )
+
+
+def _stub_response(
+    attempt_id: str, pronunciation: float | None, ise_n: int
+) -> CompleteResponse:
+    """诚实空态 (LLM 未配置/输出不可用): 零事件、零画像; 发音维只回显真实 ISE.
+
+    同步路径与后台作业失败路径共用同一构造 —— rationale 必须与 dims 自洽
+    (历史上写过"分维度都为空"而发音维其实有分, 被学员当成前后矛盾)。
+    """
+    if pronunciation is not None:
+        rationale = (
+            "AI 判级未能完成 (LLM 未配置或输出不可用), 本次没有判级; "
+            f"仅发音维有 {ise_n} 道跟读题的真实语音评测分, 不计入能力画像, 可重新判级。"
+        )
+    else:
+        rationale = "LLM 未配置或输出不可用, 本次没有判级。分维度都为空, 不计入能力画像。"
+    return CompleteResponse(
+        attempt_id=attempt_id,
+        cefr=None,
+        dims={dim: (pronunciation if dim == "pronunciation" else None) for dim in DIMENSIONS},
+        radar=[
+            RadarAxisDto(
+                dimension=dim,
+                score=pronunciation if dim == "pronunciation" else None,
+                n=ise_n if dim == "pronunciation" else 0,
+            )
+            for dim in DIMENSIONS
+        ],
+        rationale_cn=rationale,
+        pronunciation_source="ise" if pronunciation is not None else None,
+        source="stub",
+        llm_source="stub",
+        cefr_level=None,
+    )
+
+
+def _pronunciation_note(pronunciation: float | None, ise_n: int) -> str:
+    """判级 prompt 里的发音维证据注记 (同步与作业两条路径同一口径)."""
+    if pronunciation is not None:
+        return f"发音维证据: {ise_n} 道跟读题有真实 ISE 分, 均分 {pronunciation}。"
+    return "发音维证据: 没有真实 ISE 分 (外部评测未配置), 请不要虚构发音分。"
+
+
+async def _answers_of(db: AsyncSession, attempt_id: str) -> list[AssessmentAnswer]:
+    """attempt 的全部作答 (按题号升序; 判级 prompt 与发音证据都吃这一份)."""
+    return list(
+        (
+            await db.execute(
+                select(AssessmentAnswer)
+                .where(AssessmentAnswer.attempt_id == attempt_id)
+                .order_by(AssessmentAnswer.question_no.asc())
+            )
+        ).scalars()
+    )
 
 
 def _judge_facts(
@@ -454,6 +563,140 @@ async def _write_judged_profile(
         llm_source=llm_source,
         cefr_level=cefr_level,
     )
+
+
+# ====== 后台判级作业 (async_judge 路径; 结构照抄 course_sessions 的总评作业) ======
+
+_JUDGE_JOBS: set[asyncio.Task[None]] = set()
+_JUDGE_IN_FLIGHT: set[str] = set()
+
+
+def spawn_assessment_judge_job(attempt_id: str) -> bool:
+    """派生判级作业 (幂等门 = :data:`_JUDGE_IN_FLIGHT`); 返回**是否真的派生了**.
+
+    测试把本函数换成 no-op 后直接 ``await run_assessment_judge_job(attempt_id)``
+    驱动作业 (同 ``spawn_review_copy_job`` 的口径; 见 ``tests/conftest.py``)。
+    """
+    if attempt_id in _JUDGE_IN_FLIGHT:
+        return False
+
+    def _finish(task: asyncio.Task[None]) -> None:
+        _JUDGE_JOBS.discard(task)
+        _JUDGE_IN_FLIGHT.discard(attempt_id)
+
+    _JUDGE_IN_FLIGHT.add(attempt_id)
+    task = asyncio.create_task(run_assessment_judge_job(attempt_id))
+    _JUDGE_JOBS.add(task)
+    task.add_done_callback(_finish)
+    return True
+
+
+async def run_assessment_judge_job(attempt_id: str) -> None:
+    """后台把一次测评判完: 成功写画像, 失败落 stub —— **任何出口必落 completed 终态**.
+
+    三条出口 (§P6 "学员永远看得到一份能读的报告" 的测评版):
+
+    * LLM 回了合规判级 -> 事件/画像 + ``result(source="llm")``;
+    * LLM 不可用 / 超作业预算 -> stub result (零写入) —— 轮询端拿到的仍是"已收卷"
+      的诚实空态, ``source="stub"`` 之后可再触发重判;
+    * 预期外异常 -> :func:`_fail_judge_job` 兜底收敛成 stub 终态 + 全栈日志。
+
+    并发双跑的防线是**条件写回** (:func:`_commit_judged_result`): 只在 status 仍为
+    ``judging`` 时才把 completed + result 落库, 输家 rollback —— 本轮事件随事务作废,
+    画像不会双计。在飞集合是进程内的 (生产单 uvicorn 容器成立); 若将来扩多 worker,
+    GET result 的重派也靠这道门兜底。
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        try:
+            await _run_judge_job(db, attempt_id)
+        except Exception as exc:
+            logger.exception("assessment judge job crashed | attempt={}", attempt_id)
+            await _fail_judge_job(db, attempt_id, exc)
+
+
+async def _run_judge_job(db: AsyncSession, attempt_id: str) -> None:
+    """作业主体 (与 :func:`run_assessment_judge_job` 分开: 兜底要能接住这里任何抛错)."""
+    attempt = (
+        await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one_or_none()
+    if attempt is None:
+        logger.warning("assessment judge job skipped | attempt={} reason=row gone", attempt_id)
+        return
+    if attempt.status != "judging":
+        # 跨进程门: 已被别人判完 (completed) / complete 还没提交 (running) 都不该跑.
+        logger.info(
+            "assessment judge job skipped | attempt={} status={}", attempt_id, attempt.status
+        )
+        return
+    answers = await _answers_of(db, attempt_id)
+    if not answers:
+        # 端点 gate 过了才该到这; 数据被动过就诚实收敛, 别把 attempt 永远留在 judging.
+        logger.warning("assessment judge job has no answers | attempt={}", attempt_id)
+        await _commit_judged_result(db, attempt_id, _stub_response(attempt_id, None, 0))
+        return
+    pronunciation, ise_n = assessment_engine.pronunciation_evidence(answers)
+    facts = _judge_facts(assessment_engine.load_bank(), answers)
+    judged = await assessment_engine.judge_level(
+        facts,
+        _pronunciation_note(pronunciation, ise_n),
+        hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S,
+    )
+    if judged is None:
+        await _commit_judged_result(
+            db, attempt_id, _stub_response(attempt_id, pronunciation, ise_n)
+        )
+        return
+    judgement, llm_source = judged
+    result = await _write_judged_profile(db, attempt, judgement, llm_source, pronunciation, ise_n)
+    await _commit_judged_result(db, attempt_id, result)
+    logger.info(
+        "assessment judge job published | attempt={} source={} cefr={}",
+        attempt_id,
+        result.source,
+        result.cefr,
+    )
+
+
+async def _commit_judged_result(
+    db: AsyncSession, attempt_id: str, result: CompleteResponse
+) -> None:
+    """条件写回门: status 仍为 ``judging`` 才收卷; 输家 rollback (事件/画像随事务作废).
+
+    单条 ``UPDATE ... WHERE status='judging'`` 把判门与终态原子落库 ——
+    ``record_step_evidence`` 不按 step_id 去重, 谁输谁回滚是画像不双计的唯一防线
+    (§P6 总评作业的乐观锁同款思路)。
+    """
+    outcome = await db.execute(
+        update(AssessmentAttempt)
+        .where(AssessmentAttempt.id == attempt_id, AssessmentAttempt.status == "judging")
+        .values(
+            status="completed",
+            finished_at=datetime.now(UTC),
+            result=result.model_dump(mode="json"),
+        )
+    )
+    if outcome.rowcount == 0:
+        await db.rollback()
+        logger.warning("assessment judge job lost the race | attempt={}", attempt_id)
+        return
+    await db.commit()
+
+
+async def _fail_judge_job(db: AsyncSession, attempt_id: str, exc: Exception) -> None:
+    """作业崩了也要收敛: 尽力落 stub 终态 (轮询端不至于永远 pending), 写不动就留日志."""
+    try:
+        await db.rollback()
+        await _commit_judged_result(db, attempt_id, _stub_response(attempt_id, None, 0))
+        logger.warning(
+            "assessment judge job marked stub | attempt={} reason={} (画像零写入)",
+            attempt_id,
+            exc,
+        )
+    except Exception:  # pragma: no cover - 只剩日志可依赖的角落
+        logger.exception(
+            "assessment judge job failed-state write itself died | attempt={}", attempt_id
+        )
 
 
 # ====== 身份 / 归属 ======

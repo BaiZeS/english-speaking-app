@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.ABILITY_DIMENSIONS
+import com.app.english.domain.model.AbilityProfile
 import com.app.english.domain.model.AssessmentJudgement
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.HoldToTalkCopy
@@ -121,7 +122,7 @@ fun AssessmentIntroScreen(
                 Text("开始测评", style = MaterialTheme.typography.titleMedium)
             }
             Text(
-                text = "判级使用 AI 批量阅卷, 交卷后约 20 秒出结果; 结果会写入你的能力画像。",
+                text = "判级使用 AI 批量阅卷, 通常 1 分钟内出结果(免费额度限速时最长约 2 分钟); 结果会写入你的能力画像。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -525,7 +526,7 @@ private fun JudgingCard(onRetry: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
             Text(
-                text = "批量判级约需 20 秒, 请稍等, 不要退出页面。",
+                text = "判级在后台进行, 通常 1 分钟内出结果, 最长约 2 分钟, 请稍等, 不要退出页面。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )
@@ -570,6 +571,10 @@ fun AssessmentResultScreen(
 
             else -> ResultBody(
                 judgement = judgement,
+                profile = state.profile,
+                isPolling = state.isPolling,
+                error = state.error,
+                onRejudge = viewModel::rejudge,
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize()
@@ -579,7 +584,14 @@ fun AssessmentResultScreen(
 }
 
 @Composable
-private fun ResultBody(judgement: AssessmentJudgement, modifier: Modifier = Modifier) {
+private fun ResultBody(
+    judgement: AssessmentJudgement,
+    profile: AbilityProfile?,
+    isPolling: Boolean,
+    error: String?,
+    onRejudge: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
@@ -591,6 +603,9 @@ private fun ResultBody(judgement: AssessmentJudgement, modifier: Modifier = Modi
             cefrLevel = judgement.cefrLevel,
             isStub = judgement.isStub
         )
+        if (judgement.isStub) {
+            RejudgeCard(isPolling = isPolling, error = error, onRejudge = onRejudge)
+        }
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(Spacings.s3),
@@ -606,34 +621,7 @@ private fun ResultBody(judgement: AssessmentJudgement, modifier: Modifier = Modi
                 )
             }
         }
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(Spacings.s3),
-                verticalArrangement = Arrangement.spacedBy(Spacings.s2)
-            ) {
-                Text(text = "四维建议", style = MaterialTheme.typography.titleMedium)
-                assessmentDimensionAdvice(judgement.dims).forEach { advice ->
-                    Column(verticalArrangement = Arrangement.spacedBy(Spacings.tiny)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(text = advice.label, style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                text = advice.score?.let { it.toInt().toString() } ?: "待补",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Text(
-                            text = advice.adviceCn,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
+        AdviceCard(judgement = judgement, profile = profile)
         if (judgement.rationaleCn.isNotBlank()) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -647,6 +635,89 @@ private fun ResultBody(judgement: AssessmentJudgement, modifier: Modifier = Modi
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+        }
+    }
+}
+
+/** 四维建议卡: 画像兜底(stub 且画像该维有证据时用画像分补位并注明来源), 其余诚实"待补"。 */
+@Composable
+private fun AdviceCard(judgement: AssessmentJudgement, profile: AbilityProfile?) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(Spacings.s3),
+            verticalArrangement = Arrangement.spacedBy(Spacings.s2)
+        ) {
+            Text(text = "四维建议", style = MaterialTheme.typography.titleMedium)
+            assessmentDimensionAdvice(
+                judgement.dims,
+                isStub = judgement.isStub,
+                profile = profile
+            ).forEach { advice ->
+                Column(verticalArrangement = Arrangement.spacedBy(Spacings.tiny)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = advice.label, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = advice.displayScore?.let { score ->
+                                if (advice.isFromProfile) {
+                                    "${score.toInt()}*"
+                                } else {
+                                    score.toInt().toString()
+                                }
+                            } ?: "待补",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        text = advice.adviceCn,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** stub 结果的翻案入口: 一键重新判级(不用重做题), 服务端只对 stub 存量放行。 */
+@Composable
+private fun RejudgeCard(isPolling: Boolean, error: String?, onRejudge: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(Spacings.s3).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(Spacings.s2)
+        ) {
+            Button(
+                onClick = onRejudge,
+                enabled = !isPolling,
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Text(if (isPolling) "重新判级中…" else "重新判级")
+            }
+            Text(
+                text = if (isPolling) {
+                    "AI 判级在后台进行, 通常 1 分钟内, 请留在本页。"
+                } else {
+                    "上次 AI 判级没有完成; 重新判级不需要重做题, 判级结果会覆盖本次显示。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            error?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
@@ -692,7 +763,7 @@ private fun CefrBadgeCard(cefr: String?, cefrLevel: String?, isStub: Boolean) {
             }
             Text(
                 text = if (isStub) {
-                    "这次没有完成 AI 判级, 结果不计入画像; 随时可以重新测一次。"
+                    "这次没有完成 AI 判级, 结果不计入画像; 点「重新判级」即可重试, 不需要重做题。"
                 } else {
                     "你的 CEFR 定级(已写入能力画像)"
                 },

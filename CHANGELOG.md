@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.2.2 — 2026-09-13 · CEFR 测评判级异步化: 三维空白的根治 + 「重新判级」翻案入口
+
+versionCode 11 / versionName 2.2.2。**需要后端同步部署**（两端各自向后兼容，可独立发布，见下）。
+
+### 用户可感知
+
+- **修「测评完只有发音维有分，其余三维全空」**（生产实锤根因）：判级 LLM 调用受免费额度限速，两次都在 20s 同步硬预算处撞墙 → 走 stub 诚实空态（只回真实 ISE 发音分）→ 幂等回放又把这份空结果固化。本版把判级整体移出请求：交卷立即返回「判级中」，后台作业用 **120s** 预算慢慢判，客户端每 3s（退避到 9s）轮询，上限 150s——限速下的判级不再被砍成空态。
+- **结果页新增「重新判级」**：stub 结果（含本版之前被固化的存量测评）一键重判，**不需要重做题**；判级结果就位后四维雷达 + CEFR 徽章直接翻案，画像只写一次。
+- **空态文案不再误导**：stub 场景下三维不再显示「补一次练习或测评就会点亮」（缺的是判级可用度，不是练习量），改说「AI 判级未完成，可重新判级」；后端 stub 说明同步修正「分维度都为空」与实际带发音分的自相矛盾。
+- **画像兜底**：判级未完成且你的日常练习已积累该维证据时，结果页以画像分补位并标注「来自日常练习画像，仅供参考」；证据不足的维仍诚实显示「待补」。轮询超时（>150s）诚实告知「判级仍在后台，完成后可在『我的-能力画像』查看」，不报错。
+
+### 工程摘要
+
+- **后端（`assessment.py`，照 §P6 总评作业标准件）**：`POST /assessment/{id}/complete` 新增 opt-in 字段 `async_judge`——老客户端不传走既有同步路径（20s 预算，**行为零变化**）；新客户端传 true 得 202 `{"status":"judging"}` + 后台作业 `run_assessment_judge_job`（`ASSESSMENT_JUDGE_JOB_BUDGET_S=120`，自建会话，失败/超时必落 stub 终态）。新增 `GET /assessment/{attempt_id}/result` 轮询端点（completed 回放、judging 且作业不在飞重派——进程重启的孤儿自救、running 409）。`attempt.status` 新增 `judging` 态（String(16) 自由串，无迁移；judging 期间 answer 自动 409）。**防双计门**：`record_step_evidence` 不按 step_id 去重，作业落库走 `UPDATE … WHERE status='judging'` 条件写回，并发双跑输家整事务回滚，画像/事件只写一次。
+- **Android**：`JudgePollingPolicy`（3s→9s 退避、150s 上限，纯函数 JVM 锁）+ `pollJudgeResult` 共享轮询循环（收卷与重判同一节奏）；`AssessmentCompleteResponseDto` 以 `status` 区分联合形状（judging→null 终态→域模型），旧后端同步返回完整结果时天然短路轮询（滚动发布兼容，pydantic 忽略未知字段已核实）。`AssessmentFlow.dimensionAdvice` 增加 `isStub`/`profile` 参数。
+- **时延契约登记**：`test_latency_budget.py` 静态锁同步——judge_level 签名默认值=sync 预算、作业调用点点名 `ASSESSMENT_JUDGE_JOB_BUDGET_S`、新增「作业预算必须大于同步预算」与「async 分支不许 await judge_level」AST 看门狗（总评 R2 复发防护的测评版）。
+- **测试基线**：后端 **582 passed**（573 + 9 新增：202 契约/作业终态/写入门/条件写回门/重判翻案/在途幂等/归属门 + 预算静态锁 2 条）；Android JVM 单测 **326 passed**（318 + 8 新增：联合形状反序列化 ×3、轮询节奏 ×3、stub 文案与画像兜底 ×2）。ktlint 清零（CI 同版 1.3.1 CLI 口径）；detekt 维持 main 既有基线（本就 continue-on-error，本次拆分重构把 `dimensionAdviceCn` 复杂度从 24 降到 ≤21，无新增违规类别）。
+- **部署与兼容**：后端先行部署对老客户端零影响（不传标志走原路径）；新客户端打旧后端时判级仍同步（但不再有重判入口），两端都更新才是完整体验。存量 stub 测评在老客户端上仍会回放空态（可接受，升级后可「重新判级」救回）。
+- ⏳ **真机验收**：生产部署后真机交卷一次，`docker logs -f english-api-prod` 应依次出现 `assessment judging accepted` → `assessment judge job published | source=llm` → 轮询 GET 200，结果页四维雷达全亮。
+
 ## v2.2.1 — 2026-09-12 · 录音条改实时声量脉冲 + 评分反馈卡重做
 
 versionCode 10 / versionName 2.2.1。**样式补丁版**：无 API 契约变更、后端代码零改动。强更语义本版**补设**：随发布把 `APP_MIN_SUPPORTED_VERSION` 提到 **2.2.0**（补上 v2.2.0 拖欠的那次强更）——低于 2.2.0 的旧包收到**不可跳过**的升级提示；v2.2.0 及以上照常可「稍后再说」（对 2.2.1 本身仍是非强更）。

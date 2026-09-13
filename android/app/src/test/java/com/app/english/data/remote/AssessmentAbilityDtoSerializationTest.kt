@@ -103,6 +103,51 @@ class AssessmentAbilityDtoSerializationTest {
     }
 
     @Test
+    fun completeRequestSerializesAsyncJudgeFlag() {
+        // 新客户端 opt-in: async_judge=true 必须真的上线(服务端靠它走异步判级)。
+        val encoded = json.encodeToString(
+            AssessmentCompleteRequestDto.serializer(),
+            AssessmentCompleteRequestDto(deviceId = "dev-1", asyncJudge = true)
+        )
+        assertTrue("async_judge 必须出现在请求体里", encoded.contains("\"async_judge\":true"))
+        assertTrue(encoded.contains("\"device_id\":\"dev-1\""))
+    }
+
+    @Test
+    fun pendingJudgeResponseDecodesToNullJudgement() {
+        // 202 判级在途: 只有 attempt_id + status="judging", 其余字段全是默认值 ——
+        // toJudgementOrNull 必须返回 null, 不能把"判级中"误当成一份 stub 结果。
+        val pending = json.decodeFromString(
+            AssessmentCompleteResponseDto.serializer(),
+            """{"attempt_id": "att-1", "status": "judging"}"""
+        )
+        assertNull(pending.toJudgementOrNull())
+        assertEquals("att-1", pending.attemptId)
+    }
+
+    @Test
+    fun legacyTerminalResponseDecodesWithoutPendingFields() {
+        // 旧后端(同步判级)的响应没有 judging 形状; 默认值齐全 -> 终态照常映射。
+        val legacy = json.decodeFromString(
+            AssessmentCompleteResponseDto.serializer(),
+            """
+            {
+              "attempt_id": "att-legacy",
+              "cefr": "A2",
+              "dims": {"pronunciation": null, "grammar": 55.0, "vocabulary": 48.0, "fluency": 40.0},
+              "radar": [],
+              "rationale_cn": "能完成 A2 题的简单交流。",
+              "source": "llm", "llm_source": "qwen3.8-max", "cefr_level": "A2"
+            }
+            """.trimIndent()
+        )
+        assertEquals("att-legacy", legacy.attemptId)
+        val judgement = legacy.toJudgementOrNull()
+        assertEquals("A2", judgement!!.cefr)
+        assertEquals(55.0, judgement.dims["grammar"]!!, 0.0)
+    }
+
+    @Test
     fun abilityResponseDecodesEmptyAndRealShapes() {
         // 未知 device: 后端返回全 null 空画像骨架, 不是 404。
         val empty = json.decodeFromString(
