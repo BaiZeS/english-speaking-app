@@ -30,13 +30,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import get_db
@@ -305,7 +306,7 @@ async def complete_assessment(
     attempt_id: str,
     req: CompleteRequest,
     db: AsyncSession = Depends(get_db),
-) -> CompleteResponse | JudgeAccepted:
+) -> CompleteResponse | JudgeAccepted | JSONResponse:
     """收卷判级 (§5.5-3): 老客户端同步等, 新客户端 202 + 后台作业慢慢判.
 
     写入门控 (T5 任务书): 真判级才写 ``ability_profiles`` (alpha=0.6 种子/重拉) +
@@ -375,7 +376,7 @@ async def get_assessment_result(
     device_id: str | None = Query(default=None, min_length=1, max_length=128),
     user_id: str | None = Query(default=None, min_length=1, max_length=36),
     db: AsyncSession = Depends(get_db),
-) -> CompleteResponse | JudgeAccepted:
+) -> CompleteResponse | JudgeAccepted | JSONResponse:
     """判级结果轮询: completed 回放 result; judging 且作业不在飞 (重启孤儿) 重派后回 202."""
     attempt = await _load_owned_attempt(
         db, attempt_id, _Identity(device_id=device_id, user_id=user_id)
@@ -662,14 +663,17 @@ async def _commit_judged_result(
     ``record_step_evidence`` 不按 step_id 去重, 谁输谁回滚是画像不双计的唯一防线
     (§P6 总评作业的乐观锁同款思路)。
     """
-    outcome = await db.execute(
-        update(AssessmentAttempt)
-        .where(AssessmentAttempt.id == attempt_id, AssessmentAttempt.status == "judging")
-        .values(
-            status="completed",
-            finished_at=datetime.now(UTC),
-            result=result.model_dump(mode="json"),
-        )
+    outcome = cast(
+        "CursorResult[Any]",
+        await db.execute(
+            update(AssessmentAttempt)
+            .where(AssessmentAttempt.id == attempt_id, AssessmentAttempt.status == "judging")
+            .values(
+                status="completed",
+                finished_at=datetime.now(UTC),
+                result=result.model_dump(mode="json"),
+            )
+        ),
     )
     if outcome.rowcount == 0:
         await db.rollback()
