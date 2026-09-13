@@ -345,9 +345,7 @@ async def _judge_inline(db: AsyncSession, attempt: AssessmentAttempt) -> Complet
         raise AppError(400, "no answers submitted for this attempt", "ASSESSMENT_NO_ANSWERS")
     pronunciation, ise_n = assessment_engine.pronunciation_evidence(answers)
     facts = _judge_facts(assessment_engine.load_bank(), answers)
-    judged = await assessment_engine.judge_level(
-        facts, _pronunciation_note(pronunciation, ise_n)
-    )
+    judged = await assessment_engine.judge_level(facts, _pronunciation_note(pronunciation, ise_n))
     if judged is None:
         result = _stub_response(attempt.id, pronunciation, ise_n)
     else:
@@ -385,11 +383,10 @@ async def get_assessment_result(
     if attempt.status == "completed" and isinstance(attempt.result, dict):
         return CompleteResponse.model_validate(dict(attempt.result))
     if attempt.status == "judging":
-        if attempt_id not in _JUDGE_IN_FLIGHT:
+        if attempt_id not in _JUDGE_IN_FLIGHT and spawn_assessment_judge_job(attempt_id):
             # 在飞集合是进程内的: 重启后它必空, 孤儿 judging 重派一次
             # (条件写回门保证与任何幸存作业只有一个赢家, 不会双计).
-            if spawn_assessment_judge_job(attempt_id):
-                logger.info("assessment judge job redispatched | attempt={}", attempt_id)
+            logger.info("assessment judge job redispatched | attempt={}", attempt_id)
         return _pending(attempt_id)
     # running: complete 还没成功提交过, 轮询没有意义.
     raise AppError(
@@ -405,9 +402,7 @@ def _pending(attempt_id: str) -> JSONResponse:
     )
 
 
-def _stub_response(
-    attempt_id: str, pronunciation: float | None, ise_n: int
-) -> CompleteResponse:
+def _stub_response(attempt_id: str, pronunciation: float | None, ise_n: int) -> CompleteResponse:
     """诚实空态 (LLM 未配置/输出不可用): 零事件、零画像; 发音维只回显真实 ISE.
 
     同步路径与后台作业失败路径共用同一构造 —— rationale 必须与 dims 自洽

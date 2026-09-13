@@ -597,9 +597,7 @@ async def test_judge_job_completes_and_get_result_replays(
     assert len(fake.requests) == 1
 
     # 轮询收敛点: completed -> 200 回放
-    got = await client.get(
-        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
-    )
+    got = await client.get(f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV})
     assert got.status_code == 200, got.text
     body = got.json()
     assert body["status"] == "completed" and body["source"] == "llm" and body["cefr"] == "B1"
@@ -640,9 +638,7 @@ async def test_get_result_on_running_attempt_is_conflict(client: AsyncClient) ->
     """complete 从未成功提交过 -> 轮询没有意义, 409 (客户端按可重试失败处理)."""
     attempt_id = await _start(client)
     await _answer(client, attempt_id, question_no=4)
-    res = await client.get(
-        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
-    )
+    res = await client.get(f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV})
     assert res.status_code == 409
     assert res.json()["error"]["code"] == "ASSESSMENT_NOT_JUDGING"
 
@@ -665,9 +661,7 @@ async def test_judge_job_llm_failure_lands_stub_terminal_then_rejudge(
     assert row.status == "completed" and row.result["source"] == "stub"
     assert (await db.execute(select(func.count()).select_from(AbilityEvent))).scalar_one() == 0
     assert (await db.execute(select(func.count()).select_from(AbilityProfile))).scalar_one() == 0
-    got = await client.get(
-        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
-    )
+    got = await client.get(f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV})
     assert got.status_code == 200 and got.json()["source"] == "stub"
     assert "未配置" in got.json()["rationale_cn"]
 
@@ -677,9 +671,7 @@ async def test_judge_job_llm_failure_lands_stub_terminal_then_rejudge(
     assert res.status_code == 202
     await assessment.run_assessment_judge_job(attempt_id)
 
-    got2 = await client.get(
-        f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV}
-    )
+    got2 = await client.get(f"/api/v1/assessment/{attempt_id}/result", params={"device_id": DEV})
     assert got2.status_code == 200 and got2.json()["source"] == "llm"
     # 画像只写过这一次 (stub 阶段零写入)
     assert sorted(
@@ -716,8 +708,8 @@ async def test_judge_commit_gate_discards_loser_events(
     会话, 所以这里用"赢家已落终态 + 输家在途事件"的时序等价物钉门语义。
     """
     from app.api.v1 import assessment
-    from app.services.drill_grader import AbilityEvidence
     from app.services.ability_engine import record_step_evidence
+    from app.services.drill_grader import AbilityEvidence
 
     install_llm(monkeypatch, [judgement_json()])
     attempt_id = await _start(client)
@@ -738,7 +730,9 @@ async def test_judge_commit_gate_discards_loser_events(
         db,
         user_id=user_id,
         step_id=f"assessment:{attempt_id[:20]}",
-        evidence=[AbilityEvidence(dimension="grammar", score=70.0, source="assessment", weight=1.0)],
+        evidence=[
+            AbilityEvidence(dimension="grammar", score=70.0, source="assessment", weight=1.0)
+        ],
         alpha=assessment_engine.ASSESSMENT_ALPHA,
     )
     loser = assessment.CompleteResponse(attempt_id=attempt_id, source="llm")
