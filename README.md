@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.2.0**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.2.1**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
 
 ## 项目状态
 
@@ -14,7 +14,7 @@
 | 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）|
 | 多本书籍 | ✅ `/books` 目录端点 + Android 首页下拉切换；`/dialogue/scenes` 暴露自由对话场景 |
 | Dashboard | ✅ `/stats` 汇总接口 + Android 概览页：总练习 / 平均分 / 最高分 / 连续天数 / 14 天趋势图 / 分项平均 |
-| 录音可视化 | ✅ AudioRecorder 暴露实时音量流 + 跟读页 LinearProgressIndicator 进度条 + 音量条 |
+| 录音可视化 | ✅ 实时声量脉冲条 `RecordingPulseMeter`（← `AudioRecorder.levelFlow` VU 包络，v2.2.1 起替换滚动波形）+ 评分反馈卡中性化（ScoreRing 分数环 / 子分进度条 / 染色逐词芯片）|
 | 课前预览 + 错词高亮 | ✅ LessonDetail 加课文预览（首 3 句 + 角色分布柱）+ ScoreResult 每词按分数染色 chip |
 | History 筛选 | ✅ 全部 / 练过 / 85+ / 60 以下 四种 filter chip |
 | 模块化 PlayerScreen | ✅ 551 行单体拆为 Screen + Controls + ReadAlongView + DialogueView + ScorePanel 5 个文件 |
@@ -30,6 +30,7 @@
 | **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
 | **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试（**该口径止于 v2.0.0**，当前基线见下一行与 android/README.md）；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
 | **v2.1.0 生产中继（OTA 通道）** | ✅ release 包内置地址切 `:5173`（versionCode 8）；`/static/apk` 自托管分发 + `publish_apk.sh` 一条命令完成发版收尾（GitHub 出口仅 ~10-40KB/s，自托管走服务器出口）；`:8000` 桥退役；运维护栏脚本 + 双实例日志 + 冒烟命令全套（docs/operations.md）|
+| **v2.2.1 两个样式真机反馈** | ✅ 录音条改实时声量脉冲条（5 根随当前音量跳动、松手定格峰值）+ 打基础/跟读/自由对话评分反馈卡中性化重做（分数环 + 子分进度条 + 染色逐词芯片）；删除滚动波形管线（RecordingWaveform/WaveformHistory，编译器强制迁移）。非强更、后端零改动。基线：Android **318** JVM 单测全绿；⏳ v2.2.1 真机验收尚未执行 |
 | **v2.2.0 五个真机症状 + 交付闭环** | ✅ 长按/点按两种录音手势按取句长短分派（共享件 `HoldToTalkRow`/`TapToTalkRow`）+ **真滚动波形**（`RecordingWaveform` / 纯环形缓冲 `WaveformHistory`）+ 打基础逐题**完整即时反馈**（五维子分/逐词 IPA/转写/建议，≥85 停留 5s 自动前进）+ 收工改 **202 + `review_status` 轮询**（总评不再超时）+ 复盘报告回得去（「查看上次复盘」/「最近复盘」）+ 中文错误码表。后端**零迁移**、新增同步 LLM 时延契约表与 `test_latency_budget.py`；CI 新增 **`release-gate`**：改 `android/app/src/main/**` 却不同范围 bump `versionCode` + `CHANGELOG.md` 直接红（`2fd067d` 那批修复卡在 main 上从没上过手机，就是这条要防的病）。基线：Android **327** JVM 单测 / 后端 **573** 测试全绿；⏳ **v2.2.0 真机验收尚未执行** |
 
 ## 仓库结构
@@ -115,7 +116,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 - 仓库里的 `apk/` 目录只是本机临时副本位（`*.apk` 已 gitignore、**无提交内容**），
   不是下载入口。
 
-装机后：**开发机自测**用 debug 包（内置 `http://10.0.2.2:8000/api/v1/`，模拟器）或真机「设置」页改成开发机局域网 IP（**仅限本机自测**：局域网这条路只在开发机裸跑 `uv run uvicorn --host 0.0.0.0` 时存在，dev compose 栈的 8000 已只绑 `127.0.0.1`，真机改走 SSH 隧道/`adb reverse` 或用模拟器，见 backend/README）；**生产设备**装 release 包（v2.1.0 起内置 `http://118.89.58.84:5173/api/v1/`，开箱即用）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分（未配凭据时返回带 `source=stub` 的占位分并在界面警示）。
+装机后：debug 与 release 包**自 v2.2.1 起都默认内置** `http://118.89.58.84:5173/api/v1/`（生产，开箱即用）；**本地联调**在 App「设置」页把 Base URL 改成开发机地址（模拟器 `http://10.0.2.2:8000/api/v1/`——dev 栈绑 `127.0.0.1` 也照样可达；真机仅在开发机裸跑 `uv run uvicorn --host 0.0.0.0` 时用局域网 IP，dev compose 栈的 8000 已只绑 `127.0.0.1`，见 backend/README）。客户端直接录 PCM L16 16kHz，提交后端走真实 ISE 逐词评分（未配凭据时返回带 `source=stub` 的占位分并在界面警示）。
 
 ## 文档
 

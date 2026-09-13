@@ -149,13 +149,13 @@ class MissionViewModel @Inject constructor(
     }
 
     /**
-     * 滚动波形窗口: 直接转发录音器持有的那一份。以前这是 `MissionUiState.micLevel`
-     * 并注释成"已 dBFS 映射+平滑, 由 levelFlow 喂" —— 那是 VU 语义(DECAY=0.25 从 1.0
-     * 落到 0.05 要 ~440 ms), 拿它画波形会把 3-5 音节/秒糊成一坨, 而且单值没有历史,
-     * 结构上不可能滚动。现在喂的是未平滑逐帧峰值, 且**不进** [MissionUiState]:
-     * 25 Hz 的整屏重组对聊天页是白扔的帧; 收工也不在这里清(评分期间这条形状还留着)。
+     * 实时声量脉冲条的电平源: 直接转发录音器的 [AudioRecorder.levelFlow]。平滑 VU
+     * 包络**就是**脉冲条的驱动 —— "快起慢落"的手感来自包络本身, UI 层不再造第二套
+     * 平滑。它**不进** [MissionUiState]: 25 Hz 的整屏重组对聊天页是白扔的帧, 由叶子
+     * 组合项自己 collect。电平清零时机仍由 finalizeTake/cancel/start 独家决定;
+     * "定格"观感(峰值捕获)是 UI 端 RecordingPulseMeter 的职责, VM 不管电平。
      */
-    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+    val micLevel: StateFlow<Float> get() = audioRecorder.levelFlow
 
     /** 恢复: 打基础没打完就退回; 否则按快照重绘气泡与清单。 */
     fun restore() {
@@ -248,7 +248,7 @@ class MissionViewModel @Inject constructor(
 
     fun stopRecordingAndSend() {
         if (!_state.value.isRecording) return
-        // 只翻录音位:  waveform 刻意不动, 评分期间这条形状还得留在屏上。
+        // 只翻录音位: 脉冲条的定格峰值由 RecordingPulseMeter 自己捕获, VM 不管电平。
         _state.update { it.copy(isRecording = false) }
         viewModelScope.launch {
             val file = audioRecorder.stop()

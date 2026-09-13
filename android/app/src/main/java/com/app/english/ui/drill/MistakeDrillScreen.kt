@@ -108,7 +108,7 @@ fun MistakeDrillScreen(
             )
             else -> DrillContent(
                 state = state,
-                waveform = viewModel.waveform,
+                micLevel = viewModel.micLevel,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 onPlayDemo = viewModel::playDemo,
@@ -125,7 +125,7 @@ fun MistakeDrillScreen(
 @Composable
 private fun DrillContent(
     state: MistakeDrillUiState,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onPlayDemo: () -> Unit,
@@ -157,7 +157,7 @@ private fun DrillContent(
             PermissionHint(onRequestPermission = onRequestPermission)
         }
         DrillRecordButton(
-            waveform = waveform,
+            micLevel = micLevel,
             isRecording = state.isRecording,
             isSubmitting = state.isSubmitting,
             hasScore = state.lastScore != null,
@@ -198,13 +198,13 @@ private fun DrillContent(
  * 节点稳定性(旧注释把这条写反过一次, 现在的表述是准的):
  *  - 不安全的是**在 `isRecording`/`isSubmitting` 的分支间换 Button 调用点**: 那会销毁
  *    在途的 `interactionSource`, 把触发翻转的那次按压吃掉。[HoldToTalkRow] 只有一个
- *    永不停启的 `pointerInput(Unit)` 节点, 录音态只落到兄弟文案/波形上, 所以不会复发。
+ *    永不停启的 `pointerInput(Unit)` 节点, 录音态只落到兄弟文案/脉冲条上, 所以不会复发。
  *  - 安全的是按**构造期就固定的**入参(例如 PlayerScreen 按 PlayerMode 分派长按/点按) ——
  *    一次按压期间它不可能翻转。
  */
 @Composable
 private fun DrillRecordButton(
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     isRecording: Boolean,
     isSubmitting: Boolean,
     hasScore: Boolean,
@@ -215,7 +215,7 @@ private fun DrillRecordButton(
 ) {
     HoldToTalkRow(
         row = HoldToTalkRowUi(
-            waveform = waveform,
+            level = micLevel,
             isRecording = isRecording,
             isBusy = isSubmitting,
             micGranted = micGranted,

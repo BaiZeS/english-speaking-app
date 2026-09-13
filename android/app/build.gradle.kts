@@ -16,27 +16,28 @@ android {
         applicationId = "com.app.english"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "2.2.0"
+        versionCode = 10
+        versionName = "2.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
 
-        // Backend base URL is set per build type below (debug = emulator
-        // loopback via 10.0.2.2; release = public server).
+        // Backend base URL is set per build type below (v2.2.1 起两种构建类型
+        // 都默认指生产公网端点; 本地联调在 App「设置」页覆盖 Base URL)。
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
-            // Emulator maps the host loopback to 10.0.2.2, so a debug build on
-            // an emulator reaches the backend running on the dev machine.
+            // v2.2.1: debug 也默认指生产公网端点(此前指模拟器回环 10.0.2.2:8000,
+            // 装在真机/别人手机上连不到任何东西)。本地联调用「设置」页改
+            // Base URL, 或改回 10.0.2.2(模拟器)后自行构建。
             buildConfigField(
                 "String",
                 "BACKEND_BASE_URL",
-                "\"http://10.0.2.2:8000/api/v1/\"",
+                "\"http://118.89.58.84:5173/api/v1/\"",
             )
         }
         release {

@@ -48,9 +48,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.TaskChip
 import com.app.english.ui.components.HoldToTalkButton
+import com.app.english.ui.components.PulseMeterGeometry
 import com.app.english.ui.components.RecordingGuard
-import com.app.english.ui.components.RecordingWaveform
-import com.app.english.ui.components.WaveformGeometry
+import com.app.english.ui.components.RecordingPulseMeter
 import com.app.english.ui.theme.Spacings
 import com.app.english.ui.theme.color
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -151,7 +151,7 @@ fun MissionScreen(
                     input = input,
                     isRecording = state.isRecording,
                     isSubmitting = state.isSubmitting,
-                    waveform = viewModel.waveform,
+                    micLevel = viewModel.micLevel,
                     micGranted = micPermission.status.isGranted,
                     onRequestPermission = { micPermission.launchPermissionRequest() },
                     suggestion = state.suggestion,
@@ -521,7 +521,7 @@ private fun InputBar(
     input: String,
     isRecording: Boolean,
     isSubmitting: Boolean,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     suggestion: String,
@@ -543,11 +543,11 @@ private fun InputBar(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        // 波形在输入框上方独立一行: 它比按钮更需要"看得见", 而按钮是嵌在输入行里的
+        // 脉冲条在输入框上方独立一行: 它比按钮更需要"看得见", 而按钮是嵌在输入行里的
         // 行内小话筒(与输入框/发送键同一个 Row), 所以这里不套 HoldToTalkRow。
-        RecordingWaveform(
-            waveform = waveform,
-            presentation = WaveformGeometry.presentation(isRecording, isSubmitting)
+        RecordingPulseMeter(
+            level = micLevel,
+            presentation = PulseMeterGeometry.presentation(isRecording, isSubmitting)
         )
         Row(
             verticalAlignment = Alignment.Bottom,

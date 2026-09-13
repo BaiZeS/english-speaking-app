@@ -30,21 +30,21 @@ import com.app.english.ui.theme.Spacings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
-/** 两种录音行里波形条的共用高度。 */
-private val WAVEFORM_HEIGHT: Dp = 36.dp
+/** 两种录音行里声量脉冲条的共用高度。 */
+private val PULSE_HEIGHT: Dp = 36.dp
 
 /**
  * 长按录音面(短句: 打基础 / 跟读 / 角色对话 / 弱词本 / 测评朗读)的统一布局 ——
- * 滚动波形 + 一个 [HoldToTalkButton] + 话术列。
+ * 实时声量脉冲 + 一个 [HoldToTalkButton] + 话术列。
  *
- * 为什么要这一层: 这几个面的"波形 + 话筒 + 话术"本来是各自手抄的同一份 Column, 而
+ * 为什么要这一层: 这几个面的"脉冲 + 话筒 + 话术"本来是各自手抄的同一份 Column, 而
  * "手抄"恰恰是问题 1 的成因 —— `2fd067d` 只把两处换成 HoldToTalkButton, 另外三处照旧
  * 是点按 Button, 用户看到的就是一半屏幕说长按、一半屏幕点按。收成一个组件后手势只有
  * 一份实现可改。实战页(InputBar)不套这个: 它的话筒是嵌在输入框那一行的行内小按钮,
- * 只借用 [RecordingWaveform]。
+ * 只借用 [RecordingPulseMeter]。
  *
  * 入参打进一个类而不是平铺形参: `app/config/detekt.yml` 的
- * `LongParameterList.functionThreshold = 8`, 而这一行的输入(波形流 + 两个状态位 +
+ * `LongParameterList.functionThreshold = 8`, 而这一行的输入(电平流 + 两个状态位 +
  * 权限 + 三个回调 + 话术)本来就超了。
  *
  * 话术是**入参**、并且画在兄弟 [Text] 上, 这是硬约束而不是风格: 录音/评分态绝不能进入
@@ -58,10 +58,10 @@ fun HoldToTalkRow(row: HoldToTalkRowUi, modifier: Modifier = Modifier) {
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(Spacings.s1)
     ) {
-        RecordingWaveform(
-            waveform = row.waveform,
-            presentation = WaveformGeometry.presentation(row.isRecording, row.isBusy),
-            height = WAVEFORM_HEIGHT
+        RecordingPulseMeter(
+            level = row.level,
+            presentation = PulseMeterGeometry.presentation(row.isRecording, row.isBusy),
+            height = PULSE_HEIGHT
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             HoldToTalkButton(
@@ -84,7 +84,7 @@ fun HoldToTalkRow(row: HoldToTalkRowUi, modifier: Modifier = Modifier) {
 
 /** [HoldToTalkRow] 的入参。 */
 class HoldToTalkRowUi(
-    val waveform: StateFlow<List<Float>>,
+    val level: StateFlow<Float>,
     val isRecording: Boolean,
     /** 在途(评分中 / 正在准备标准音): 排空按压, 但**不**换手势节点。 */
     val isBusy: Boolean,
@@ -125,10 +125,10 @@ fun TapToTalkRow(row: TapToTalkRowUi, modifier: Modifier = Modifier) {
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(Spacings.s1)
     ) {
-        RecordingWaveform(
-            waveform = row.waveform,
-            presentation = WaveformGeometry.presentation(row.isRecording, row.isBusy),
-            height = WAVEFORM_HEIGHT
+        RecordingPulseMeter(
+            level = row.level,
+            presentation = PulseMeterGeometry.presentation(row.isRecording, row.isBusy),
+            height = PULSE_HEIGHT
         )
         Button(
             onClick = { if (row.isRecording) row.onStop() else row.onIdleTap() },
@@ -159,7 +159,7 @@ fun TapToTalkRow(row: TapToTalkRowUi, modifier: Modifier = Modifier) {
  * `LongParameterList` 门槛是函数 8 / 构造器 9, 这一行的输入本来就已经贴边。
  */
 class TapToTalkRowUi(
-    val waveform: StateFlow<List<Float>>,
+    val level: StateFlow<Float>,
     val isRecording: Boolean,
     /** 在途(评分中 / 准备标准音): 点按被禁用, 但按钮节点保持不变。 */
     val isBusy: Boolean,

@@ -1,6 +1,6 @@
 # docs 索引
 
-**当前版本 v2.2.0（代码已就绪；生产 OTA 通道此刻仍下发 v2.1.0——本版尚未打 tag / 未自托管发布 / 未做真机验收，见 [operations.md](operations.md) 第 3、5 节）**
+**当前版本 v2.2.1（versionCode 10；代码已就绪，尚未打 tag / 未发布；生产 OTA 此刻下发 v2.2.0（非强更），见 [operations.md](operations.md) 第 3、5 节）**
 
 | 文档 | 内容 | 读者 |
 |---|---|---|

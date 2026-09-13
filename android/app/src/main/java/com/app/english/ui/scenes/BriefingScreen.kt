@@ -1,7 +1,11 @@
 package com.app.english.ui.scenes
 
 import android.Manifest
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -123,7 +127,7 @@ fun BriefingScreen(
                 spec = viewModel.currentSpec(),
                 state = state,
                 isRecording = isRecording,
-                waveform = viewModel.waveform,
+                micLevel = viewModel.micLevel,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 isPlayingRef = isPlayingRef,
@@ -138,15 +142,24 @@ fun BriefingScreen(
                 onSubmitText = viewModel::submitText
             )
             state.pendingGrade?.let { grade ->
-                DrillFeedbackCard(
-                    DrillFeedbackUi(
-                        grade = grade,
-                        canRetry = state.canRetryAnsweredStep,
-                        autoAdvanceHint = state.autoAdvanceHint,
-                        onRetry = viewModel::acknowledgeFeedback,
-                        onContinue = viewModel::acknowledgeFeedback
+                // 入场动画只加在卡片上, 渲染门本身不动: 反馈"该不该出现"是 pendingGrade
+                // 一个布尔位的事(BriefingFeedbackTest 钉的就是这个), 而"怎么出现"才是
+                // 表现层。**不给 exit 动画** —— 确认时 pendingGrade 直接清空, 节点是整块
+                // 离开组合树的, 退场动画没有承载它的地方。
+                val entrance = remember {
+                    MutableTransitionState(false).apply { targetState = true }
+                }
+                AnimatedVisibility(visibleState = entrance, enter = fadeIn() + expandVertically()) {
+                    DrillFeedbackCard(
+                        DrillFeedbackUi(
+                            grade = grade,
+                            canRetry = state.canRetryAnsweredStep,
+                            autoAdvanceHint = state.autoAdvanceHint,
+                            onRetry = viewModel::acknowledgeFeedback,
+                            onContinue = viewModel::acknowledgeFeedback
+                        )
                     )
-                )
+                }
             }
         }
         when {
@@ -344,7 +357,7 @@ private fun StepCard(
     spec: FoundationStepSpec?,
     state: BriefingUiState,
     isRecording: Boolean,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     isPlayingRef: Boolean,
@@ -401,7 +414,7 @@ private fun StepCard(
                 RecordButtonRow(
                     isRecording = isRecording,
                     isSubmitting = state.isSubmitting,
-                    waveform = waveform,
+                    micLevel = micLevel,
                     micGranted = micGranted,
                     onRequestPermission = onRequestPermission,
                     onStartRecord = onStartRecord,
@@ -580,7 +593,7 @@ private fun MakeSentenceBody(
 private fun RecordButtonRow(
     isRecording: Boolean,
     isSubmitting: Boolean,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onStartRecord: () -> Unit,
@@ -588,7 +601,7 @@ private fun RecordButtonRow(
 ) {
     HoldToTalkRow(
         row = HoldToTalkRowUi(
-            waveform = waveform,
+            level = micLevel,
             isRecording = isRecording,
             isBusy = isSubmitting,
             micGranted = micGranted,

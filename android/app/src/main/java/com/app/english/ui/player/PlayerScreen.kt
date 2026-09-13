@@ -115,7 +115,7 @@ fun PlayerScreen(
                 // 这条是**课文进度**, 跟录音一点关系都没有, 但它正好长在录音区下方,
                 // 于是"录音条不会动"的抱怨里有相当一部分其实是在说它: 一次录音期间
                 // 句子索引根本不变。这里给它一个可见标题与读屏描述, 让它自我介绍。
-                // 真正的录音可视化是内容区里那根滚动的 RecordingWaveform。
+                // 真正的录音可视化是内容区里那组随说话跳动的 RecordingPulseMeter。
                 Column {
                     Text(
                         text = "课文进度 · 第 ${state.currentIndex + 1}/${state.lines.size} 句" +
@@ -144,7 +144,7 @@ fun PlayerScreen(
             )
             else -> PlayerContent(
                 state = state,
-                waveform = viewModel.waveform,
+                micLevel = viewModel.micLevel,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 onPlayReference = viewModel::playReference,
@@ -164,7 +164,7 @@ fun PlayerScreen(
 @Composable
 private fun PlayerContent(
     state: PlayerUiState,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onPlayReference: () -> Unit,
@@ -203,7 +203,7 @@ private fun PlayerContent(
         if (state.mode == PlayerMode.SHADOW) {
             PlayerShadowView(
                 state = state,
-                waveform = waveform,
+                micLevel = micLevel,
                 micGranted = micGranted,
                 onRequestPermission = onRequestPermission,
                 onStart = { showHeadphoneHint = true },
@@ -258,11 +258,11 @@ private fun PlayerContent(
 
         if (!micGranted) PermissionHint(onRequestPermission = onRequestPermission)
 
-        // 长按面: 波形 + HoldToTalkButton + 话术都在 RecordButton 里(=HoldToTalkRow),
+        // 长按面: 脉冲条 + HoldToTalkButton + 话术都在 RecordButton 里(=HoldToTalkRow),
         // 所以这一屏不再单独摆录音条。按 mode 分派到这里是安全的(mode 构造期定死)。
         RecordButton(
             controls = RecordControls(
-                waveform = waveform,
+                micLevel = micLevel,
                 isRecording = state.isRecording,
                 isSubmitting = state.isSubmitting,
                 hasScore = state.currentScore != null,

@@ -4,18 +4,18 @@ Kotlin + Jetpack Compose 原生 Android 客户端。
 
 ## 状态
 
-✅ **v2.2.0（versionCode 9）**：对标可栗的四 Tab 信息架构 —— 首页（今日推荐/继续学习/场景画廊/5 分钟 CEFR 测评引导）、课程（情景课 + 课本）、词汇（表达库 + 弱词训练）、我的（能力画像雷达/轨迹、历史、设置）。**情景实战课**全流程：打基础四题型（跟读 / 复述 / 翻译 / 造句）→ 任务制实战对话（聊天气泡 + 任务清单通关 + 润色气泡收藏）→ 复盘报告；另有 AI 生成课（说出目标→两段生成）、测评三屏、影子跟读、OTA 自托管更新通道。327 个 JVM 单测，release 包内置生产地址 `:5173`。
+✅ **v2.2.1（versionCode 10）**：对标可栗的四 Tab 信息架构 —— 首页（今日推荐/继续学习/场景画廊/5 分钟 CEFR 测评引导）、课程（情景课 + 课本）、词汇（表达库 + 弱词训练）、我的（能力画像雷达/轨迹、历史、设置）。**情景实战课**全流程：打基础四题型（跟读 / 复述 / 翻译 / 造句）→ 任务制实战对话（聊天气泡 + 任务清单通关 + 润色气泡收藏）→ 复盘报告；另有 AI 生成课（说出目标→两段生成）、测评三屏、影子跟读、OTA 自托管更新通道。318 个 JVM 单测（开工实测 328，旧口径 327 已过期），release 包内置生产地址 `:5173`。
 
 录音侧本轮重做（用户报告的 5 个真机症状全在客户端这一侧，逐条根因见 `CHANGELOG.md` v2.2.0）：
 
 - **两种手势按取句长短分派**，共用一套行组件 `ui/components/HoldToTalkRow.kt`（`HoldToTalkRow` 长按 / `TapToTalkRow` 点按 / `TakeElapsedText` 计时）：长按面 = 打基础、实战、跟读练课、角色对话、弱词本、测评朗读题；点按面 = 影子跟读（整段连续、无 30s 上限）与自由对话（30s 到点自动发送）——点按面一律配诚实话术 + `mm:ss` 已录计时，**不允许任何一屏的文案承诺它没实现的手势**。
-- **真滚动波形** `ui/components/RecordingWaveform.kt`（Canvas + 单个 `Animatable` 驱动子条滑移）← `AudioRecorder.waveformFlow`（**未平滑**的逐帧峰值：`AudioLevelMapping.smooth` 的衰减约 440ms 才落到位，拿它画会把音节糊成一片；该映射与其 9 个单测未动）← 纯环形缓冲 `audio/WaveformHistory.kt`（40 条 ≈ 1.6s @ ~25Hz）。取句结束时**保留形状不清空**，评分期间仍在屏上；阈值电平表旧件 `RecordingLevelIndicator.kt` 已删除（让编译器强制 5 个调用点同批迁移）。自由对话与测评页此前**没有**录音条，本轮新增。
-- **每环节即时反馈** `ui/scenes/DrillFeedbackCard.kt`：总分 + 五维子分（null = 无证据，跳过不渲染）+ 逐词芯片含 IPA + 引擎实际听到的转写 + 中文建议；≥85 停留 5s 自动前进（`ui/scenes/FeedbackAdvancePolicy.kt`），滚动/点按即取消。渲染门键在独立槽位 `pendingGrade` 上，不再键在"被这次评分自己作废的步身份"上（那是过关时卡片永不组合的根因）。
+- **实时声量脉冲条** `ui/components/RecordingPulseMeter.kt`（Canvas + `animateFloatAsState` 逐条补间；5 根中心高两端低的条随当前音量跳动，空闲画淡底轨；v2.2.1 取代上一代滚动波形）← `AudioRecorder.levelFlow`（VU 包络：`AudioLevelMapping` ATTACK=0.7 / DECAY=0.25，**快起慢落**，这条包络本身就是手感来源；v2.2.0 那代未平滑逐帧峰值管线 `waveformFlow` / 环形缓冲 `WaveformHistory` 已随滚动波形一并删除）。取句结束时**定格在本条峰值**并变淡、直到评分回来——定格值由 UI 端 `PulseMeterGeometry.nextPeak` 捕获（纯函数 + JVM 单测，钉住 `finalizeTake` 先清零、`isBusy` 后翻转的竞态）。阈值电平表与滚动波形两代旧件（`RecordingLevelIndicator.kt`；`RecordingWaveform.kt` + `WaveformGeometry.kt` + `WaveformHistory.kt`）均已删除，两代都靠编译器强制调用点迁移。`AudioLevelMapping` 与其 **8** 个单测未动。自由对话与测评页此前**没有**录音条，v2.2.0 轮新增后如今同样吃这条脉冲。
+- **每环节即时反馈** `ui/scenes/DrillFeedbackCard.kt`：总分 + 五维子分（null = 无证据，跳过不渲染）+ 逐词芯片含 IPA + 引擎实际听到的转写 + 中文建议；≥85 停留 5s 自动前进（`ui/scenes/FeedbackAdvancePolicy.kt`），滚动/点按即取消。**v2.2.1 起这套卡重做为中性卡**：打基础 `DrillFeedbackCard` / 跟读与角色对话 `PlayerScorePanel` / 自由对话的评分卡统一为「中性卡 + `ScoreRing` 分数环（分数带染色）+ 五维/三维子分进度条（`SubScorePill` 原地重样式）+ 逐词染色芯片（`WordChip`：色底，词 + 音标 + 分数）+ 建议/引擎转写引用块」，打基础评分卡新增入场动画，弱词训练卡经共用件自动受益。渲染门键在独立槽位 `pendingGrade` 上，不再键在"被这次评分自己作废的步身份"上（那是过关时卡片永不组合的根因）。
 - **收工不再同步等总评 LLM**：202 + `doc["review_status"]` 轮询（`ui/scenes/ReviewPollingPolicy.kt` 2s→6s、5min 放弃；三态判定在纯 Kotlin `ReviewStateMachine`），先画数值骨架、文案区写「AI 正在写总评…」；收工重复提交守卫在 `MissionFinishGuard`。**breaking**：旧包配新后端会在收工时拿到空 `review`，故 v2.2.0 按强制升级发布（见 docs/operations.md 第 3 节）。
 
 `ScoreSessionHolder` 那份成绩聚合已落盘（`ui/score/ScoreSessionStore.kt`，JSON in `filesDir`，编解码抽成纯 `ScoreSessionCodec`）—— **刻意没建 Room 实体**：`5556851` 是有意删掉 `HistoryCacheDao` 的，而 `history_cache` 至今作为**冻结实体**留在 `AppDatabase` 里只为钉住 Room 2.6.1 的 v3 身份哈希（不 bump 版本就删 `@Entity` 会让存量装在 `checkIdentity` 崩），那个壳不要动。从后端重建也**已核实不可行**：`history` 表每行只有逐句 total/pronunciation/fluency/completeness，没有逐词分、建议、角色名，也没有 `session_id`。
 
-判定逻辑照旧走"抽出纯 Kotlin + JVM 单测"这条路：**没有 `androidTest` 源集，也不引 Robolectric / Compose UI 测试栈**（本轮沿用了这个既有约定，新增的接缝是 `WaveformHistory` / `RecordingTakeClock` / `WaveformGeometry` / `BackendErrorText` / `ReviewPollingPolicy` / `FeedbackAdvancePolicy` / `ReviewStateMachine` / `MissionFinishGuard` / `ReviewEntryPolicy` / `SubScoreReadout` / `ScoreSessionCodec`）。⏳ **v2.2.0 的真机验收尚未执行**——以上客户端行为目前的证据只有源码与 JVM 单测。
+判定逻辑照旧走"抽出纯 Kotlin + JVM 单测"这条路：**没有 `androidTest` 源集，也不引 Robolectric / Compose UI 测试栈**（本轮沿用了这个既有约定，新增的接缝是 `PulseMeterGeometry` / `RecordingTakeClock` / `BackendErrorText` / `ReviewPollingPolicy` / `FeedbackAdvancePolicy` / `ReviewStateMachine` / `MissionFinishGuard` / `ReviewEntryPolicy` / `SubScoreReadout` / `ScoreSessionCodec`；`RecordingPulseMeter` / `ScoreRing` / `FeedbackBlocks` 为纯组合层，无单测——几何与定格判定在 `PulseMeterGeometry` 里）。⏳ **v2.2.0 与 v2.2.1 的真机验收均尚未执行**——以上客户端行为目前的证据只有源码与 JVM 单测。
 
 ## 目录结构
 
@@ -61,7 +61,7 @@ android/
 
 ```bash
 ./scripts/ktlint.sh                    # == CI 的 ktlint 硬门（同版本经阿里云镜像）
-./gradlew testDebugUnitTest --no-daemon # 327 JVM 单测
+./gradlew testDebugUnitTest --no-daemon # 318 JVM 单测
 ./gradlew assembleDebug --no-daemon     # debug 包（产物在 app/build/outputs/apk/debug/，当前约 22.1 MB）
 ```
 

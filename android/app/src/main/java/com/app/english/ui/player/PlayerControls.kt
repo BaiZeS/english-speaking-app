@@ -81,13 +81,13 @@ fun ReferenceButton(
  *    SHADOW 走 PlayerShadowView 自带的点按行, 不会走到这里。
  *
  * 入参被打成一个类: 本函数原本已有 8 个形参, 正卡在
- * `app/config/detekt.yml:LongParameterList.functionThreshold = 8` 上, 再加波形就会被标记。
+ * `app/config/detekt.yml:LongParameterList.functionThreshold = 8` 上, 再喂一路流就会被标记。
  */
 @Composable
 fun RecordButton(controls: RecordControls, modifier: Modifier = Modifier) {
     HoldToTalkRow(
         row = HoldToTalkRowUi(
-            waveform = controls.waveform,
+            level = controls.micLevel,
             isRecording = controls.isRecording,
             isBusy = controls.isSubmitting,
             micGranted = controls.micGranted,
@@ -108,7 +108,7 @@ fun RecordButton(controls: RecordControls, modifier: Modifier = Modifier) {
  * [RecordButton] 的入参包(见那里关于 detekt 形参上限的说明)。
  */
 data class RecordControls(
-    val waveform: StateFlow<List<Float>>,
+    val micLevel: StateFlow<Float>,
     val isRecording: Boolean,
     val isSubmitting: Boolean,
     val hasScore: Boolean,

@@ -48,15 +48,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingGuard
+import com.app.english.ui.components.ScoreRing
+import com.app.english.ui.components.SuggestionBlock
 import com.app.english.ui.components.TapToTalkDisplay
 import com.app.english.ui.components.TapToTalkRow
 import com.app.english.ui.components.TapToTalkRowUi
-import com.app.english.ui.theme.color
+import com.app.english.ui.player.SubScoreRow
+import com.app.english.ui.theme.Spacings
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -126,7 +128,7 @@ fun FreeDialogueScreen(
             )
             else -> FreeDialogueContent(
                 state = state,
-                waveform = viewModel.waveform,
+                micLevel = viewModel.micLevel,
                 micGranted = micPermission.status.isGranted,
                 onRequestPermission = { micPermission.launchPermissionRequest() },
                 onPlayAssistant = viewModel::playLatestAssistant,
@@ -142,7 +144,7 @@ fun FreeDialogueScreen(
 @Composable
 private fun FreeDialogueContent(
     state: FreeDialogueUiState,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onPlayAssistant: () -> Unit,
@@ -218,12 +220,12 @@ private fun FreeDialogueContent(
         }
         // 自由对话按 D4 保留**点按**(一轮回答可以说到 30 秒上限, 没人按得住), 换
         // 文案诚实 + 真计时: 空闲写"30 秒后自动发送", 录中写"0:07"(最后 5 秒变
-        // "0:26 · 即将自动发送"并转警示色)。这一页此前既没有波形也没有计时, 于是
+        // "0:26 · 即将自动发送"并转警示色)。这一页此前既没有电平条也没有计时, 于是
         // "点了开始回答之后界面完全不动"就是用户报的那个观感。
         // 手势节点仍然只有一个 Button(见 TapToTalkRow) —— 换控件才是旧的吞按压根因。
         TapToTalkRow(
             row = TapToTalkRowUi(
-                waveform = waveform,
+                level = micLevel,
                 isRecording = state.isRecording,
                 isBusy = state.isSubmitting,
                 micGranted = micGranted,
@@ -296,24 +298,20 @@ private fun MessageBubble(message: FreeDialogueMessage) {
 
 @Composable
 private fun FreeScoreCard(score: ScoreResult) {
-    val color = ScoreColorMapper.level(score.total).color()
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("本轮得分", style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = score.total.toInt().toString(),
-                style = MaterialTheme.typography.headlineMedium,
-                color = color,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                "发音 ${score.pronunciation.toInt()} · " +
-                    "流利度 ${score.fluency.toInt()} · 完整度 ${score.completeness.toInt()}",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            score.suggestion?.takeIf { it.isNotBlank() }?.let {
-                Text("建议：$it", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(
+            Modifier.padding(Spacings.s3),
+            verticalArrangement = Arrangement.spacedBy(Spacings.s1)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacings.s2)
+            ) {
+                ScoreRing(score = score.total, diameter = 40.dp, strokeWidth = 5.dp)
+                Text("本轮得分", style = MaterialTheme.typography.titleMedium)
             }
+            SubScoreRow(score.pronunciation, score.fluency, score.completeness)
+            score.suggestion?.takeIf { it.isNotBlank() }?.let { SuggestionBlock(it) }
         }
     }
 }

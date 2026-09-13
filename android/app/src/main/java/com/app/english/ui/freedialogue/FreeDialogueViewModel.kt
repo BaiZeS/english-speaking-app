@@ -99,11 +99,14 @@ class FreeDialogueViewModel @Inject constructor(
     val state: StateFlow<FreeDialogueUiState> = _state.asStateFlow()
 
     /**
-     * 滚动波形窗口(计划 P2 决策 4 点名的缺口之一: 这一页**过去完全没有电平管线**)。
-     * 直接转发录音器持有的原始逐帧峰值窗口, 不复制进 [FreeDialogueUiState] —— 那是
-     * 25 Hz 的整屏重组。
+     * 实时声量脉冲条的电平源(计划 P2 决策 4 点名的缺口之一: 这一页**过去完全没有
+     * 电平管线**)。直接转发录音器的 [AudioRecorder.levelFlow] —— 平滑 VU 包络就是
+     * 脉冲条的驱动, UI 层不再造第二套平滑; 也不复制进 [FreeDialogueUiState], 那是
+     * 25 Hz 的整屏重组, 由叶子组合项自己 collect。电平清零时机由录音器的
+     * finalizeTake/cancel/start 独家决定; "定格"观感是 UI 端 RecordingPulseMeter
+     * 捕获峰值的职责。
      */
-    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+    val micLevel: StateFlow<Float> get() = audioRecorder.levelFlow
 
     init {
         // 同 PlayerViewModel: 这一局的评分面从零开始, 上一局的残档不能跨局复用(E5)。

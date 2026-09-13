@@ -147,11 +147,13 @@ class PlayerViewModel @Inject constructor(
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
 
     /**
-     * 录音器持有的滚动波形窗口, 原样转发(不在这里再抄一份进 [PlayerUiState]:
-     * 那是 25 Hz 的整屏重组)。叶子组件直接 collect 它, 每帧只重画那一个 Canvas。
-     * 收工后它仍留着刚说完那条的形状 —— 清空时机由 `AudioRecorder` 独家决定。
+     * 录音器的 [AudioRecorder.levelFlow] (平滑 VU 包络), 原样转发给实时声量脉冲条
+     * —— 不抄一份进 [PlayerUiState]: 那是 25 Hz 的整屏重组。叶子组件直接 collect
+     * 它, 每帧只重画那一个 Canvas。电平清零时机由 `AudioRecorder` 的
+     * finalizeTake/cancel/start 独家决定; 松手送评期间的"定格"观感是 UI 端
+     * RecordingPulseMeter 自己捕获峰值的事。
      */
-    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+    val micLevel: StateFlow<Float> get() = audioRecorder.levelFlow
 
     /** Shadow mode: playback start offset (ms) of each line within the run. */
     private var shadowBoundaryMs = LongArray(0)
@@ -383,7 +385,6 @@ class PlayerViewModel @Inject constructor(
         if (!_state.value.isRecording) return
         val line = _state.value.currentLine ?: return
         viewModelScope.launch {
-            // 波形不清: 送评分的这段时间里学员还在看刚说完的那一条(录音器也刻意保留)。
             _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
             if (file == null) {

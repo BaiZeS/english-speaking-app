@@ -112,7 +112,7 @@ private fun BackendUrlCard(baseUrl: String, onChange: (String) -> Unit) {
                 singleLine = true
             )
             Text(
-                text = "默认 http://10.0.2.2:8000/api/v1/（模拟器映射宿主机）",
+                text = "默认 http://118.89.58.84:5173/api/v1/（生产；本地联调改成宿主机地址）",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

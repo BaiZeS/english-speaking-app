@@ -58,13 +58,13 @@ class MistakeDrillViewModel @Inject constructor(
     val state: StateFlow<MistakeDrillUiState> = _state.asStateFlow()
 
     /**
-     * 滚动波形窗口, 由 `AudioRecorder.waveformFlow` 喂(**未平滑**的逐帧峰值: VU 那条
-     * `levelFlow` 的包络 ~440 ms 才回落, 画波形会把音节糊成一坨)。单词练只有一根根
-     * 短促的条, 正是最能体现"原始帧"价值的地方。不复制进 [MistakeDrillUiState]: 那是
-     * 25 Hz 的整屏重组; 收工也不在这里清 —— 毕业判定与评分那几秒学员还在看自己刚念
-     * 的那个词。
+     * 实时声量脉冲条的电平源, 由 [AudioRecorder.levelFlow] 喂(平滑 VU 包络就是脉冲条
+     * 要的驱动 —— "快起慢落"的手感来自包络本身, UI 层不再造第二套平滑)。单词练是一
+     * 根根短促的录音, 定格观感(峰值捕获)交给 UI 端 RecordingPulseMeter。不复制进
+     * [MistakeDrillUiState]: 那是 25 Hz 的整屏重组, 由叶子组合项自己 collect; 电平
+     * 清零时机仍由 finalizeTake/cancel/start 独家决定。
      */
-    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+    val micLevel: StateFlow<Float> get() = audioRecorder.levelFlow
 
     init {
         loadWords()
@@ -128,7 +128,6 @@ class MistakeDrillViewModel @Inject constructor(
         val word = current.currentWord ?: return
         if (!current.isRecording) return
         viewModelScope.launch {
-            // 波形刻意不动: 评分那几秒这条形状还得留在屏上(见 waveform)。
             _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
             if (file == null) {

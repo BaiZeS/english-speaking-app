@@ -268,7 +268,7 @@ fun AssessmentScreen(
 
             else -> QuestionBody(
                 state = state,
-                waveform = viewModel.waveform,
+                micLevel = viewModel.micLevel,
                 isRecording = isRecording,
                 micGranted = micPermission.status.isGranted,
                 onRequestMic = { micPermission.launchPermissionRequest() },
@@ -293,7 +293,7 @@ fun AssessmentScreen(
 @Composable
 private fun QuestionBody(
     state: AssessmentFlowState,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     isRecording: Boolean,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
@@ -340,7 +340,7 @@ private fun QuestionBody(
 
             else -> AnswerInput(
                 answerDraft = answerDraft,
-                waveform = waveform,
+                micLevel = micLevel,
                 isRecording = isRecording,
                 micGranted = micGranted,
                 onRequestMic = onRequestMic,
@@ -451,7 +451,7 @@ private fun TranscriptUnavailableCard() {
 @Composable
 private fun AnswerInput(
     answerDraft: String,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     isRecording: Boolean,
     micGranted: Boolean,
     onRequestMic: () -> Unit,
@@ -473,13 +473,13 @@ private fun AnswerInput(
             PermissionHint(onRequestPermission = onRequestMic)
         }
         // 语音作答: 长按面(测评朗读题每句都是短句 + 30s 上限)。这一页此前**根本没有**
-        // 录音条(计划 §2.6 E4), 所以这里是新增而不是修复: HoldToTalkRow 自带滚动的
-        // RecordingWaveform, 松开即提交由话术说清楚。
+        // 录音条(计划 §2.6 E4), 所以这里是新增而不是修复: HoldToTalkRow 自带实时的
+        // RecordingPulseMeter, 松开即提交由话术说清楚。
         // 无权限时按下去只弹权限申请, 不进录音态(与弱词本同一套口径)。
         if (!audioBlocked) {
             HoldToTalkRow(
                 row = HoldToTalkRowUi(
-                    waveform = waveform,
+                    level = micLevel,
                     isRecording = isRecording,
                     isBusy = false,
                     micGranted = micGranted,

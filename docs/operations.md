@@ -1,4 +1,4 @@
-# 运维与发版 SOP · english-speaking-app（v2.2.0）
+# 运维与发版 SOP · english-speaking-app（v2.2.1）
 
 部署机 = 本盒（公网 `118.89.58.84`，云防火墙当前仅映射 **TCP 5173/80/8080**）。仓库：`/home/ubuntu/mimo-workspace/english-speaking-app`，工作分支 main（origin==local）。
 
@@ -7,7 +7,7 @@
 | 项 | 值 |
 |---|---|
 | 生产 API | **docker compose 发布栈**：容器 `english-api-prod`（`backend/docker-compose.prod.yml`，宿主端口 `${API_PORT:-5173}`→容器 8000；release 包内置 `http://118.89.58.84:5173/api/v1/`）。**容器内 8000 不是宿主端口**：宿主 8000 属开发栈（`docker-compose.yml`，现只绑 `127.0.0.1:8000`），与生产无关 |
-| 生产库 | 栈内 `postgres:16-alpine`（容器 `english-postgres-prod`，卷 `english-prod-pgdata`，库 **`english_prod_5173`**；**不发布宿主端口**）。宿主 127.0.0.1:5432 = 开发栈 `english-postgres`（库 `english_dev`；**2026-09-11 起该容器已停**，需要时 `docker compose up -d postgres` 起回，卷 `backend_postgres_data` 一直在。曾同存的"切换前旧生产库冷备" `english_prod_5173` 已 drop——实测 1 user / 0 sessions / 0 history 的近空库，drop 前已 `pg_dump`，同内容既存备份见 `backend/logs/pre-compose-cutover-20260907T111032Z.dump`）——**运维 SQL/备份一律 `docker exec english-postgres-prod psql -U english ...`**。**dev 栈发布端口自 2026-09-11 收紧为 loopback-only**（postgres `127.0.0.1:5432`、api `127.0.0.1:8000`，`docker compose config` 已核）：局域网/其它机器不再可达；Android 模拟器不受影响（debug 包指 `http://10.0.2.2:8000/api/v1/`，`10.0.2.2` NAT 到宿主 loopback，`android/app/build.gradle.kts:39`），**真机局域网调试 dev 栈因此失效**——改用 SSH 隧道/`adb reverse` 或模拟器（局域网直连如今仅剩"开发机上裸跑 `uv run uvicorn --host 0.0.0.0`"这一条路，仅限开发机，见 backend/README 连接表）|
+| 生产库 | 栈内 `postgres:16-alpine`（容器 `english-postgres-prod`，卷 `english-prod-pgdata`，库 **`english_prod_5173`**；**不发布宿主端口**）。宿主 127.0.0.1:5432 = 开发栈 `english-postgres`（库 `english_dev`；**2026-09-11 起该容器已停**，需要时 `docker compose up -d postgres` 起回，卷 `backend_postgres_data` 一直在。曾同存的"切换前旧生产库冷备" `english_prod_5173` 已 drop——实测 1 user / 0 sessions / 0 history 的近空库，drop 前已 `pg_dump`，同内容既存备份见 `backend/logs/pre-compose-cutover-20260907T111032Z.dump`）——**运维 SQL/备份一律 `docker exec english-postgres-prod psql -U english ...`**。**dev 栈发布端口自 2026-09-11 收紧为 loopback-only**（postgres `127.0.0.1:5432`、api `127.0.0.1:8000`，`docker compose config` 已核）：局域网/其它机器不再可达；**v2.2.1 起 debug 包也默认指生产公网端点 `http://118.89.58.84:5173/api/v1/`**（`android/app/build.gradle.kts`，此前指 `10.0.2.2:8000`）——本地/模拟器联调 dev 栈需在 App「设置」页把 Base URL 改回宿主机地址，**真机局域网调试 dev 栈仍失效**（改用 SSH 隧道/`adb reverse` 或设置页指公网；局域网直连如今仅剩"开发机上裸跑 `uv run uvicorn --host 0.0.0.0`"这一条路，仅限开发机，见 backend/README 连接表）|
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
 | 进程方式 | **只有 docker compose 这一种跑法**。`docker compose up -d` + `restart: unless-stopped`（随 docker daemon 自动拉起——裸进程时代没有的增益）；由 `backend/scripts/deploy.sh` 统一管理（每条 compose 命令前自动剥离与 .env 同名的陈旧环境变量，.env 唯一事实源）；`start`/`restart` 都是 `up -d --build`（restart 另加 `--force-recreate`）——改 `.env` 后必须 recreate，compose 原生 restart 不重读 env_file、不换镜像；日志 `docker logs english-api-prod`（json-file 10m×5）。**回滚口径 = 源码回滚**：`git checkout v<上一版> -- backend/ && backend/scripts/deploy.sh restart`（走 compose、用**真**生产库）。⚠️ 跨迁移边界会失败：`scripts/docker-entrypoint.sh` 每次启动都跑 `alembic upgrade head`，库已在更新的 revision 上而旧代码的 `backend/app/db/migrations/versions/` 不认识它 → `Can't locate revision identified by …`。回滚前先 `git diff --name-only v<上一版>..HEAD -- backend/app/db/migrations/`，非空就必须先定 downgrade 方案（`v2.1.0..v2.2.0` 已核实未改任何迁移文件，故 2.2.0→2.1.0 安全）。已知缺口：`RELEASE_TAG` 没有任何脚本会设置 → 镜像恒为 `english-assistant-api:local`、每次 rebuild 覆盖，**今天没有基于镜像的后端回滚**。（旧 `deploy.sh start-legacy`/`stop-legacy` 裸进程逃生口已于 2026-09-11 退役删除——它依赖的 `.deploy.env` 指向 dev postgres 容器内的同名陈旧库，实测 1 user / 0 sessions / 0 history，"回滚"过去等于把生产切到空库；理由与过程见 CHANGELOG 同日条目与 §6.1。） |
 | 密钥 | 均在 `backend/.env`（gitignored，不入 git；发布栈的 `DATABASE_URL` 由 compose 服务名自动派生）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填；**09-08 已真火冒烟过门**（`/api/v1/score` 17s 音频 3.3s 返回 `source=xunfei` 55 词真分 + 括号脏参考回归通过 + IAT 转写通过，容器日志 `xunfei ise ok`；app 端语音轮=待用户真机复确认，观察 `mission turn perf`）|
@@ -53,14 +53,14 @@ git push origin main && git fetch -q origin
 #    "Release Gate" job 已绿再打 tag（它不装 SDK，通常几十秒内就出结果）。
 #    ★ 若门红又自认合理：git commit --amend 在 message 里补 [release-gate-skip: 理由]
 #    重推（force push main 之前先想清楚 —— 见 §6 那条例子），别直接绕过。
-git tag -a v2.2.0 -m "v2.2.0: ..." && git push origin v2.2.0
+git tag -a v2.2.1 -m "v2.2.1: ..." && git push origin v2.2.1
 # ③ 等 release.yml（~14 min）: 成功且 asset=EnglishAssistant-<ver>.apk,
 #    Release 名/tag 正确（workflow 用 GITHUB_REF_NAME，勿改成 git describe——已踩坑）
 # ④ 【必须】OTA 自托管切换（否则手机走 GitHub 11-40KB/s 等于没有更新）：
 cd backend && bash scripts/publish_apk.sh v2.2.1
 # 该脚本自动：GitHub 拉 asset(慢线 ~20-25min) → static/apk → 写 .env 两变量 → restart
 # → 自检 source=env + Range 探测。重复跑无害（幂等覆盖）。
-# ⑤ versionCode 永远严格递增（v2.1.0=8 / v2.2.0=9；Android 同名 version 不比, semver 字典序）
+# ⑤ versionCode 永远严格递增（v2.1.0=8 / v2.2.0=9 / v2.2.1=10；Android 同名 version 不比, semver 字典序）
 #    —— §3.0 的门现在会在 push/PR 上强制它, 不再只靠这句话。
 ```
 
@@ -139,11 +139,11 @@ docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f
   && docker cp english-postgres-prod:/tmp/bk.dump backend/logs/backup-$(date -u +%F).dump
 ```
 
-后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **573 全绿**，sqlite；CI 含 PG16 + `--cov-fail-under=85`，本机整轮覆盖率 89.89%）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①），基线 **327 个 JVM 单测**（`android/README.md` 本轮已从过期的 168 校正；开工时实清点 176）。**外加 CI 新增的 `release-gate`（§3.0）——它是 blocking 门，红了就别打 tag。**
+后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **573 全绿**，sqlite；CI 含 PG16 + `--cov-fail-under=85`，本机整轮覆盖率 89.89%）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①），基线 **318 个 JVM 单测**（v2.2.1 实测；开工时实清点 328——旧口径 327 在开工前就已过期；更早"从 168 校正到 327/开工 176"的史实见 CHANGELOG v2.2.0 条）。**外加 CI 新增的 `release-gate`（§3.0）——它是 blocking 门，红了就别打 tag。**
 
-**v2.2.0 的发版状态与验收状态（写文档时点，诚实记录）**：代码侧已全部落到 `main`（本地三连 + 双 CI 口径见上），但**尚未打 tag、尚未 `publish_apk.sh`、尚未设强更**——`curl -s $BASE/api/v1/app/version` 此刻返回的仍是 `latest_version=2.1.0` / `min_supported_version=0.0.0`（哨兵）/ `source=env` / `force=false`，也就是**学员手机上现在还是 v2.1.0 那一棵树**。上面这一节的冒烟集（尤其 ①-⑥ 那条异步总评链）**必须在部署后实跑**，本文件里所有早于本版的真机/部署结果条目都是历次发布留下的实况记录，保持原样不动。
+**发版状态与验收状态（写文档时点 2026-09-12，诚实记录）**：**v2.2.0 已发布**——tag `v2.2.0` 已打（`9dea163`）、`publish_apk.sh` 已跑，`curl -s $BASE/api/v1/app/version` 实测返回 `latest_version=2.2.0` / `min_supported_version=0.0.0`（哨兵）/ `source=env` / `force=false`——**学员手机上现在已是 v2.2.0 那一棵树，且升级提示可「稍后再说」**。⚠️ 与 §3.2「为 v2.2.0 设 `APP_MIN_SUPPORTED_VERSION=2.2.0`」的计划叙述对账：实测线上**并未处于强更态**（min_supported 仍是 `0.0.0`），旧 v2.1.0 包在 202 契约下收工拿空 `review` 的暴露面按现状仍然存在，以本节实测为准。下一版 **v2.2.1（versionCode 10，样式补丁：实时声量脉冲条 + 评分反馈卡中性化）代码已就绪，尚未打 tag / 未发布**；它无契约变更、不设强更。上面第 5 节冒烟集（尤其 ①-⑥ 那条异步总评链）在 v2.2.0 部署后应实跑留证，若尚无实跑记录则**必须补跑**；本文件里更早的真机/部署结果条目都是历次发布留下的实况记录，保持原样不动。
 
-同样尚未执行的是**真机验收**：逐条对应用户报告的 5 个症状 + E2/E3/E4/E5 + 强更提示的装机脚本还挂着（发布计划 §5.3），所以本版所有客户端行为的现有证据只有"源码 + 327 个 JVM 单测 + 后端集成测试 + DEBUG APK 能构建"，**没有任何一条被真机确认过**。别把本节或 CHANGELOG 里的描述当验收结论用。
+同样尚未执行的是**真机验收**：v2.2.0 那批（逐条对应用户报告的 5 个症状 + E2/E3/E4/E5 + 升级提示的装机走查）脚本还挂着（发布计划 §5.3），v2.2.1 的脉冲条手感与反馈卡观感同样待验，所以两版所有客户端行为的现有证据只有"源码 + 318 个 JVM 单测 + 后端集成测试 + DEBUG APK 能构建"，**没有任何一条被真机确认过**。别把本节或 CHANGELOG 里的描述当验收结论用。
 
 ## 5.5 时延预算表（同步 LLM 调用契约）
 
@@ -239,7 +239,7 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 - **杀得动它的向量**只有两条：容器进程 **root 所有**，非 root 用户连 `kill -0` 都得 **EPERM**——所以普通 `pkill -f uvicorn` 杀不掉生产，但那是**静默无效**而非安全，这台机器有**免密 sudo**（`sudo pkill -f` 成立），且操作者在 **docker 组**（`docker stop english-api-prod` 可行）。
 - **史案（对号入座用）**：PID 2117 曾被项目记忆记为「root 僵尸 uvicorn app:app，无监听，杀不动」。实测**那不是本项目的**：它的宿主 PID 与 `docker inspect -f '{{.State.Pid}}' bill-recognition-bill-recognition-1` 完全一致，cgroup 与该容器的 containerd-shim（PPID 2024）吻合，State 是 `S`（睡眠、10 线程）**不是 Z**——它是**另一个项目（bill-recognition）健康的容器 init 进程**，`app:app` 与 `--port 8000` 是那个项目自己的模块路径与容器内端口。杀它 = 打掉别的项目。"杀不动"恰恰是它是别的容器 init 的信号，不是该强杀的理由。
 - **别"顺手加固"容器内的 `--host 0.0.0.0`——它是必须的**：Docker 发布端口靠 DNAT 把包送到容器 **eth0 地址**，永远不会是它的 loopback。把 uvicorn 改绑 `127.0.0.1` 会让宿主 `${API_PORT:-5173}` 直接不可达，而容器内的 `HEALTHCHECK curl localhost:8000`（`backend/Dockerfile.prod:38`）**照样通过**——`docker ps` 显示 healthy、`deploy.sh start --wait` 也过，只有从宿主 curl 才发现挂了：**假绿陷阱**。（注意这与 `backend/README.md` 裸机开发里"`0.0.0.0` 必须"是两条不同的理由：裸进程绑 `0.0.0.0` 是为了模拟器/真机可达，那是宿主网络栈上的真监听。）
-- 端口对号：容器内 8000 **不是**宿主端口；宿主 8000 属 dev 栈且已收紧 `127.0.0.1:8000`（Android debug 包内置 `http://10.0.2.2:8000/api/v1/`，`10.0.2.2` NAT 到宿主 loopback，模拟器照常）；生产发布的是宿主 `${API_PORT:-5173}` → 容器 8000（`docker-compose.prod.yml:46`），`0.0.0.0` 绑定是刻意的（公开契约，烧进 release 包），云防火墙仅映射 TCP 5173/80/8080。
+- 端口对号：容器内 8000 **不是**宿主端口；宿主 8000 属 dev 栈且已收紧 `127.0.0.1:8000`（Android debug 包自 v2.2.1 起与 release 同指公网 `http://118.89.58.84:5173/api/v1/`，本地联调在 App「设置」页覆盖 Base URL）；生产发布的是宿主 `${API_PORT:-5173}` → 容器 8000（`docker-compose.prod.yml:46`），`0.0.0.0` 绑定是刻意的（公开契约，烧进 release 包），云防火墙仅映射 TCP 5173/80/8080。
 
 
 ## 7. 文档索引

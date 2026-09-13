@@ -53,12 +53,13 @@ class BriefingViewModel @Inject constructor(
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
     /**
-     * 滚动波形窗口, 直接转发录音器持有的那一份(不复制进 reduceBriefing 的状态机:
-     * 那是 25 Hz 的整屏重组, 而且状态机不该知道麦克风)。喂的是**未平滑**的逐帧峰值
-     * —— VU 那条 `levelFlow` 的包络会把音节糊成一坨。收工不在这里清: 评分期间学员
-     * 还在看刚说完的那一条, 清空时机由 `AudioRecorder` 独家决定。
+     * 实时声量脉冲条的电平源, 直接转发录音器的 [AudioRecorder.levelFlow](不复制进
+     * reduceBriefing 的状态机: 那是 25 Hz 的整屏重组, 而且状态机不该知道麦克风,
+     * 由叶子组合项自己 collect)。平滑 VU 包络**就是**脉冲条的驱动, UI 层不再造第二套
+     * 平滑。电平清零时机仍由 `AudioRecorder` 的 finalizeTake/cancel/start 独家决定;
+     * "定格"观感(峰值捕获)是 UI 端 RecordingPulseMeter 的职责, VM 不管电平。
      */
-    val waveform: StateFlow<List<Float>> get() = audioRecorder.waveformFlow
+    val micLevel: StateFlow<Float> get() = audioRecorder.levelFlow
 
     private val _isPlayingRef = MutableStateFlow(false)
     val isPlayingRef: StateFlow<Boolean> = _isPlayingRef.asStateFlow()
@@ -143,7 +144,6 @@ class BriefingViewModel @Inject constructor(
         if (!_isRecording.value) return
         val step = _state.value.answerableStepId ?: return
         _isRecording.value = false
-        // 波形不清: 评分期间这条形状还要留在屏上(见 waveform 的 KDoc)。
         viewModelScope.launch {
             val file = audioRecorder.stop()
             if (file == null) {

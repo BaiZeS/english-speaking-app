@@ -42,7 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 @Composable
 fun PlayerShadowView(
     state: PlayerUiState,
-    waveform: StateFlow<List<Float>>,
+    micLevel: StateFlow<Float>,
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     onStart: () -> Unit,
@@ -67,12 +67,12 @@ fun PlayerShadowView(
         if (!micGranted) PermissionHint(onRequestPermission = onRequestPermission)
         // 影子跟读按 D4 保留**点按**手势: 一整段课连续跟读动辄几十秒到几分钟, 没有
         // 人能一直按住不松手。诚实的做法不是说"按住", 而是说"点一下开始"并把两样
-        // 证据摆出来: 会滚的波形 + 真的在走的计时器。
+        // 证据摆出来: 跳动的声量脉冲 + 真的在走的计时器。
         // capMs 取自 state —— 影子跟读开录时传的是 null(无上限), 所以
         // RecordingTakeClock.capHint 给 null, 这一屏**不会**出现"即将自动发送"。
         TapToTalkRow(
             row = TapToTalkRowUi(
-                waveform = waveform,
+                level = micLevel,
                 isRecording = state.isRecording,
                 isBusy = state.isPreparingShadow || state.isSubmitting,
                 micGranted = micGranted,
