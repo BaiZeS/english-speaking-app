@@ -23,6 +23,7 @@ import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -744,3 +745,70 @@ async def test_judge_commit_gate_discards_loser_events(
         await db.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
     ).scalar_one()
     assert row.result == {"winner": True} and row.status == "completed"
+
+
+# ============================================================ 两级超时成对放宽
+#
+# 生产实锤 (2026-09-14, 异步化部署后的第一发冒烟): 墙钟提到 120s 了, 判级却在 24s
+# 就落 stub —— openai SDK 的**单次 socket 超时** (``LLM_TIMEOUT_S=20``) 先到, 作业
+# 根本没机会慢到 120s。行为测试钉住 judge_level 真的把 timeout 透传进了 provider.chat。
+
+
+class _ChatTimeoutSpy:
+    """最小 provider 桩: 记录每次 ``chat()`` 收到的 timeout kwarg, 回一组合规判级 JSON."""
+
+    is_configured = True
+    default_model = "qwen3.8-max"
+
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    async def chat(self, **kwargs: Any) -> Any:
+        self.timeouts.append(float(kwargs["timeout"]))
+        reply = json.dumps(
+            {
+                "cefr": "B1",
+                "grammar": 61.0,
+                "vocabulary": 58.0,
+                "fluency": 52.0,
+                "rationale_cn": "定级 B1。A2 题达意, 时态偶错。",
+            },
+            ensure_ascii=False,
+        )
+        return SimpleNamespace(content=reply)
+
+
+_JUDGE_FACTS = [
+    {
+        "no": "1",
+        "type": "retell",
+        "anchor": "A2",
+        "prompt": "Say what you ordered.",
+        "answer": "A medium coffee.",
+        "key_points": "medium coffee",
+        "ise": "",
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_judge_level_timeout_follows_the_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """缺省 = 同步口径 20s (老客户端 socket 不动); 作业显式传 timeout_s -> 透传到 chat."""
+    spy = _ChatTimeoutSpy()
+    monkeypatch.setattr(dg, "get_llm_provider", lambda: spy)
+
+    judged = await assessment_engine.judge_level(_JUDGE_FACTS, "")
+    assert judged is not None
+    assert spy.timeouts[-1] == pytest.approx(dg.LLM_TIMEOUT_S), (
+        "同步缺省口径必须维持 LLM_TIMEOUT_S —— 30s readTimeout 契约不受本修复影响"
+    )
+
+    judged = await assessment_engine.judge_level(
+        _JUDGE_FACTS, "", timeout_s=dg.ASSESSMENT_JUDGE_JOB_TIMEOUT_S
+    )
+    assert judged is not None
+    assert spy.timeouts[-1] == pytest.approx(dg.ASSESSMENT_JUDGE_JOB_TIMEOUT_S), (
+        "作业侧放宽的 socket 超时没透传到 provider.chat —— 只扩墙钟的话 SDK 会先在 20s 砍死"
+    )

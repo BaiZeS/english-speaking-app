@@ -516,12 +516,22 @@ def test_budgets_are_named_constants_at_the_call_sites() -> None:
     assert default is None and "ASSESSMENT_JUDGE_BUDGET_S" in inspect.getsource(ae.judge_level), (
         "judge_level 应以 ASSESSMENT_JUDGE_BUDGET_S 为缺省预算 (见 drill_grader 的硬预算块)"
     )
+    # socket 超时同形: judge_level 缺省 None -> 回落 LLM_TIMEOUT_S (同步口径不动)。
+    to_default = inspect.signature(ae.judge_level).parameters["timeout_s"].default
+    assert to_default is None and "LLM_TIMEOUT_S if timeout_s is None" in inspect.getsource(
+        ae.judge_level
+    ), "judge_level 应以 LLM_TIMEOUT_S 为缺省 socket 超时 (见 drill_grader 的硬预算块)"
     # 作业调用点必须点名作业预算 (在 app.api.v1.assessment 的作业主体里)。
     from app.api.v1 import assessment
 
     assert "hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S" in inspect.getsource(
         assessment._run_judge_job
     ), "判级作业应把硬预算写成 ASSESSMENT_JUDGE_JOB_BUDGET_S (见 drill_grader 的硬预算块)"
+    assert "timeout_s=ASSESSMENT_JUDGE_JOB_TIMEOUT_S" in inspect.getsource(
+        assessment._run_judge_job
+    ), (
+        "判级作业应同扩 socket 超时到 ASSESSMENT_JUDGE_JOB_TIMEOUT_S (生产实锤: 只扩墙钟会被 SDK 先砍)"
+    )
 
 
 def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
@@ -608,7 +618,15 @@ def test_assessment_budgets_split_sync_judging_from_background_job() -> None:
         "判级作业的预算若不比同步路径大, 异步化就没换来任何东西 —— "
         "限速下的判级还是会在原来的时间内被砍成 stub"
     )
+    # 单次 socket 超时夹在 "同步 socket" 与 "作业墙钟" 之间: 比 20s 大才接得住限速慢回复,
+    # 不大于墙钟才不会让 socket 变成没约束的第一级 (2026-09-14 实锤: 只扩墙钟 = 形同虚设)。
+    assert (
+        dg.LLM_TIMEOUT_S < dg.ASSESSMENT_JUDGE_JOB_TIMEOUT_S <= dg.ASSESSMENT_JUDGE_JOB_BUDGET_S
+    ), "判级作业的 socket 超时须严格大于同步 LLM_TIMEOUT_S、且不大于作业墙钟 (两级同扩)"
     assert "hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S" in inspect.getsource(
+        assessment._run_judge_job
+    )
+    assert "timeout_s=ASSESSMENT_JUDGE_JOB_TIMEOUT_S" in inspect.getsource(
         assessment._run_judge_job
     )
 

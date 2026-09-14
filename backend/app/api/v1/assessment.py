@@ -56,6 +56,7 @@ from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
     ASSESSMENT_JUDGE_JOB_BUDGET_S,
+    ASSESSMENT_JUDGE_JOB_TIMEOUT_S,
     AbilityEvidence,
     Dimension,
     grade_read_along,
@@ -636,7 +637,9 @@ async def _run_judge_job(db: AsyncSession, attempt_id: str) -> None:
     judged = await assessment_engine.judge_level(
         facts,
         _pronunciation_note(pronunciation, ise_n),
+        # 两级超时同扩 (生产实锤: 只扩墙钟会被 SDK 的 20s socket 先砍).
         hard_budget_s=ASSESSMENT_JUDGE_JOB_BUDGET_S,
+        timeout_s=ASSESSMENT_JUDGE_JOB_TIMEOUT_S,
     )
     if judged is None:
         await _commit_judged_result(

@@ -34,6 +34,7 @@ from app.services.ability_engine import CEFR_ORDER
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
     ASSESSMENT_JUDGE_BUDGET_S,
+    LLM_TIMEOUT_S,
     LlmUnavailableError,
     _judge,
     _resolve_judge_model,
@@ -168,22 +169,29 @@ async def judge_level(
     pronunciation_note: str,
     *,
     hard_budget_s: float | None = None,
+    timeout_s: float | None = None,
 ) -> tuple[Judgement, str] | None:
     """一次批量判级; 返回 ``(judgement, llm_source)``; LLM 不可用 -> ``None`` (诚实空态).
 
-    ``hard_budget_s``: 整调用墙钟硬预算; 缺省 = 同步 handler 的
-    ``ASSESSMENT_JUDGE_BUDGET_S`` (30s OkHttp readTimeout 契约), 后台判级作业
-    (:func:`app.api.v1.assessment.run_assessment_judge_job`) 传
-    ``ASSESSMENT_JUDGE_JOB_BUDGET_S`` 覆写 —— 作业在请求之外跑, 不给 socket 交差。
-    超预算翻成 ``LlmUnavailableError`` 后返回 ``None`` → 调用方给"CEFR 待定 /
-    零画像写入"的诚实空态, 不是 500。
+    两级超时, 缺省都是同步口径 (老客户端行为与历史版本一致):
+
+    * ``hard_budget_s``: 整调用墙钟 (含坏 JSON 的回喂重试)。缺省
+      ``ASSESSMENT_JUDGE_BUDGET_S`` (30s OkHttp readTimeout 契约) —— 超预算翻成
+      ``LlmUnavailableError`` 后返回 ``None``, 调用方给"CEFR 待定 / 零画像写入"的
+      诚实空态, 不是 500;
+    * ``timeout_s``: **单次尝试**的 openai SDK socket 超时。缺省 ``LLM_TIMEOUT_S``
+      (20s)。后台作业 (:func:`app.api.v1.assessment.run_assessment_judge_job`)
+      两个都要覆写 —— 只扩墙钟不扩 socket 会被 SDK 先砍
+      (生产实锤 2026-09-14, 见 ``ASSESSMENT_JUDGE_JOB_TIMEOUT_S`` 的注释)。
     """
     budget = ASSESSMENT_JUDGE_BUDGET_S if hard_budget_s is None else hard_budget_s
+    socket_timeout = LLM_TIMEOUT_S if timeout_s is None else timeout_s
     try:
         judgement = await _judge(
             Judgement,
             judge_messages(facts, pronunciation_note),
             max_tokens=JUDGE_MAX_TOKENS,
+            timeout=socket_timeout,
             hard_budget_s=budget,
         )
     except LlmUnavailableError as exc:

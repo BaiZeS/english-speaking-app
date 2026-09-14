@@ -106,8 +106,9 @@ LLM_MAX_TOKENS = 400
 #   POST /mission 聊到轮次上限自动收工              23 + 数值骨架 (零 LLM)    = 23  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10
 #   POST /assessment/{id}/complete             DB    + ASSESSMENT 20      = 20
-#     (老客户端同步路径; 新客户端 async_judge=true -> 202 + 后台作业
-#      ASSESSMENT_JUDGE_JOB_BUDGET_S=120, 不在本契约内, 见 §P6 同款说明)
+#     (老客户端同步路径; 新客户端 async_judge=true -> 202 + 后台作业。作业的
+#      **两级超时是一对**: 墙钟 ASSESSMENT_JUDGE_JOB_BUDGET_S=120 + 单次 socket
+#      ASSESSMENT_JUDGE_JOB_TIMEOUT_S=100, 不在本契约内, 见 §P6 同款说明与常量注释)
 #
 # (*) 音频步的 IAT 只有**服务层**自己的 8s (``settings.xunfei_iat_timeout_s``) 加
 #     ``open_timeout=5s``; mission 轮在调用点又包了一层 ``IAT_TURN_BUDGET_S``, 这一步
@@ -156,6 +157,15 @@ ASSESSMENT_JUDGE_BUDGET_S = 20.0
 #: ``judging``。生产实锤 (2026-09): 免费额度限速把批量判级两次都在 20s 处撞墙 → stub,
 #: 120s 给限速下的慢回复留足空间。**别把它塞进任何同步 handler**。
 ASSESSMENT_JUDGE_JOB_BUDGET_S = 120.0
+
+#: 判级作业的**单次尝试 socket 上限** (透传给 ``provider.chat`` 的 ``timeout``)。
+#: 生产实锤 (2026-09-14, 异步化部署后的第一发冒烟): 只把上面的墙钟提到 120s 没用 ——
+#: :func:`_judge` 传给 openai SDK 的 socket 超时仍按 ``LLM_TIMEOUT_S=20`` 先炸
+#: (日志 ``LLM 调用失败: Request timed out.``), 作业根本没机会慢到 120s。
+#: **墙钟与 socket 两级超时必须同扩, 谁小谁先斩** —— 100 给单次尝试, 坏 JSON 的
+#: 回喂重试由 120s 墙钟兜底收尾 (第一次吃掉 100s 后, 重试到点被墙钟收走 → stub)。
+#: 同步路径 (老客户端) 不传它, socket 维持 ``LLM_TIMEOUT_S=20`` —— 30s 契约不动。
+ASSESSMENT_JUDGE_JOB_TIMEOUT_S = 100.0
 
 #: 文本型 drill 答案的取材上限 (手敲英文或 IAT 转写).
 ANSWER_MAX_CHARS = 2000
