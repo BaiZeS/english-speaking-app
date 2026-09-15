@@ -4,7 +4,7 @@ Kotlin + Jetpack Compose 原生 Android 客户端。
 
 ## 状态
 
-✅ **v2.2.1（versionCode 10）**：对标可栗的四 Tab 信息架构 —— 首页（今日推荐/继续学习/场景画廊/5 分钟 CEFR 测评引导）、课程（情景课 + 课本）、词汇（表达库 + 弱词训练）、我的（能力画像雷达/轨迹、历史、设置）。**情景实战课**全流程：打基础四题型（跟读 / 复述 / 翻译 / 造句）→ 任务制实战对话（聊天气泡 + 任务清单通关 + 润色气泡收藏）→ 复盘报告；另有 AI 生成课（说出目标→两段生成）、测评三屏、影子跟读、OTA 自托管更新通道。318 个 JVM 单测（开工实测 328，旧口径 327 已过期），release 包内置生产地址 `:5173`。
+✅ **v2.2.3（versionCode 12）**：对标可栗的四 Tab 信息架构 —— 首页（今日推荐/继续学习/场景画廊/5 分钟 CEFR 测评引导）、课程（情景课 + 课本）、词汇（表达库 + 弱词训练）、我的（能力画像雷达/轨迹、历史、设置）。**情景实战课**全流程：打基础四题型（跟读 / 复述 / 翻译 / 造句）→ 任务制实战对话（聊天气泡 + 任务清单通关 + 润色气泡收藏）→ 复盘报告；另有 AI 生成课（说出目标→两段生成）、测评三屏、影子跟读、OTA 自托管更新通道。326 个 JVM 单测（v2.2.2 实测；v2.2.1 时点 318、开工实测曾 328），release 包内置生产地址 `:5173`。**v2.2.3 起四 Tab 在恢复可见时重拉数据**（`LifecycleResumeEffect`；返回栈 `saveState/restoreState` 复用 ViewModel 会让 `init{}` 只跑一次——这是「测评完回我的页看不到四维」的根因，见 `CHANGELOG.md` v2.2.3）。
 
 录音侧本轮重做（用户报告的 5 个真机症状全在客户端这一侧，逐条根因见 `CHANGELOG.md` v2.2.0）：
 
@@ -15,7 +15,7 @@ Kotlin + Jetpack Compose 原生 Android 客户端。
 
 `ScoreSessionHolder` 那份成绩聚合已落盘（`ui/score/ScoreSessionStore.kt`，JSON in `filesDir`，编解码抽成纯 `ScoreSessionCodec`）—— **刻意没建 Room 实体**：`5556851` 是有意删掉 `HistoryCacheDao` 的，而 `history_cache` 至今作为**冻结实体**留在 `AppDatabase` 里只为钉住 Room 2.6.1 的 v3 身份哈希（不 bump 版本就删 `@Entity` 会让存量装在 `checkIdentity` 崩），那个壳不要动。从后端重建也**已核实不可行**：`history` 表每行只有逐句 total/pronunciation/fluency/completeness，没有逐词分、建议、角色名，也没有 `session_id`。
 
-判定逻辑照旧走"抽出纯 Kotlin + JVM 单测"这条路：**没有 `androidTest` 源集，也不引 Robolectric / Compose UI 测试栈**（本轮沿用了这个既有约定，新增的接缝是 `PulseMeterGeometry` / `RecordingTakeClock` / `BackendErrorText` / `ReviewPollingPolicy` / `FeedbackAdvancePolicy` / `ReviewStateMachine` / `MissionFinishGuard` / `ReviewEntryPolicy` / `SubScoreReadout` / `ScoreSessionCodec`；`RecordingPulseMeter` / `ScoreRing` / `FeedbackBlocks` 为纯组合层，无单测——几何与定格判定在 `PulseMeterGeometry` 里）。⏳ **v2.2.0 与 v2.2.1 的真机验收均尚未执行**——以上客户端行为目前的证据只有源码与 JVM 单测。
+判定逻辑照旧走"抽出纯 Kotlin + JVM 单测"这条路：**没有 `androidTest` 源集，也不引 Robolectric / Compose UI 测试栈**（本轮沿用了这个既有约定，新增的接缝是 `PulseMeterGeometry` / `RecordingTakeClock` / `BackendErrorText` / `ReviewPollingPolicy` / `FeedbackAdvancePolicy` / `ReviewStateMachine` / `MissionFinishGuard` / `ReviewEntryPolicy` / `SubScoreReadout` / `ScoreSessionCodec`；`RecordingPulseMeter` / `ScoreRing` / `FeedbackBlocks` 为纯组合层，无单测——几何与定格判定在 `PulseMeterGeometry` 里）。⏳ **v2.2.0 ~ v2.2.3 的真机验收均尚未执行**——以上客户端行为目前的证据只有源码与 JVM 单测。
 
 ## 目录结构
 
@@ -61,7 +61,7 @@ android/
 
 ```bash
 ./scripts/ktlint.sh                    # == CI 的 ktlint 硬门（同版本经阿里云镜像）
-./gradlew testDebugUnitTest --no-daemon # 318 JVM 单测
+./gradlew testDebugUnitTest --no-daemon # 326 JVM 单测
 ./gradlew assembleDebug --no-daemon     # debug 包（产物在 app/build/outputs/apk/debug/，当前约 22.1 MB）
 ```
 
