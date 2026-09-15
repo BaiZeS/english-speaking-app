@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.SceneCategoryStat
 import com.app.english.ui.components.ActionEntryCard
@@ -54,6 +55,12 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Tab 恢复可见(测评/练习返回、切回本 Tab、App 回前台)时重拉: 画像(未测评引导卡/
+    // 今日推荐最低维)、统计、继续学习、最近复盘都会随练习变化, init{} 只在首次执行。
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh()
+        onPauseOrDispose { }
+    }
     Scaffold(modifier = modifier) { padding ->
         Column(
             modifier = Modifier

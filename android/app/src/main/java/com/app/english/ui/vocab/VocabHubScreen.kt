@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.ui.components.ActionEntryCard
 import com.app.english.ui.components.SectionHeader
@@ -38,6 +39,12 @@ fun VocabHubScreen(
     viewModel: VocabHubViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Tab 恢复可见(弱词训练/表达库返回、切回本 Tab)时重拉: 弱词数来自本地 Room,
+    // 训练里毕业一个词就会变; 返回栈复用 ViewModel, init{} 不会再次执行。
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh()
+        onPauseOrDispose { }
+    }
     Scaffold(modifier = modifier) { padding ->
         Column(
             modifier = Modifier

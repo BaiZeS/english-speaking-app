@@ -70,8 +70,9 @@ class MeViewModel @Inject constructor(
                     current.copy(
                         isLoading = false,
                         stats = stats,
-                        // 画像还没回来/没有真证据时, 才用练习聚合分画「不完整」雷达。
-                        ability = if (current.hasProfileEvidence || current.assessed) {
+                        // 画像有真证据时保留画像; 无证据(还没练/画像未写入)时
+                        // 才用练习聚合分画「不完整」雷达兜底, 不拿统计覆盖真画像。
+                        ability = if (current.hasProfileEvidence) {
                             current.ability
                         } else {
                             AbilityAxes.fromStats(stats)

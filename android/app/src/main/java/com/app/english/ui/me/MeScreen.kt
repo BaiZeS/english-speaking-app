@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.PracticeStats
 import com.app.english.ui.components.ActionEntryCard
@@ -50,6 +51,12 @@ fun MeScreen(
     viewModel: MeViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Tab 恢复可见(从测评/练习返回、切回本 Tab、App 回前台)时重拉画像与统计:
+    // 返回栈条目被 saveState/restoreState 保留, ViewModel 不重建, init{} 不会再次执行。
+    LifecycleResumeEffect(Unit) {
+        viewModel.refresh()
+        onPauseOrDispose { }
+    }
     Scaffold(modifier = modifier) { padding ->
         Column(
             modifier = Modifier
@@ -144,11 +151,18 @@ private fun AbilityProfileCard(
             )
             when {
                 ability.isEmpty -> InlineEmptyState(
-                    text = "还没有可统计的练习。先完成一次跟读或情景课, 这里会长出你的雷达图。"
+                    text = if (assessed) {
+                        "已完成测评, 但画像还没有可展示的维度。先完成一次跟读或情景课, 这里会长出你的雷达图。"
+                    } else {
+                        "还没有可统计的练习。先完成一次跟读或情景课, 这里会长出你的雷达图。"
+                    }
                 )
                 !ability.isComplete -> InlineEmptyState(
-                    text = ability.missingLabels().joinToString("、") +
+                    text = ability.missingLabels().joinToString("、") + if (assessed) {
+                        " 还没有数据, 继续练习即可点亮。"
+                    } else {
                         " 还没有数据, 完成一次测评即可补全画像。"
+                    }
                 )
             }
             Row {

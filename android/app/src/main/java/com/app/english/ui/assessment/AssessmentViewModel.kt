@@ -31,8 +31,9 @@ import timber.log.Timber
 /**
  * 结果页与做题页之间的一次性交接(T7 的 SelectedHistoryHolder 同款做法):
  * 判级结果是 `/complete` 的一次性响应, 首屏数据经单例 holder 搬运(异步判级下
- * 也可经 `GET /assessment/{id}/result` 读回, 但 holder 仍是零延迟的首选路径);
- * holder 为空时结果页自读 `GET /ability` 兜底(判级已写入画像)。
+ * 也可经 `GET /assessment/{id}/result` 读回, 但 holder 仍是零延迟的首选路径)。
+ * holder 为空(如进程死在搬运间隙)时结果页直接给「没有找到本次判级结果」错误态,
+ * 并提示稍后去「我的-能力画像」查看 —— 不在这里做 GET /ability 兜底。
  */
 @Singleton
 class AssessmentResultHolder @Inject constructor() {
