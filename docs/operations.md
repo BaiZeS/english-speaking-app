@@ -1,6 +1,7 @@
-# 运维与发版 SOP · english-speaking-app（v2.2.1）
+# 运维与发版 SOP · english-speaking-app（v2.2.4）
 
 部署机 = 本盒（公网 `118.89.58.84`，云防火墙当前仅映射 **TCP 5173/80/8080**）。仓库：`/home/ubuntu/mimo-workspace/english-speaking-app`，工作分支 main（origin==local）。
+⚠️ **本盒是多项目共享机**，宿主 5173 是公开契约端口、也是争用点：2026-09-14~26 该端口被同机 data-collection 项目抢占过一整轮（详见第 6 节第一条与第 5 节 v2.2.4 上线实录）。**每次发版收尾必须按公网口径实测 `/app/version` 返回 JSON**，本地/容器 healthy 不足以证明用户拿得到。
 
 ## 1. 运行拓扑
 
@@ -11,7 +12,7 @@
 | `:8000` 桥接 | **已停**（不映射公网；旧包 ≤2.0.0 内置 :8000 外网不可达，过渡=一次性 GitHub 直链装 v2.1.0）|
 | 进程方式 | **只有 docker compose 这一种跑法**。`docker compose up -d` + `restart: unless-stopped`（随 docker daemon 自动拉起——裸进程时代没有的增益）；由 `backend/scripts/deploy.sh` 统一管理（每条 compose 命令前自动剥离与 .env 同名的陈旧环境变量，.env 唯一事实源）；`start`/`restart` 都是 `up -d --build`（restart 另加 `--force-recreate`）——改 `.env` 后必须 recreate，compose 原生 restart 不重读 env_file、不换镜像；日志 `docker logs english-api-prod`（json-file 10m×5）。**回滚口径 = 源码回滚**：`git checkout v<上一版> -- backend/ && backend/scripts/deploy.sh restart`（走 compose、用**真**生产库）。⚠️ 跨迁移边界会失败：`scripts/docker-entrypoint.sh` 每次启动都跑 `alembic upgrade head`，库已在更新的 revision 上而旧代码的 `backend/app/db/migrations/versions/` 不认识它 → `Can't locate revision identified by …`。回滚前先 `git diff --name-only v<上一版>..HEAD -- backend/app/db/migrations/`，非空就必须先定 downgrade 方案（`v2.1.0..v2.2.0` 已核实未改任何迁移文件，故 2.2.0→2.1.0 安全）。已知缺口：`RELEASE_TAG` 没有任何脚本会设置 → 镜像恒为 `english-assistant-api:local`、每次 rebuild 覆盖，**今天没有基于镜像的后端回滚**。（旧 `deploy.sh start-legacy`/`stop-legacy` 裸进程逃生口已于 2026-09-11 退役删除——它依赖的 `.deploy.env` 指向 dev postgres 容器内的同名陈旧库，实测 1 user / 0 sessions / 0 history，"回滚"过去等于把生产切到空库；理由与过程见 CHANGELOG 同日条目与 §6.1。） |
 | 密钥 | 均在 `backend/.env`（gitignored，不入 git；发布栈的 `DATABASE_URL` 由 compose 服务名自动派生）。**2026-09-07 口令已轮换**：旧默认口令（user=english）在 git 历史中公开过、现已失效，tracked 文件里仅存 CHANGE_ME 占位。实测现状（2026-09-07）：百炼 LLM 已换新 key，现役 **qwen3.8-flash**（服务端默认）+ **deepseek-v4-flash-0731**，chat 实测 200 ✓；MiMo-TTS 平台 key（`sk-`，付费线路）已启用，`/api/v1/tts` 真合成 200 ✓；讯飞 ISE/IAT key 已填；**09-08 已真火冒烟过门**（`/api/v1/score` 17s 音频 3.3s 返回 `source=xunfei` 55 词真分 + 括号脏参考回归通过 + IAT 转写通过，容器日志 `xunfei ise ok`；app 端语音轮=待用户真机复确认，观察 `mission turn perf`）|
-| OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存。**两目录 bind 进发布容器**（`/app/static/*`），宿主路径即唯一实体——host 侧 publish_apk.sh 写完 + `deploy.sh restart`（recreate）即生效；新机器该目录空，OTA 需跑 publish_apk.sh 补种 |
+| OTA APK | `backend/static/apk/<asset>.apk`（gitignored），`/app/version` 的 `APP_APK_URL` 指它；`/static/tts` 同挂载为 TTS 磁盘缓存。**两目录 bind 进发布容器**（`/app/static/*`），宿主路径即唯一实体——host 侧 publish_apk.sh 写完 + `deploy.sh restart`（recreate）即生效；新机器该目录空，OTA 需跑 publish_apk.sh 补种。**现值（2026-09-28 实测）**：`.env` 为 `APP_LATEST_VERSION=2.2.4` / `APP_APK_URL=…:5173/static/apk/EnglishAssistant-2.2.4.apk` / `APP_MIN_SUPPORTED_VERSION=2.2.0`，公网 `GET /api/v1/app/version` 返回 `latest_version=2.2.4`、`min_supported_version=2.2.0`、`source=env`、APK Range 探测 206 ✓；落地文件 sha256 `4071e42c…f8c6b45a90c3` 与 GitHub Release asset digest 一致，`aapt2 dump badging` 复核 `versionCode=13 / versionName=2.2.4`。⚠️ 响应里的 `force_update=true` **是给所有人的同一个值**（= "配了最低支持版本"这个运维事实，`version.py` 不看请求方版本），跳不跳得过由**客户端**按 `current < min_supported_version` 自己判（`decideUpdate`）——所以 2.2.0+ 对 2.2.4 仍是可推迟的提示，别把 curl 看到的 `force_update=true` 读成"全员强更" |
 
 ## 2. 日常操作
 
@@ -27,7 +28,15 @@ bash $S migrate    # 一次性 alembic upgrade head（compose run 独立容器�
 bash $S logs 200   # 最近 n 行服务日志（= docker logs english-api-prod）
 ```
 
-改 `.env`（换密钥/模型/APP_* 三兄弟）后：`bash $S restart`，`curl -s http://localhost:5173/api/v1/health` + 看对应端点即验生效。生产库口令轮换是两步活（卷首初始化口令 + `ALTER USER`），见 §6。数据卷 `english-prod-pgdata` = 唯一生产数据，**严禁对 compose 项目 `down -v`**。
+改 `.env`（换密钥/模型/APP_* 三兄弟）后：`bash $S restart`，`curl -s http://localhost:5173/api/v1/health` + 看对应端点即验生效。**但"`restart` 那条命令没在你眼前挂掉" ≠ "服务在上"**：共享机上端口被别的项目抢走时，compose 不顶掉对方，而是让自家容器停在 `State=created` 并报 `failed to bind host port 0.0.0.0:5173: address already in use`。`deploy.sh restart` 自带 60s `wait_healthy` 门，这种情况会打 `:${API_PORT} NOT healthy` + `compose ps` 并 **exit 1**（`publish_apk.sh` 也是调它，之后还有 `source=env` 自检）——**故障不是没出声，而是出声后没被当阻塞项跟到底**（09-15 那次的现场判断是"容器应该在另一个端口起来了"，而 1573 在整个仓库零引用、纯属误记；`restart: unless-stopped` 也不会替一个被占的端口自愈）。所以发版/改配置后必须跑到这三步全绿才算完：
+
+```bash
+docker ps -a --filter name=english-api-prod          # 必须是 Up (healthy)；出现 Created/Exited = 没起来
+ss -ltnp | grep ':5173'                              # 持有者应是 docker-proxy；若是别的 node/python 进程 = 端口被抢
+curl -s http://118.89.58.84:5173/api/v1/app/version  # 必须是 JSON 且 source=env；返回 HTML = 打到别人的服务上（假活）
+```
+
+生产库口令轮换是两步活（卷首初始化口令 + `ALTER USER`），见 §6。数据卷 `english-prod-pgdata` = 唯一生产数据，**严禁对 compose 项目 `down -v`**。
 
 ## 3. 发版 SOP（Android）
 
@@ -53,14 +62,17 @@ git push origin main && git fetch -q origin
 #    "Release Gate" job 已绿再打 tag（它不装 SDK，通常几十秒内就出结果）。
 #    ★ 若门红又自认合理：git commit --amend 在 message 里补 [release-gate-skip: 理由]
 #    重推（force push main 之前先想清楚 —— 见 §6 那条例子），别直接绕过。
-git tag -a v2.2.1 -m "v2.2.1: ..." && git push origin v2.2.1
+git tag -a v2.2.4 -m "v2.2.4: ..." && git push origin v2.2.4
 # ③ 等 release.yml（~14 min）: 成功且 asset=EnglishAssistant-<ver>.apk,
 #    Release 名/tag 正确（workflow 用 GITHUB_REF_NAME，勿改成 git describe——已踩坑）
 # ④ 【必须】OTA 自托管切换（否则手机走 GitHub 11-40KB/s 等于没有更新）：
-cd backend && bash scripts/publish_apk.sh v2.2.1
+cd backend && bash scripts/publish_apk.sh v2.2.4
 # 该脚本自动：GitHub 拉 asset(慢线 ~20-25min) → static/apk → 写 .env 两变量 → restart
 # → 自检 source=env + Range 探测。重复跑无害（幂等覆盖）。
-# ⑤ versionCode 永远严格递增（v2.1.0=8 / v2.2.0=9 / v2.2.1=10；Android 同名 version 不比, semver 字典序）
+#    ⚠️ 脚本自检通过也不等于公网可达：restart 那一步若 bind 失败（端口被占），OTA 配置就是
+#    写给一个没在跑的容器看——务必再按 §2 的三步硬核验跑到全绿（本盒 2026-09-15 的 v2.2.3
+#    正是"发版动作做完、用户侧静默下线 12 天"；NOT healthy 那一行当时出声了但没被跟到底）。
+# ⑤ versionCode 永远严格递增（v2.1.0=8 / v2.2.0=9 / v2.2.1=10 / v2.2.2=11 / v2.2.3=12 / v2.2.4=13；Android 同名 version 不比, semver 字典序）
 #    —— §3.0 的门现在会在 push/PR 上强制它, 不再只靠这句话。
 ```
 
@@ -100,7 +112,7 @@ curl -s http://118.89.58.84:5173/api/v1/app/version   # 核对 min_supported_ver
 ```bash
 BASE=http://118.89.58.84:5173
 curl -s $BASE/api/v1/health                                   # {"status":"ok"}
-curl -s $BASE/api/v1/app/version                              # latest=当前发布版, source=env；未配强更时 force=false；配了 §3.2 则 min_supported_version=发布版 + force=true
+curl -s $BASE/api/v1/app/version                              # 必须是 JSON 且 latest=当前发布版、source=env。三态判别：拿到 HTML/"Not Found"/连接被拒 = 端口被别的项目占了或容器没起来（§2 三步、§6 第一条——**这一步不许用 localhost 代替公网**，手机打的就是公网）；未配强更时 min_supported_version=0.0.0 且 force=false；配了 §3.2 则 min_supported_version=最低支持版 + force=true（该 true 不区分请求方版本，能否跳过由客户端判，见 §1 OTA 行）
 curl -s -r 0-1023 -o /dev/null -w '%{http_code}' $BASE/static/apk/EnglishAssistant-<ver>.apk  # 206
 curl -s "$BASE/api/v1/scenes?category=workplace" | head -c200          # 含职场课
 curl -s "$BASE/api/v1/stats?device_id=smoke-0906"                       # 合法 JSON（空态即可）
@@ -125,6 +137,26 @@ curl -s "$BASE/api/v1/tts?text=Hello&voice=Mia" -o /tmp/t.out -w '%{http_code} %
 #   ⑥ 自动收工同治：/mission 打到 max_turns 那一轮，响应应带 review_status=="generating"
 #      且该请求总时长 <= 23s（不再叠加一次总评 LLM；旧行为是 23+20=43s 结构性必超时）
 #   ⑦ GET /courses/progress 应现 attempts≥1
+# ★ CEFR 判级异步链冒烟（v2.2.2 起；2026-09-14 已用同序列在生产实跑过一次，
+#   欠的是每版复跑——见 §5 末"必须补跑"那笔）:
+#   POST /assessment/start{device_id} → 拿 attempt_id → /assessment/{id}/answer ×7(text) →
+#   ⑧ POST /assessment/{id}/complete{device_id, async_judge:true} 必须**立即 202**、body
+#      = {attempt_id, status:"judging"}（**没有** result；同步返回完整结果 = 契约回退，
+#      说明有人把 async 分支又接回同步 await judge_level，test_latency_budget 会红）
+#   ⑨ 轮询 GET /assessment/{id}/result?device_id=… —— judging 期间持续 202；终态应
+#      `source=="llm"` + 三维以上有分 + cefr_level 非空（**无真音频时发音维 null 属诚实空态**）
+#   ⑩ 日志关键字应为 `assessment judging accepted` → `assessment judge job published | source=llm`；
+#      落 stub 则查 `LLM 调用失败: Request timed out.`——那是两级超时没成对放宽（墙钟 120s 与
+#      socket `ASSESSMENT_JUDGE_JOB_TIMEOUT_S=100s`，见 §5.5 那两条），不是模型不行
+#   ⑪ judging 期间 POST /answer 应 409（ATTEMPT_NOT_ACTIVE）；重复 POST complete 在途应幂等
+#      回 202 不派第二个作业；真判级结果原样回放（幂等门不许把 llm 结果覆盖成 stub）
+#   ⑫ **重判翻案**：对一个 source=stub 的存量 attempt 再 POST complete{async_judge:true} 应重新
+#      派工（幂等回放不保护失败结果），终态后 GET /ability 四维出现且 ability_events 只补写
+#      一次（条件写回门：并发双跑输家整事务回滚）—— 判重没生效就是画像双计
+#   ⑬ 进程重启自救：作业是 asyncio.create_task，容器 restart 后 judging 的孤儿 attempt 由
+#      GET /result 就地重派（重启后在飞集合必空）；观察到"judging 永久不动"= 这条门被改坏
+#   注：冒烟设备与测试 attempt 会留在生产库（暂不清理，生产删数据需单批确认）——用带日期
+#   可识别的 device_id（如 smoke-v222-async-20260914），别用真实学员设备号。
 # 讯飞真火冒烟（消耗 ISE/IAT 日额度 ~10 会话，不碰 DB，证据落 /tmp/ise-smoke-*）:
 # cd backend && .venv/bin/python scripts/smoke_xunfei_ise.py --quick     # 期望全行 final=True、source=xunfei、退出码 0
 # 线上语音轮真声验证（PCM 用冒烟产物；pronunciation/fluency 应为 source=xunfei, w=1.0）:
@@ -139,13 +171,29 @@ docker exec english-postgres-prod pg_dump -U english -d english_prod_5173 -Fc -f
   && docker cp english-postgres-prod:/tmp/bk.dump backend/logs/backup-$(date -u +%F).dump
 ```
 
-后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **583 全绿**，sqlite；CI 含 PG16 + `--cov-fail-under=85`，本机整轮覆盖率 89.89%——覆盖率数字系 v2.2.1 时点实测，v2.2.2 起未重测覆盖率仅重跑测试全绿。**mypy 必须防增量缓存假绿**：`rm -rf backend/.mypy_cache` 后再跑，CI 是全新缓存——v2.2.2 发布前本地增量缓存藏过 4 个真错，CI 才炸出来）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①），基线 **326 个 JVM 单测**（v2.2.2 实测；v2.2.1 时点 318、开工时曾 328；史实见 CHANGELOG 对应条）。**外加 CI 新增的 `release-gate`（§3.0）——它是 blocking 门，红了就别打 tag。**
+后端回归：`cd backend && .venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/mypy app && .venv/bin/pytest`（基线 **583 全绿**，sqlite；2026-09-28 本机 35.8s 实测复核——后端自 v2.2.2 起零代码改动，v2.2.2 的 CHANGELOG 记作 582，与同一棵树实测差 1，以本条 583 为准；CI 含 PG16 + `--cov-fail-under=85`，本机整轮覆盖率 89.89%——覆盖率数字系 v2.2.1 时点实测，v2.2.2 起未重测覆盖率仅重跑测试全绿。**mypy 必须防增量缓存假绿**：`rm -rf backend/.mypy_cache` 后再跑，CI 是全新缓存——v2.2.2 发布前本地增量缓存藏过 4 个真错，CI 才炸出来）。套件清盒由 `tests/conftest.py::_hermetic_settings` autouse 保证：凭据 + 部署调优字段（env-first OTA、LLM 白名单/目录等，清单**只增不减**）逐用例强制回代码默认值——生产机带 `.env` 亦全绿；若出现「只有 .env 在场才红」的测试，先查该清单是否漏了新字段，勿改产品代码迁就。Android 回归：三连（见第 3 节①），基线 **337 个 JVM 单测**（2026-09-28 本机实测 337 passed / 0 failed，40 个结果文件；口径链条：v2.2.1 时点 318、开工时曾 328、v2.2.2 326、v2.2.4 起 337；史实见 CHANGELOG 对应条）。**外加 CI 新增的 `release-gate`（§3.0）——它是 blocking 门，红了就别打 tag。**
 
 **发版状态与验收状态（写文档时点 2026-09-13，诚实记录）**：**v2.2.1 已发布并已上线 OTA**——commit `3b5813f`（tag `v2.2.1`，versionCode 10）推送 main 后双 CI 绿（Backend ✅ / Android ✅ 含 `release-gate`）；APK 因 **Release 工作流的 Create GitHub Release 步骤失败**（构建本身成功；GitHub Release 未建成，疑 API 瞬时错误，且 `backend/.env` 的 `APP_GITHUB_TOKEN` 实测 401 已失效、无法代为重跑）改走**本地复刻 CI 链路**：工作树 == tag 提交（干净树核实）、`./gradlew assembleDebug` 产物直拷 `static/apk/EnglishAssistant-2.2.1.apk`（sha256 前缀 `2c708ffb8061875a`）+ `.env` 写 `APP_LATEST_VERSION=2.2.1`/`APP_APK_URL` + restart——与 `publish_apk.sh` 的落地动作逐行等价，只是少了 GitHub 中转。**实测 `/app/version`：`latest_version=2.2.1` / `min_supported_version=2.2.0` / `force_update=true` / `source=env`；APK range 探测 206 ✓**。强更补设同日生效：`APP_MIN_SUPPORTED_VERSION=2.2.0`（sed 命令见 §3.2）——低于 2.2.0 的旧包收到不可跳过升级（v2.2.0 发布时该配置从未实际生效、暴露面于今日关闭）；v2.2.0+ 对 2.2.1 仍可「稍后再说」。**待办两条**：① ~~GitHub Release 产物补上~~ **已补（2026-09-13）**——重触发方式为删除并原样重推 tag `v2.2.1`（recreate 即重新点火 workflow，run #13 成功；与初跑失败的 step 完全相同，坐实初跑是 GitHub API 瞬时错误）；实测 Release「English Assistant 2.2.1」+ 资产 `EnglishAssistant-2.2.1.apk`（21,815,251 字节）已在、`/releases/latest` 现指向 `v2.2.1`、资产直链 range 探测 206 ✓；② `APP_GITHUB_TOKEN` 已失效需轮换（影响 resolver 的 GitHub 回源 fallback，主路径 env 优先不受影响；轮换时注意 §1.4 密钥卫生与 env 遮蔽纪律）。上面第 5 节冒烟集（尤其 ①-⑥ 那条异步总评链）在 v2.2.1 部署后应实跑留证，若尚无实跑记录则**必须补跑**；本文件里更早的真机/部署结果条目都是历次发布留下的实况记录，保持原样不动。
 
 同样尚未执行的是**真机验收**：v2.2.0 那批（逐条对应用户报告的 5 个症状 + E2/E3/E4/E5 + 升级提示的装机走查）脚本还挂着（发布计划 §5.3），v2.2.1 的脉冲条手感与反馈卡观感同样待验，所以两版所有客户端行为的现有证据只有"源码 + 318 个 JVM 单测 + 后端集成测试 + DEBUG APK 能构建"，**没有任何一条被真机确认过**。别把本节或 CHANGELOG 里的描述当验收结论用。
 
 **v2.2.2 已发布并已上线 OTA（2026-09-14，诚实记录）——修「测评后只有发音维出分」**：main 链条 `689ae0b`（判级异步化+重判+画像兜底+文案，含 versionCode 11/CHANGELOG，过 release-gate）→ `ca6e614`（ruff）→ `508aef6`（mypy，本地缓存假绿教训见 §5 后端回归条）→ `92e9485`（**二阶根因**：部署后第一发冒烟 24s 仍落 stub，日志 `LLM 调用失败: Request timed out.`——上轮只扩了墙钟 120s，openai SDK 的**单次 socket 超时**仍按 `LLM_TIMEOUT_S=20` 先炸；补 `ASSESSMENT_JUDGE_JOB_TIMEOUT_S=100` 与 `judge_level(timeout_s=)` 成对放宽，同步口径不动）→ tag **`v2.2.2`**（point at `92e9485`）。Release workflow run **#14 一次成功**（无 v2.2.1 那次 API 瞬时抖动）：Release「English Assistant 2.2.2」+ asset `EnglishAssistant-2.2.2.apk`（21,831,635 B，官方 digest `5a773209` 与落地 `static/apk/` 文件 `sha256sum` 一致）。`publish_apk.sh v2.2.2` 自验通过、**实测 `/app/version`：`latest_version=2.2.2 / min_supported_version=2.2.0 / source=env`、APK range 探测 206**；**按用户确认走非强更**（`APP_MIN_SUPPORTED_VERSION` 保持 2.2.0，2.2.0/2.2.1 对 2.2.2 仍可「稍后再说」）。生产判级链路实锤（设备 `smoke-v222-async-20260914` 的 attempt，文本作答、无真音频）：async complete 202 `judging` → 后台作业 **43s LLM 慢回复被 120s 墙钟 + 100s socket 完整接住**（`assessment judge job published | source=llm cefr=A1`，这正是此前被 20s 砍死的场景）→ 轮询 202×7 次 → 终态 `source=llm`、语法 55/词汇 50/流利 35 有分、发音维 null（无真音频，诚实空态）、`cefr_level=A2`（±1 锁带生效）；**重判门生效**：该 attempt 首轮落 stub 零写入 → 重判补写 events **恰好 3 条**、画像无重复。**残留两笔**：①冒烟设备与测试 attempt 留在生产库，暂不清理（生产删数据需单批）；②§5 冒烟集 ①-⑥ 异步总评链的补跑欠账跨了三个版本，仍**必须补跑**；③真机升级 2.2.2 走查（升级弹窗→完整测评四维全亮→报告问题的用户「重新判级」翻案）待用户执行，判级客户端链路至今只有 curl 直连后端的证据。
+
+**v2.2.3 发版动作完成、但 OTA 实际未生效约 12 天（2026-09-15 发布，事故，诚实记录）——修「测评完回『我的』看不到四维」**：源码 + versionCode 12 + CHANGELOG 同一 commit `efbdc50`（纯 Android，后端零改动），随后三笔 CI 加固 `203ac02`/`0c3010a`/`7172417` → **tag `v2.2.3`（2026-09-15 13:59 CST，point at `7172417`）**。GitHub Release「English Assistant 2.2.3」+ asset `EnglishAssistant-2.2.3.apk`（21,831,635 B，digest 尾 `ddb24ec32c6f`，asset 落地 06:03Z）。
+- **失败点**：本版的 OTA 配置与 APK 都已就位——宿主 `static/apk/EnglishAssistant-2.2.3.apk` 落地于 2026-09-15T03:57Z（22,060,568 B、sha256 尾 `3fe3f068f8fb5d`，`aapt2` 复核 `versionCode=12 / versionName=2.2.3`；**与后来 GitHub asset 是同版本号的不同一次构建**，asset 到 06:03Z 才由 CI 产出），`.env` 也已写 `APP_LATEST_VERSION=2.2.3`/`APP_APK_URL`。**但同一时刻那次 `restart` 的容器 bind 失败、停在 `State=created`**，报错 `failed to bind host port 0.0.0.0:5173: address already in use`（容器创建时刻 2026-09-15T03:57Z）——配置写给了一个没在跑的进程看。
+- **根因（跨项目抢占，本盒是共享机）**：宿主 5173 自 **2026-09-14 17:53** 起被另一项目 `data-collection`（`/home/ubuntu/mimo-workspace/data-collection/backend`，`.env PORT=5173`，node 进程，tmux 会话内 `npm run start:prod` 拉起，无 systemd/pm2/compose 故不会自启）持有。它的 Express 对**任意路径**返回 HTTP 200 `text/html`（"材料收集系统" SPA 首页）——`curl 127.0.0.1:5173/api/v1/app/version` 实测拿到的是那段 HTML。**这是最阴的假绿形态：端口有人应答、health 探测像活着，实际打到的根本不是本项目。**
+- **学员侧症状**：App 冷启动即弹「检查更新失败」，正文是 kotlinx.serialization 的异常原文（内嵌对方整段 HTML）；点「知道了」→ 立刻重查 → 再失败 → 弹窗回来；切后台回前台 `onResume` 再中一次。模态框把用户锁死在所有页面之外——**连改服务器地址的唯一入口「设置」都进不去**，而且 Retrofit 单例缓存 baseUrl，即便改了也要杀进程重启才生效。这批症状即 v2.2.4 的修复对象。
+- **恢复（2026-09-16 决策，用户确认）**：① 恢复 5173 契约、客户端零改动；② `data-collection` 端口改 **1573**（`.env` + `src/config.js` 兜底值同改，按 `ss -ltnp` 实测持有者 PID 终止进程链后按原 tmux 方式重启）。**用户侧遗留动作项**：若要从公网继续访问 data-collection，需腾讯云安全组放行 1573（当前仅映射 5173/80/8080）；仅内网使用则无需。
+- **今日复核（2026-09-28，实测）**：`ss -ltnp` → 5173 由 docker-proxy 持有、1573 由 node 持有（`data-collection/backend/.env` 现值 `PORT=1573`）；`docker ps` → `english-api-prod` Up (healthy)，现容器实例 created/started 2026-09-28T07:14Z（发 2.2.4 时 recreate 的产物）；公网 `/api/v1/app/version` 返回 JSON、`/api/v1/health` 200。事故窗口按 CHANGELOG v2.2.4 口径记 **2026-09-14~26**。
+- **结论性事实**：v2.2.3 在事故窗口（2026-09-14~26）内 **OTA 一次都没能送达任何客户端**；恢复后到 09-28 被 v2.2.4 取代之间那扇短窗理论上可下发，但**没有任何下发记录与证据**。本版的行为改动由 v2.2.4 携带下发，故客户端侧以 v2.2.4 为准。§5 冒烟集 ①-⑥（异步总评链）的补跑欠账继续挂着。判别与预防口径已入 §2 三步硬核验与 §6 第一条。
+
+**v2.2.4 已发布并已上线 OTA（2026-09-28，诚实记录）——修「更新检查失败弹窗锁死整个 App」**：源码 + versionCode 13 + CHANGELOG 同一 commit `a1e673f`（纯 Android 加固，后端零改动，非强更：`APP_MIN_SUPPORTED_VERSION` **维持 2.2.0**）→ 文档同步 commit `371d6bb` → **tag `v2.2.4`（2026-09-28 14:08 CST，point at `371d6bb` = HEAD = origin/main）**。
+- **发布链路**：GitHub Release「English Assistant 2.2.4」+ asset `EnglishAssistant-2.2.4.apk`（21,831,635 B，digest 尾 `f8c6b45a90c3`）。`publish_apk.sh v2.2.4` 落地 `static/apk/`（宿主文件 21,831,635 B，`sha256sum` = `4071e42c…f8c6b45a90c3`，**与官方 asset digest 一致**）+ 写 `.env` + recreate 容器 —— 这次 bind 成功。
+- **实测（本版上线后本机复核）**：公网 `GET /api/v1/app/version` → `{"latest_version":"2.2.4","min_supported_version":"2.2.0","apk_url":"…:5173/static/apk/EnglishAssistant-2.2.4.apk","force_update":true,"source":"env"}`；`curl -r 0-1023` → **206** ✓；`aapt2 dump badging` 复核落地 APK `versionCode=13 / versionName=2.2.4` ✓；`docker ps` → Up (healthy)。⚠️ `force_update=true` 是服务端"配置了最低版本"的常量标志、**不看请求方版本**（`backend/app/api/v1/version.py:58`），能否跳过由客户端 `decideUpdate` 按 `current < min_supported_version` 判——2.2.0+ 对 2.2.4 仍是可推迟提示，别据此以为在全员强更。
+- **本地门槛**：`release-gate` 过；ktlint（CI 同版 1.3.1 CLI）清零；Android JVM 单测 **337 passed / 0 failed**（本机 2026-09-28 实测，326 + 11 例 `AppUpdateFailureHandlingTest`）；detekt 与 HEAD 基线逐条一致（100 条存量、零新增）；后端 **583 passed** 全绿（零改动复跑）。
+- ⏳ **真机验收（五版欠账）**：本版断网冷启动 → 失败弹窗出现一次 → 点「知道了」不再回弹 → 「进入设置」落到设置页 + 后端恢复后冷启动无失败弹窗、OTA 正常；连同 v2.2.0~v2.2.3 的既有欠账，**至今没有任何一条客户端行为被真机确认过**，现有证据止于源码 + JVM 单测 + curl 直连生产。**别把本节描述当验收结论用。**
+
+
 
 ## 5.5 时延预算表（同步 LLM 调用契约）
 
@@ -202,6 +250,8 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 
 ## 6. 已知边界 / 坑位（血泪清单）
 
+- **宿主 5173 是共享机上的争用端口，被人抢走过 12 天**（2026-09-14~26 血案，全链路见 §5 v2.2.3 条）：本盒跑着多个项目，5173 曾是 data-collection 的 node 主动抢占的靶子——`compose up -d` 遇到端口占用**不会把已存在的服务顶掉**，而是让自己的容器停在 `State=created` 并报 `failed to bind host port 0.0.0.0:5173: address already in use`；更糟的是抢占者对**任意路径回 HTTP 200 的 HTML**，于是"端口有人应、health 看着活"，而本项目实际上线为 0。判据三条：`docker ps -a`（**Created/Exited 也算没起来**）、`ss -ltnp | grep :5173`（持有者必须是 docker-proxy；`readlink /proc/<pid>/cwd` 双证归属）、`curl` 公网 `/api/v1/app/version` 必须是 **JSON 且 `source=env`**，出现 `<html`/JSON 解析报错就是打到别人家了。恢复办法是**给抢占者改端口**（本项目 5173 是烧进 release 包的公开契约，动不得），不是把本项目挪走——挪走等于所有存量客户端集体失联。跨项目端口变更属"改别人家共享状态"，须先取得确认（本次由用户 2026-09-16 决策）。
+- **GitHub Actions 两笔环境性停供**（2026-09-15，`203ac02`/`0c3010a`/`7172417`）：① runner 的 Node 20 下线，actions 需全量迁移（checkout v5 / setup-android v4 / setup-java v5 / cache v5 / upload-artifact v6 / action-gh-release v3 / setup-python v6）；② Google 自 2026-09-15 起**停供 sdkmanager 的 `tools` 包**，`setup-android` 默认 `packages=tools platform-tools` 会 `Failed to find package tools` 退出 1（action issue #537）→ 两个工作流都显式覆盖成 `packages=platform-tools`（build-tools/platform 由 runner 预装镜像提供）。③ 同期修掉 `release-gate` 自身一个静默失效 bug：`SRC_HITS=$(... | grep -c ...)` 在计数为 0 时 grep 退出码 1，而 GitHub run 默认 `bash -eo pipefail` → **脚本在任何"没碰 `app/src/main/**`"的 push 上直接中止**（exit 1、不发 `::error::`，只剩 `Process completed with exit code 1`）；加 `|| true` 加固。**这类"门自己红了但不是被测对象的问题"最耗人，改 workflow 时优先给它出声的路径。**
 - **sqlite 只支持新链**（≥c9a1 两向）；整链 `d5ccd…` 含 `edb6eb8d27a1` drop-constraint 需 batch，PG16 跑整链无碍——CI/生产都是 PG。
 - `lintDebug` 本地≠CI（主干净也报 `MissingPermission` 2 处，CI check-run 全绿）——只以 ktlint.sh/gradle test/assembleDebug + 远端 CI 为准；ktlint 通过 ≠ 可编译（它不查类型）。
 - JUnit4 无 float 重载/assertThrows（用 Double+delta、runCatching+fail）。
@@ -248,4 +298,4 @@ budget <= 30s - (同一请求内其它 await) - 5s 余量
 
 ## 7. 文档索引
 
-用户功能路径 `docs/usage-guide.md` · 发版历史 `CHANGELOG.md` · 大版本计划 `.mimocode/plans/1788164431817-eager-cactus.md` · 执行纪要 `.mimocode/tasks/NIGHTLY.md` + T1-T9 报告 · 原架构规格 `docs/superpowers/specs/2026-07-11-...design.md`。
+用户功能路径 `docs/usage-guide.md` · 发版历史 `CHANGELOG.md` · 大版本计划 `.mimocode/plans/1788164431817-eager-cactus.md` · 执行纪要 `.mimocode/tasks/NIGHTLY.md` + T1-T9 报告 · 原架构规格 `docs/superpowers/specs/2026-07-11-...design.md` · 2026-09 OTA 端口被占事故的根因与恢复计划 `.mimocode/plans/1790391989209-mighty-harbor.md`（gitignored 过程档，本机可查；结论已提炼进 §2/§6/§5 三处，以本文件为准）。

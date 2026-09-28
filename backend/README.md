@@ -119,11 +119,12 @@ mkdir -p static/tts static/apk   # 预建 bind 源目录——docker 对缺失�
                                  # 之后 host 用户跑 publish_apk.sh 会 EACCES
 docker compose -f docker-compose.prod.yml up -d --build   # 空库自动全链迁移
 curl -s localhost:${API_PORT:-5173}/api/v1/health
-bash scripts/publish_apk.sh v2.1.0   # static/apk 不在 git → OTA 直链这一步补种
+bash scripts/publish_apk.sh v2.2.4   # static/apk 不在 git → OTA 直链这一步补种
                                      # （非 118.89.58.84 机器带 PUBLISH_APK_BASE_URL=<公网地址>）
 ```
 
 - 主实例：**端口 5173**（`.env API_PORT` 可配；云防火墙当前唯一映射口）；release 包内置 `http://118.89.58.84:5173/api/v1/`。注意这是**宿主**端口，映射到**容器内 8000**；宿主上的 8000 属开发栈（已收紧 `127.0.0.1:8000`），别对号。
+- ⚠️ **5173 是烧进发布包的公开契约，动不得**；也因此它是共享机上的**争用点**：`up -d` 时若该端口已被别的进程持有，compose 不会顶掉对方，而是让自己的容器停在 `State=created`（报 `failed to bind host port …: address already in use`），而抢占者若对任意路径回 HTTP 200，看起来"端口活着"——本项目 2026-09-14~26 就是被同机另一项目这样顶掉过 12 天。所以**发布/改配置后按公网口径实测** `curl http://<公网>:5173/api/v1/app/version` 必须是 JSON（判据、判别与恢复办法见 `docs/operations.md` §2 三步硬核验与 §6）。
 - 生产库：同栈 `postgres:16-alpine`（容器 `english-postgres-prod`，库 `english_prod_5173`，卷 `english-prod-pgdata`——**切换后严禁对本项目 `down -v`**）。**不发布宿主 5432**：宿主 127.0.0.1:5432 永远是开发栈；运维 psql/备份一律 `docker exec english-postgres-prod psql -U english ...`。
 - 起停/迁移：`scripts/deploy.sh {start|stop|restart|status|migrate|logs [n]}`——底层全是 docker compose。语义要点：`start/restart`=`up -d --build`（restart 另加强制 recreate）。**compose 原生 restart 不重读 .env、不换镜像**——改 `.env`（publish_apk 写 APP_*）后只有 recreate 才生效，脚本已统一。本项目**只有 compose 这一种跑法**：旧 `start-legacy`/`stop-legacy`（裸 uvicorn + `.deploy.env`）回滚逃生口已于 2026-09-11 退役删除——那条 DSN 指向 dev postgres 容器内的同名陈旧库（实测 1 user / 0 sessions / 0 history），"回滚"过去等于把生产切到空库。后端回滚改走源码：`git checkout v<上一版> -- backend/ && scripts/deploy.sh restart`（跨迁移边界的 alembic 坑先查 `docs/operations.md` §1）。`status` 会打印生产容器的宿主 PID（回答"ps 里那个 uvicorn 是谁"，勿据此杀进程）。
 - 环境变量优先级：`--build` 构建与容器 env 均以 `backend/.env` 为唯一事实源（deploy.sh 启动前自动剥离同名 shell export，见 operations.md §6 血案）。
@@ -204,9 +205,9 @@ backend/
 |---|---|---|
 | GET | `/scenes` `/scenes/{id}` `/scenes/{id}/script` | 情景课画廊/详情/剧本（8 门人工 + DB 生成课合并，DB 优先） |
 | GET/DELETE | `/scenes/{id}` 生成物 · POST `/scenes/generate` · GET `/scenes/jobs/{job}` | 目标一句话→两段生成任务（jobs 轮询）/ 删除自产课 |
-| POST | `/sessions` · `/sessions/{id}/step` `/skip-step` `/mission` `/hint` `/finish-mission` · GET `/sessions` `/sessions/{id}` | 任务通关闭环状态机（崩溃恢复、幂等、乐观锁） |
+| POST | `/sessions` · `/sessions/{id}/step` `/skip-step` `/mission` `/hint` `/finish-mission` · GET `/sessions` `/sessions/{id}` | 任务通关闭环状态机（崩溃恢复、幂等、乐观锁）。**v2.2.0 起 `/finish-mission` 返回 202 + `{session_id, revision, stage, status, review_status}`，`report` 字段移除**：数值骨架当场落库、两句 AI 评语交后台作业（45s 预算），客户端轮询既有 `GET /sessions/{id}` 看 `review_status` ∈ generating/ready/failed——**判据只许读 `review_status`，读 `report.source` 会把诚实终态误当"还在生成"**（零迁移：状态存在 `doc` JSON 列里）|
 | GET | `/ability?days=7\|30\|90` | 能力画像（EWMA + 雷达 + 轨迹；stub 证据零写入） |
-| GET/POST | `/assessment` `/assessment/{id}/start` `/answer` `/complete` | CEFR 7 题测评（批量 LLM 判级，题库 `data/assessment/bank.json`） |
+| GET/POST | `/assessment` `/assessment/{id}/start` `/answer` `/complete` · GET `/assessment/{id}/result` | CEFR 7 题测评（题库 `data/assessment/bank.json`）。**v2.2.2 起判级异步化**：`/complete` 传 `async_judge=true` → 立即 202 `{attempt_id, status:"judging"}`，后台作业判级（墙钟 `ASSESSMENT_JUDGE_JOB_BUDGET_S=120s` + 单次 socket `…_TIMEOUT_S=100s`，两级必须成对放宽），客户端轮 `/result`（judging 持续 202；completed 回放完整结果；作业随进程重启变孤儿时 `/result` 就地重派一次）。老客户端不传该字段 = 既有 20s 同步路径，行为零变化。**"重新判级"= 对 `source=stub` 的存量再 POST 一次 complete**（幂等回放只保护真判级结果，失败结果不保护，学员不必重做题）；画像/事件走条件写回门（`UPDATE … WHERE status='judging'`），并发双跑输家整事务回滚，**只写一次** |
 | POST/GET/DELETE | `/polish` · `/expressions` | 语法润色 + 个人表达库（去重/TOCTOU/`source` 全保留） |
 | GET | `/courses/progress` | 通关进度物化视图（attempts/cleared/best_total） |
 
@@ -221,11 +222,11 @@ mypy app
 ```
 
 
-## 练习流程一览（v2.1.0）
+## 练习流程一览（v2.2.4）
 
 - **跟读模式**：后端课程台词按角色轮次交错后，客户端去掉角色标签，逐句展示最近五句；每句沿用 `/tts` + `/score`（≥60 过关）。
 - **对话模式**：客户端将课程的角色 A/B 交错成完整对话，仅把角色 B 设为用户目标；点击「播放角色 A」后录制并评分角色 B。
 - **影子跟读**：整课连播 + 全程录音（回声消除），按句切片逐句评分聚合成整课报告；录音可回放对比。
 - **自由对话模式**（旧入口，保留）：`/dialogue/generate` 开场 + 建议回答；`/dialogue/turn` 下一轮 + 润色对照（v2.0 起同一次 LLM 调用返回判分与润色，识别文本直喂上下文）。未配置 LLM 时内置场景 fallback 保证 APK 流程可跑。
 - **任务通关情景课**（v2.0 主打）：`/sessions` 状态机驱动「打基础四题型（跟读/复述/翻译/造句）→ 实战对话（任务清单：required 全达成才通关，AI 人设追问、提示可开关但计入代价）→ 复盘报告（总分+四维+亮点/改进+原话 vs 更好说法+能力增量）」。无凭据环境按诚实降级链路走通（source 标记 + 画像零写入）。
-- **AI 生成课 / CEFR 测评 / 表达库 / 弱词训练**：见上方端点表；生成课走两段式 jobs，测评判级单次批量 LLM。
+- **AI 生成课 / CEFR 测评 / 表达库 / 弱词训练**：见上方端点表；生成课走两段式 jobs，测评判级自 v2.2.2 起也走 202 + 后台作业（免费额度限速下 20s 同步预算实测会把判级砍成空态，故异步化；老客户端仍可走同步路径）。

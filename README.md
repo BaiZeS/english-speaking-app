@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.2.1**（见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.2.4**（已发布，生产 OTA 现下发 v2.2.4；见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
 
 ## 项目状态
 
@@ -11,7 +11,7 @@
 | Phase 2 L1 MVP（K12 + 新概念 1 跟读）| ✅ 后端 9 端点 + 真实讯飞 TTS/ISE 评分 + Android 客户端完成，APK 由 CI 构建（android-ci 全绿）；⏳ 真机联调 |
 | 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；自由对话无 LLM 凭据时使用确定性 fallback |
 | LLM 自由对话 | ✅ 后端接入百炼 OpenAI 兼容端点 + `/llm/models` 目录端点；客户端设置页可选模型，未配置时自动降级 |
-| 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）|
+| 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）；**v2.2.4 起检查失败不再锁死 App**：弹窗可关且关闭不再触发重查、新增「进入设置」逃生门、失败文案可读化、回前台重查静默 |
 | 多本书籍 | ✅ `/books` 目录端点 + Android 首页下拉切换；`/dialogue/scenes` 暴露自由对话场景 |
 | Dashboard | ✅ `/stats` 汇总接口 + Android 概览页：总练习 / 平均分 / 最高分 / 连续天数 / 14 天趋势图 / 分项平均 |
 | 录音可视化 | ✅ 实时声量脉冲条 `RecordingPulseMeter`（← `AudioRecorder.levelFlow` VU 包络，v2.2.1 起替换滚动波形）+ 评分反馈卡中性化（ScoreRing 分数环 / 子分进度条 / 染色逐词芯片）|
@@ -30,8 +30,11 @@
 | **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
 | **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试（**该口径止于 v2.0.0**，当前基线见下一行与 android/README.md）；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
 | **v2.1.0 生产中继（OTA 通道）** | ✅ release 包内置地址切 `:5173`（versionCode 8）；`/static/apk` 自托管分发 + `publish_apk.sh` 一条命令完成发版收尾（GitHub 出口仅 ~10-40KB/s，自托管走服务器出口）；`:8000` 桥退役；运维护栏脚本 + 双实例日志 + 冒烟命令全套（docs/operations.md）|
-| **v2.2.1 两个样式真机反馈** | ✅ 录音条改实时声量脉冲条（5 根随当前音量跳动、松手定格峰值）+ 打基础/跟读/自由对话评分反馈卡中性化重做（分数环 + 子分进度条 + 染色逐词芯片）；删除滚动波形管线（RecordingWaveform/WaveformHistory，编译器强制迁移）。非强更、后端零改动。基线：Android **318** JVM 单测全绿；⏳ v2.2.1 真机验收尚未执行 |
-| **v2.2.0 五个真机症状 + 交付闭环** | ✅ 长按/点按两种录音手势按取句长短分派（共享件 `HoldToTalkRow`/`TapToTalkRow`）+ **真滚动波形**（`RecordingWaveform` / 纯环形缓冲 `WaveformHistory`）+ 打基础逐题**完整即时反馈**（五维子分/逐词 IPA/转写/建议，≥85 停留 5s 自动前进）+ 收工改 **202 + `review_status` 轮询**（总评不再超时）+ 复盘报告回得去（「查看上次复盘」/「最近复盘」）+ 中文错误码表。后端**零迁移**、新增同步 LLM 时延契约表与 `test_latency_budget.py`；CI 新增 **`release-gate`**：改 `android/app/src/main/**` 却不同范围 bump `versionCode` + `CHANGELOG.md` 直接红（`2fd067d` 那批修复卡在 main 上从没上过手机，就是这条要防的病）。基线：Android **327** JVM 单测 / 后端 **573** 测试全绿；⏳ **v2.2.0 真机验收尚未执行** |
+| **v2.2.4 更新检查失败不再锁死 App** | ✅ 纯 Android 加固（2026-09-28 发布，versionCode 13）：失败弹窗点「知道了」不再立刻重查（旧版服务端不可用时就是「知道了 → 再失败 → 弹窗回来」的死循环，模态框把用户锁在任何页面之外、连改服务器地址的「设置」都进不去）+ 新增「进入设置」逃生门 + 失败文案可读化（原始异常/HTML 残片不再上屏，固定中文）+ 回前台自动重查改静默（失败只记日志）。后端零改动、非强更（`APP_MIN_SUPPORTED_VERSION` 维持 2.2.0）。基线：**Android 337 / 后端 583** 全绿（2026-09-28 实测）；⏳ v2.2.0~v2.2.4 **真机验收均尚未执行** |
+| **v2.2.3 Tab 恢复可见即刷新** | ✅ 修「测评完回『我的』看不到四维能力维度」：底部 Tab 用返回栈 `saveState/restoreState` 恢复、ViewModel 不重建，而「我的」/「首页」只在**首次进入**拉一次画像——本版给三屏加 `LifecycleResumeEffect` 重拉（同时让首页未测评引导卡即时消失、词汇 Tab 弱词数不再滞后；`MeViewModel` 画像兜底条件收紧）。后端零改动、非强更。基线：Android 326 JVM 单测 |
+| **v2.2.2 CEFR 判级异步化** | ✅ 修「测评后只有发音维出分」（生产实锤：判级 LLM 受免费额度限速，两次都在 20s 同步硬预算处撞墙 → 落 stub 空态并被幂等回放固化）：交卷改 **202 + 轮询**（后台作业墙钟 120s），结果页新增**「重新判级」**（stub 结果与存量空态可一键翻案、**不需要重做题**），stub 文案与画像兜底同批改。**需后端同批部署**（两端各自向后兼容：老客户端不传 `async_judge` 走既有同步路径、行为零变化）。发布前冒烟揪出二阶根因——墙钟放宽了而 openai SDK 的**单次 socket 超时**仍按 20s 先斩，补 `ASSESSMENT_JUDGE_JOB_TIMEOUT_S=100` 成对放宽（**两级超时必须同扩**这条教训入 §5.5）。基线：后端 582 / Android 326（本版记录口径；生产判级链已 curl 实锤 43s 慢回复被完整接住）；⏳ 客户端判级链只有 curl 证据、待真机走查 |
+| **v2.2.1 两个样式真机反馈** | ✅ 录音条改实时声量脉冲条（5 根随当前音量跳动、松手定格峰值）+ 打基础/跟读/自由对话评分反馈卡中性化重做（分数环 + 子分进度条 + 染色逐词芯片）；删除滚动波形管线（RecordingWaveform/WaveformHistory，编译器强制迁移）。非强更、后端零改动。另：debug 包默认后端切生产公网端点（与 release 同源，装在任何手机开箱即用）|
+| **v2.2.0 五个真机症状 + 交付闭环** | ✅ 长按/点按两种录音手势按取句长短分派（共享件 `HoldToTalkRow`/`TapToTalkRow`）+ **真滚动波形**（`RecordingWaveform` / 纯环形缓冲 `WaveformHistory`）+ 打基础逐题**完整即时反馈**（五维子分/逐词 IPA/转写/建议，≥85 停留 5s 自动前进）+ 收工改 **202 + `review_status` 轮询**（总评不再超时）+ 复盘报告回得去（「查看上次复盘」/「最近复盘」）+ 中文错误码表。后端**零迁移**、新增同步 LLM 时延契约表与 `test_latency_budget.py`；CI 新增 **`release-gate`**：改 `android/app/src/main/**` 却不同范围 bump `versionCode` + `CHANGELOG.md` 直接红（`2fd067d` 那批修复卡在 main 上从没上过手机，就是这条要防的病）。基线：Android **328** JVM 单测（当时文档误记 327，v2.2.1 开工实测校正，见 CHANGELOG v2.2.1）/ 后端 **573** 测试全绿；⏳ **v2.2.0 真机验收尚未执行** |
 
 ## 仓库结构
 
@@ -48,7 +51,7 @@
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
 - **AI 服务**：MiMo TTS（语音合成，已启用真合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-flash`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
-- **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。`android-ci` 的四个 job：`release-gate`（**改了 `android/app/src/main/**` 就必须同范围 bump `versionCode` + 写 `CHANGELOG.md`**，否则红且挡住产物构建）→ ktlint → detekt(软) → testDebugUnitTest → assembleDebug。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
+- **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。`android-ci` 的四个 job：`release-gate`（**改了 `android/app/src/main/**` 就必须同范围 bump `versionCode` + 写 `CHANGELOG.md`**，否则红且挡住产物构建）→ ktlint → detekt(软) → testDebugUnitTest → assembleDebug。2026-09-15 两笔加固：actions 全集迁到 Node 24（checkout v5 / setup-java v5 / cache v5 / upload-artifact v6 / setup-python v6 / action-gh-release v3 / setup-android v4），`setup-android` 显式覆盖 `packages=platform-tools`（Google 自 2026-09-15 停供 sdkmanager 的 `tools` 包，用默认值会红，action issue #537），并修掉 `release-gate` 里 `grep -c` 计数为 0 时在 `bash -eo pipefail` 下**静默中止**（不发 `::error::`）的 bug。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
 
 ## 快速开始
 
@@ -85,7 +88,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 发布通道（诚实版，v2.0.0 起）：
 
 - **正式 OTA**：push `v*` tag → `release.yml` 自动构建并发布 GitHub Release
-  （`EnglishAssistant-<ver>.apk`，如 v2.2.0）。**发布后必须再在部署机跑一次
+  （`EnglishAssistant-<ver>.apk`，如 v2.2.4）。**发布后必须再在部署机跑一次
   `backend/scripts/publish_apk.sh <tag>`**：把 APK 拉到服务器 `static/apk/` 自托管
   并写 `.env` 的 `APP_LATEST_VERSION`/`APP_APK_URL`（`/app/version` 优先级 1）——
   服务器到 GitHub 资源站实测仅 ~10-40KB/s，不切自托管时手机 OTA 下载这 20 余 MB
