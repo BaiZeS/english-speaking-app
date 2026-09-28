@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.dp
  * caller can wire it to [ApkInstaller] together with the system permission flow.
  */
 @Composable
+// v2.2.4: 新增 onOpenSettings（失败弹窗的「进入设置」逃生门）后达 8 参。回调式 Composable
+// 的参数本来就是一排事件通道，强拆数据类反而丢可读性 —— 处置口径同 BriefingViewModel。
+@Suppress("LongParameterList")
 fun UpdateDialog(
     checkState: UpdateCheckState,
     downloadState: DownloadState,
@@ -32,18 +35,16 @@ fun UpdateDialog(
     onInstall: (apkPath: String) -> Unit,
     onDismiss: (UpdateInfo) -> Unit,
     onCancelDownload: () -> Unit,
-    onDismissFailure: () -> Unit
+    onDismissFailure: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     when (checkState) {
         UpdateCheckState.Idle, UpdateCheckState.Checking, is UpdateCheckState.UpToDate -> Unit
-        is UpdateCheckState.Failed -> {
-            AlertDialog(
-                onDismissRequest = onDismissFailure,
-                confirmButton = { TextButton(onClick = onDismissFailure) { Text("知道了") } },
-                title = { Text("检查更新失败") },
-                text = { Text(checkState.message) }
-            )
-        }
+        is UpdateCheckState.Failed -> FailureDialog(
+            message = checkState.message,
+            onDismissFailure = onDismissFailure,
+            onOpenSettings = onOpenSettings
+        )
         is UpdateCheckState.UpdateAvailable -> PromptDialog(
             info = checkState.info,
             downloadState = downloadState,
@@ -53,6 +54,28 @@ fun UpdateDialog(
             onCancelDownload = onCancelDownload
         )
     }
+}
+
+/**
+ * 「检查更新失败」弹窗 (v2.2.4/VC13)。
+ *
+ * 三个出口: 「知道了」与点弹窗外/返回键都只做 Failed → Idle; 「进入设置」在关窗之后
+ * 把用户送到能改服务器地址的那一页。旧版这里挂的是 `check(force = true)` —— 后端不可用时
+ * 弹窗关掉就立刻回来, 用户被模态框锁死在任何页面(包括「设置」)之外。
+ */
+@Composable
+private fun FailureDialog(
+    message: String,
+    onDismissFailure: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismissFailure,
+        confirmButton = { TextButton(onClick = onDismissFailure) { Text("知道了") } },
+        dismissButton = { TextButton(onClick = onOpenSettings) { Text("进入设置") } },
+        title = { Text("检查更新失败") },
+        text = { Text(message) }
+    )
 }
 
 @Composable

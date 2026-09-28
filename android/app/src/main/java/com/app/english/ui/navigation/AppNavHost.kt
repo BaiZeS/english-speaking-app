@@ -58,8 +58,7 @@ import com.app.english.ui.vocab.VocabHubScreen
  * 语义和 v1.4 一致, 只是回退锚点从旧的 `lessons` 变成了 `courses` Tab。
  */
 @Composable
-fun AppNavHost() {
-    val navController = rememberNavController()
+fun AppNavHost(navController: NavHostController = rememberNavController()) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = currentRoute in topLevelRoutes
@@ -114,6 +113,18 @@ private fun NavHostController.navigateToTab(route: String) {
         launchSingleTop = true
         restoreState = true
     }
+}
+
+/**
+ * 「进入设置」的落脚点(更新检查失败弹窗的逃生门, v2.2.4/VC13)。
+ *
+ * 「设置」是改服务器地址、让 App 重新连上后端的地方, 所以它必须永远走得到 ——
+ * v2.2.3 及以前失败弹窗关不掉, 用户就是被锁在设置页之外。栈语义与底部栏切 Tab
+ * 一致(先回「我的」再进设置), 因此从设置按返回落在「我的」, 不会吐回深层页面。
+ */
+fun NavHostController.openSettingsScreen() {
+    navigateToTab(Route.Me.route)
+    navigate(Route.Settings.route) { launchSingleTop = true }
 }
 
 private fun TabIcon.vector(): ImageVector = when (this) {

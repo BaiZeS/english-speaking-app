@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.2.4 — 2026-09-28 · 修「更新检查失败弹窗锁死整个 App」+ 失败信息可读化
+
+versionCode 13 / versionName 2.2.4。**纯 Android 客户端加固**：后端零改动；非强更（`APP_MIN_SUPPORTED_VERSION` 维持 2.2.0）。
+
+### 用户可感知
+
+- **「检查更新失败」弹窗终于能关掉了**（本版主修复，2026-09-14~26 生产端口被占事故的客户端侧根治）：旧版关掉失败弹窗会**立刻重新检查**，服务端不可用时就是「知道了 → 再失败 → 弹窗回来」的死循环，模态框把用户锁在任何页面之外——连「设置」（改服务器地址的唯一入口）都进不去。本版起关闭只关弹窗，不再触发任何请求。
+- **失败弹窗新增「进入设置」逃生门**：一键跳到服务器地址设置页，服务端迁移/换端口时用户可自助改址。
+- **失败信息不再是天书**：旧版把原始异常文本（内嵌整段 HTML/JSON 响应体）直接上屏；本版固定为「无法连接更新服务，请检查网络后重试」，只有本来就是给人看的中文提示才原样保留。
+- **切后台回来不再被弹窗打断**：回前台的自动重查改为静默——失败只记日志；冷启动首查仍会弹一次告知。
+
+### 工程摘要
+
+- **`AppUpdateManager.checkForUpdate(force, silent)`**：`silent=true` 失败不外露（归位 `Idle`，仅 `Timber.e`）。三个纯函数钉行为（与 `decideUpdate` 同一套「剥出 Android 类、JVM 可测」口径）：`sanitizeUpdateFailureMessage`（≤80 字、无 `<>{} ` 残片、含中文才放行，否则回落固定文案）、`collapseSilentFailure`、`dismissedFailureState`。
+- **`MainActivity`**：`onDismissFailure` 由 `check(force = true)` 改为 `dismissFailure()`；`onResume` 改调 `check(silent = true)`；`navController` 提升到 Activity 层——`UpdateHost` 是 `AppNavHost` 的兄弟节点，失败弹窗的「进入设置」需要它。
+- **`AppNavHost.openSettingsScreen()`**：栈语义与底部栏切 Tab 一致（先回「我的」再进「设置」，返回键落「我的」不吐回深层页）；`AppNavHost(navController)` 保留默认参数，老调用方零改动。
+- **`UpdateDialog` 拆出 `FailureDialog`**：知道了 / 进入设置双出口，点弹窗外与返回键同「知道了」。
+- **detekt**：新增 `UpdateDialog` 8 参触发 `LongParameterList`，按仓库既有处置加 `@Suppress` + 理由注释（口径同 `BriefingViewModel`）；全量报告与 HEAD 基线逐条一致（100 条存量、零新增）。
+- **测试基线**：Android JVM 单测 **337 passed** 全绿（326 + 11 新增：`AppUpdateFailureHandlingTest` 行为锁——dismiss 折叠 Failed→Idle 且不吞升级提示、静默失败不外露/非静默仍弹、序列化与 HTML 残片文案不上屏、纯中文 App 级消息保留、超长拒绝、端到端组合）；ktlint 清零（CI 同版 1.3.1 CLI 口径）。
+- ⏳ **真机验收**：断网冷启动 → 失败弹窗出现一次 → 点「知道了」不再回弹 → 「进入设置」落到设置页；后端恢复后冷启动无失败弹窗、OTA 正常。
+
 ## v2.2.3 — 2026-09-14 · 修「测评完回『我的』页看不到四维能力维度」+ Tab 数据陈旧
 
 versionCode 12 / versionName 2.2.3。**纯 Android 客户端修复**：后端零改动、无需部署；非强更（`APP_MIN_SUPPORTED_VERSION` 维持 2.2.0）。
