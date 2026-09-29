@@ -935,7 +935,10 @@ async def create_session(
     if not req.scene_id:
         raise AppError(400, "scene_id is required for a scene_course session", "SCENE_ID_REQUIRED")
     user = await _resolve_user(db, req)
-    course = scene_store.get_course(req.scene_id)
+    # 统一读路径 (同 GET /scenes/{id}): 先按归属查 DB 生成课 (专属课), 再回落 curated.
+    course = await scene_store.find_generated_course(db, user.id, req.scene_id)
+    if course is None:
+        course = scene_store.get_course(req.scene_id)  # 非法 id 在这里抛 400
     if course is None:
         raise AppError(404, f"scene {req.scene_id} not found", "SCENE_NOT_FOUND")
 

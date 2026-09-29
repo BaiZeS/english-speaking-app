@@ -288,14 +288,7 @@ async def _owned_generated_course(
     user = await lookup_user(db, device_id=device_id, user_id=user_id)
     if user is None:
         return None
-    row = await _find_generated_row(db, user.id, scene_id)
-    if row is None or not isinstance(row.doc, dict):
-        return None
-    try:
-        return SceneCourse.model_validate(copy.deepcopy(row.doc))
-    except Exception as exc:
-        logger.warning("generated scene doc unreadable | scene={} err={}", scene_id, exc)
-        return None
+    return await scene_store.find_generated_course(db, user.id, scene_id)
 
 
 async def _load_scene(

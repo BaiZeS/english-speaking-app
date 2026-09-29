@@ -19,6 +19,7 @@ DB 生成课 (``scene_courses`` 表) 归属用户且无上限, 不能落盘, 因
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import time
@@ -27,6 +28,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.models.course import (
@@ -36,6 +39,7 @@ from app.models.course import (
     DialogueExchange,
     SceneCourse,
 )
+from app.models.db import SceneCourseRow
 
 logger = logging.getLogger(__name__)
 
@@ -227,11 +231,11 @@ def load_curated_courses() -> list[SceneCourse]:
 
 
 def get_course(scene_id: str) -> SceneCourse | None:
-    """按 id 取一门课, 找不到返回 None (id 非法则 AppError 400).
+    """按 id 取一门 curated 文件课, 找不到返回 None (id 非法则 AppError 400).
 
-    P1 只有文件里的 curated 课. P4 EXTENSION POINT: 生成课落在 ``scene_courses``
-    表里, 在那个函数里先查 DB (归属这个 device 才算可见) 再回落到本函数即可 ——
-    端点不用改, 所以这里保持同步签名 + 只吃 scene_id.
+    只认 ``data/scenes/*.json``: DB 生成课不在这里, 先查
+    :func:`find_generated_course` 再回落到本函数 (统一读路径, 开场/详情/剧本同一个
+    顺序 —— 踩过: ``POST /sessions`` 只调本函数, 专属课看得到详情却开不了课).
     """
     path = _scene_file(scene_id)
     # 先走缓存; 缓存里没有再看文件是否存在 (新落地/刚被别的过程写入的文件).
@@ -245,6 +249,35 @@ def get_course(scene_id: str) -> SceneCourse | None:
     except (OSError, ValueError, json.JSONDecodeError, ValidationError) as exc:
         logger.warning("scene course %s unreadable: %s", scene_id, exc)
         return None
+
+
+async def find_generated_course(
+    db: AsyncSession, user_id: str, scene_id: str
+) -> SceneCourse | None:
+    """按课程 id 取归属 ``user_id`` 的 DB 生成课 (``scene_courses``, 仅 ``ready`` 行).
+
+    可见性 = 归属: 不是本人的行 / 未就绪 / doc 坏掉都返回 ``None``, 与"不存在"同形
+    (不泄露存在性, 和 ``GET /scenes/{id}`` 的 404 纪律一致)。每用户生成课量小,
+    按 ``doc["id"]`` 过滤而不是 JSON 路径查询, 方言中立 (同 scenes.py 既有策略)。
+    """
+    rows = (
+        await db.execute(
+            select(SceneCourseRow).where(
+                SceneCourseRow.user_id == user_id, SceneCourseRow.status == "ready"
+            )
+        )
+    ).scalars()
+    for row in rows:
+        raw = row.doc
+        if not isinstance(raw, dict) or raw.get("id") != scene_id:
+            continue
+        try:
+            # JSON 列读纪律: deepcopy 一份再校验 (不信任列里的旧数据).
+            return SceneCourse.model_validate(copy.deepcopy(raw))
+        except ValidationError as exc:
+            logger.warning("generated scene doc skipped | row=%s err=%s", row.id, exc)
+            return None
+    return None
 
 
 # ------------------------------------------------------------------ P4 扩展口
@@ -395,6 +428,7 @@ __all__ = [
     "ScriptRole",
     "build_summary",
     "category_stats",
+    "find_generated_course",
     "get_course",
     "invalidate_cache",
     "list_scenes",

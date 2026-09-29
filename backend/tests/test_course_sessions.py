@@ -34,10 +34,17 @@ from app.core.errors import AppError
 from app.db.base import Base
 from app.db.session import get_sessionmaker
 from app.main import app
-from app.models.db import AbilityEvent, AbilityProfile, PracticeSession, PracticeStep, User
+from app.models.db import (
+    AbilityEvent,
+    AbilityProfile,
+    PracticeSession,
+    PracticeStep,
+    SceneCourseRow,
+    User,
+)
 from app.services import drill_grader as dg
 from app.services import llm_provider, scene_store
-from tests.test_scene_store import write_course
+from tests.test_scene_store import make_course_dict, write_course
 
 DEV = "dev-session"
 OTHER = "dev-thief"
@@ -1137,3 +1144,34 @@ async def test_create_session_accepts_user_id_identity(scene_root: Path, db: Asy
     assert row.user_id == user.id and row.owner_device_id == "dev-by-user"
     assert unknown.status_code == 404 and unknown.json()["error"]["code"] == "USER_NOT_FOUND"
     assert [i["session_id"] for i in listed.json()] == [body["session_id"]]
+
+
+@pytest.mark.asyncio
+async def test_create_session_opens_generated_course(scene_root: Path, db: AsyncSession) -> None:
+    """专属课(P4 生成课)能开课: ``POST /sessions`` 要先按归属查 ``scene_courses`` 表, 再回落 curated.
+
+    回归: 详情读路径 (scenes.py) 早已补了 DB 分支, 而开场只调文件版
+    ``scene_store.get_course`` —— 生成课看得到、点开课必 404。
+    """
+    user = User(device_id=DEV)
+    db.add(user)
+    await db.commit()
+    doc = make_course_dict("scene_generated_play", "daily", source="generated")
+    db.add(SceneCourseRow(user_id=user.id, scene_key="play-me", doc=doc, status="ready"))
+    await db.commit()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        res = await c.post(
+            "/api/v1/sessions",
+            json={"device_id": DEV, "kind": "scene_course", "scene_id": "scene_generated_play"},
+        )
+        assert res.status_code == 201, res.text
+        # 别人的生成课: 按归属不可见 -> 404 (与 GET /scenes/{id} 同一纪律, 不泄露存在性)
+        theft = await c.post(
+            "/api/v1/sessions",
+            json={"device_id": OTHER, "kind": "scene_course", "scene_id": "scene_generated_play"},
+        )
+    body = res.json()
+    assert body["scene_id"] == "scene_generated_play"
+    assert body["kind"] == "scene_course"
+    assert body["briefing"]["total"] == len(doc["briefing"])
+    assert theft.status_code == 404 and theft.json()["error"]["code"] == "SCENE_NOT_FOUND"
