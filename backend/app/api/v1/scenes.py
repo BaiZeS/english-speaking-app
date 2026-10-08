@@ -158,6 +158,9 @@ class JobView(BaseModel):
     stage_text: str
     scene_id: str | None = None
     error: str | None = None
+    #: add-only (§3 C3): 两种后台任务同居 ``generation_jobs``, 这一列让客户端分得开
+    #: ``course`` (整课) 与 ``scene_brief`` (自定义对话场景) —— 老 APK 忽略未知键。
+    kind: str = "course"
 
 
 @router.post("/scenes/generate", status_code=202, response_model=GenerateAccepted)
@@ -230,6 +233,7 @@ async def get_generation_job(
         stage_text=job.stage_text,
         scene_id=job.scene_id or None,
         error=job.error,
+        kind=job.kind or "course",  # §3 C3: 整课 vs 场景骨架, 客户端按这个分文案
     )
 
 

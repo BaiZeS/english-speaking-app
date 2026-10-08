@@ -33,9 +33,9 @@ import base64
 import binascii
 import time
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,9 +43,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.deps import get_db
 from app.core.errors import AppError
 from app.models.db import User
-from app.services import mission_engine, users
+from app.models.scene_spec import row_id_from_scene_id
+from app.services import mission_engine, scene_spec_generator, users
 from app.services.ability_engine import record_step_evidence as ability_record
-from app.services.dialogue_scenes import DialogueScene, get_scene, list_scenes
+from app.services.dialogue_scenes import DialogueScene, list_scenes, resolve_scene
 from app.services.drill_grader import (
     AbilityEvidence,
     LlmUnavailableError,
@@ -92,6 +93,9 @@ class DialogueSceneDto(BaseModel):
     id: str
     title: str
     description: str
+    #: add-only (§3 C3b): ``catalog`` = 内置目录, ``custom`` = 学员自己描的场景 (仅归属者可见).
+    #: 旧客户端 ``ignoreUnknownKeys``, 多出来的键不炸解析。
+    kind: str = "catalog"
 
 
 class DialogueScenesResponse(BaseModel):
@@ -103,6 +107,10 @@ class DialogueGenerateRequest(BaseModel):
     scene: str = Field(min_length=1, max_length=64)
     mode: str = Field(default="k12", max_length=32)
     model_id: str | None = Field(default=None, max_length=128)
+    #: §3 C3b add-only (B4 身份线): 打开**自定义场景**的开场白需要归属身份;
+    #: 不带身份 = 只能开目录场景, 旧客户端行为逐字节不变。
+    device_id: str | None = Field(default=None, min_length=1, max_length=128)
+    user_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class DialogueGenerateResponse(BaseModel):
@@ -161,33 +169,65 @@ class DialogueTurnResponse(BaseModel):
 
 
 @router.get("/dialogue/scenes", response_model=DialogueScenesResponse)
-async def list_dialogue_scenes() -> DialogueScenesResponse:
+async def list_dialogue_scenes(
+    device_id: str | None = Query(default=None, min_length=1, max_length=128),
+    user_id: str | None = Query(default=None, min_length=1, max_length=36),
+    db: AsyncSession = Depends(get_db),
+) -> DialogueScenesResponse:
     """Return every scene the free-dialogue picker can offer.
 
     Public so the Android client doesn't need to hard-code scene metadata
     or ship translation files for new scenes.
+
+    §3 C3b: 带 ``device_id``/``user_id`` 时按身份合并**归属者自己的** ``ready`` 自定义
+    场景 (``kind="custom"``, 追加在目录之后; id 冲突 DB 优先 —— ``custom_`` 前缀让它
+    实际不会发生)。这正是 §9-5 的轮询展示面: 作业 ``ready`` 后刷新列表就看见新场景,
+    **不新增轮询端点**。不认识的身份读到的是纯目录 (读侧不建行, 别人的行不可见)。
     """
-    scenes = list_scenes()
-    payload = [DialogueSceneDto(id=s.id, title=s.title, description=s.description) for s in scenes]
-    return DialogueScenesResponse(scenes=payload, default_scene=scenes[0].id if scenes else "")
+    catalog = list_scenes()
+    payload = [DialogueSceneDto(id=s.id, title=s.title, description=s.description) for s in catalog]
+    by_id = {dto.id: dto for dto in payload}
+    if device_id or user_id:
+        user = await users.lookup_user(db, device_id=device_id, user_id=user_id)
+        if user is not None:
+            for scene in await scene_spec_generator.list_ready_custom_scenes(db, user.id):
+                by_id[scene.id] = DialogueSceneDto(
+                    id=scene.id,
+                    title=scene.title,
+                    description=scene.description,
+                    kind="custom",
+                )
+    return DialogueScenesResponse(
+        scenes=list(by_id.values()),
+        # default_scene 永远取**目录**第一条: 旧客户端拿它当默认场景, 不能让某个学员
+        # 自己的自定义场景变成"全站默认"。
+        default_scene=catalog[0].id if catalog else "",
+    )
 
 
 @router.post("/dialogue/generate", response_model=DialogueGenerateResponse)
-async def generate(req: DialogueGenerateRequest) -> DialogueGenerateResponse:
+async def generate(
+    req: DialogueGenerateRequest, db: AsyncSession = Depends(get_db)
+) -> DialogueGenerateResponse:
     """Create the opening turn for free conversation.
 
     If the backend has LLM credentials configured we ask the model to write a
     warm opening line; otherwise we fall back to the local deterministic
     catalog so the practice flow keeps working without secrets.
+
+    §3 C3b: ``scene`` 既可以是目录 id 也可以是 ``custom_<row.id>` (后者必须带归属
+    身份)。拼错的 id **不再**静默开成"商务会议" —— 直接 404。
     """
-    scene = get_scene(req.scene)
+    # 身份先行 (自定义场景按归属解行; 未知 user_id 404 的语义与 /dialogue/turn 一致)。
+    user = await _identity_user(db, req)
+    scene = await _resolve_scene(db, req.scene, user)
     provider = get_llm_provider()
     if cast(bool, getattr(provider, "is_configured", False)):
         try:
             model = _resolve_model(req.model_id)
             completion = await provider.chat(
                 model=model,
-                messages=_opening_prompt(req.scene, scene.title),
+                messages=_opening_prompt(scene),
                 temperature=0.7,
                 max_tokens=200,
                 timeout=20.0,
@@ -253,9 +293,12 @@ async def turn(
     **不返回 fabricated 气泡**: 旧版那个"回落到目录里的下一句 / 写死的两句"正是
     "两轮之后永远是同一句"的根因。
     """
-    scene = get_scene(req.scene_id)
     # 身份在调用 LLM **之前**解析: 错误的 user_id 要 404, 不能被下面的生成失败兜成 503。
     user = await _identity_user(db, req)
+    # 场景解析紧跟身份 (§3 C3b): custom id 只有归属者解得开; 拼错的 id 直接 404,
+    # 不再静默开成目录第一条「商务会议」。未知场景必须**在生成之前**拦下 ——
+    # 不能白烧一次台词生成再报错。
+    scene = await _resolve_scene(db, req.scene_id, user)
     audio_bytes = _decode_user_audio(req.user_audio_b64)
     _t_iat = time.monotonic()
     try:
@@ -277,7 +320,7 @@ async def turn(
     _t_gen = time.monotonic()
     try:
         generation, model = await mission_engine.generate_turn(
-            _scene_messages(req.scene_id, history, req.shown_suggestions),
+            _scene_messages(scene, history, req.shown_suggestions),
             model_id=req.model_id,
         )
     except LlmUnavailableError as exc:
@@ -378,8 +421,14 @@ def _apply_recognized_text(
     return updated
 
 
-async def _identity_user(db: AsyncSession, req: DialogueTurnRequest) -> User | None:
-    """解析轮次身份; 未知 ``user_id`` -> 404 (device_id 按 ``POST /history`` 口径注册)."""
+async def _identity_user(
+    db: AsyncSession, req: DialogueGenerateRequest | DialogueTurnRequest
+) -> User | None:
+    """解析开场/轮次身份; 未知 ``user_id`` -> 404 (device_id 按 ``POST /history`` 口径注册).
+
+    两个入口的身份字段形状一致 (§3 C3b add-only 的 ``device_id``/``user_id``), 语义也
+    一致: 不带身份 = 旧客户端的纯无状态行为, 零建行零落库。
+    """
     if not req.device_id and not req.user_id:
         return None  # 旧客户端: 纯无状态行为, 零落库
     if req.user_id:
@@ -389,6 +438,37 @@ async def _identity_user(db: AsyncSession, req: DialogueTurnRequest) -> User | N
         return user
     created = await users.lookup_user(db, device_id=str(req.device_id), create=True)
     return created
+
+
+def _scene_not_found(scene_id: str) -> NoReturn:
+    raise AppError(404, f"scene {scene_id} not found", "SCENE_NOT_FOUND")
+
+
+async def _resolve_scene(db: AsyncSession, scene_id: str, user: User | None) -> DialogueScene:
+    """开场/轮次共用的场景解析 (§3 C3b): 目录精确命中 -> 归属者的自定义场景 -> 404。
+
+    * catalog: ``dialogue_scenes.resolve_scene`` 精确命中。旧版对查不到的 id **静默
+      回落到目录第一条**, 乱拼 id 的学员被教成「商务会议」还毫无提示 (§9-5 点名) ——
+      兜底已删, ``None`` 在这里翻成 404 ``SCENE_NOT_FOUND``;
+    * custom: ``custom_<row.id>`` 的可见性 = 归属 (照 ``scene_store.find_generated_course``),
+      没身份 / 别人的 id / 未就绪都与"不存在"同形, 不泄露存在性;
+    * 其余一律 404。
+    """
+    scene = resolve_scene(scene_id)
+    if scene is not None:
+        return scene
+    if user is not None and row_id_from_scene_id(scene_id) is not None:
+        custom = await scene_spec_generator.find_ready_custom_scene(db, user.id, scene_id)
+        if custom is not None:
+            return custom
+    return _scene_not_found(scene_id)
+
+
+#: ``AbilityEvent.step_id`` 的列宽 (varchar(32)): **PG 强校验、sqlite 宽容** —— 截断是
+#: 跨方言纪律而非可选优化: 自定义场景的 ``custom_<uuid>`` 共 43 字符, 带音频的语音轮
+#: 在生产 PG 上直写会 ``StringDataRightTruncation`` -> 500 (台词都已生成后炸掉整轮)。
+#: 目录 id 最长 18 字符不受影响; 截过的 uuid 前缀仍可回溯到行。
+_ABILITY_STEP_ID_MAX = 32
 
 
 async def _persist_turn_evidence(
@@ -448,16 +528,17 @@ async def _persist_turn_evidence(
             llm_source=model,
         )
     if events:
-        await ability_record(db, user_id=user.id, session_id="", step_id=scene_id, evidence=events)
+        # ``step_id`` 是审计标签 (varchar(32), PG 强校验): 自定义场景 id "custom_<uuid>" =
+        # 43 字符, 直写会炸 500。截到列宽内保留前缀 + uuid 头部 (可回溯到行), 完整 id 在别处有。
+        await ability_record(
+            db,
+            user_id=user.id,
+            session_id="",
+            step_id=scene_id[:_ABILITY_STEP_ID_MAX],
+            evidence=events,
+        )
     await db.commit()  # 事件/画像/对照流水(只落了 annotated_diffs 时也要落盘)一起收尾
     return events
-
-
-_OPENING_SYSTEM = (
-    "You are a friendly English-speaking coach helping a learner practice "
-    "everyday conversation. Reply in natural, simple American English "
-    "(CEFR A2-B1). Keep each turn to 1-2 short sentences. Never break character."
-)
 
 
 def _resolve_model(model_id: str | None) -> str:
@@ -472,16 +553,36 @@ def _resolve_model(model_id: str | None) -> str:
     return resolve_roleplay_model(model_id)
 
 
-def _opening_prompt(scene: str, title: str) -> list[LlmMessage]:
+def _opening_prompt(scene: DialogueScene) -> list[LlmMessage]:
+    """开场白 prompt (``POST /dialogue/generate``).
+
+    §A5/B6: ``persona``/``user_role``/``context``/``openings`` 作为**素材**交给模型
+    改写 —— 开场候选 ≥2 正是为了让每次进来不永远是同一句; "素材"是措辞纪律: 它给方向、
+    给语气, **不是**让模型照抄的台本 (兜底路径在 T3 已删死, 这里也不许把它接回来)。
+    """
+    system = (
+        "You are a friendly English-speaking coach helping a learner practice "
+        "everyday conversation. Reply in natural, simple American English "
+        "(CEFR A2-B1). Keep each turn to 1-2 short sentences. Never break character."
+    )
+    blocks = [f"Practice scene: 「{scene.title}」 —— {scene.description}。"]
+    if scene.persona or scene.user_role:
+        blocks.append(
+            f"Roles: you are {scene.persona or 'a conversation partner'}; "
+            f"the learner is {scene.user_role or 'a curious beginner'}."
+        )
+    if scene.context:
+        blocks.append(f"Context: {scene.context}")
+    if scene.openings:
+        candidates = "; ".join(f'"{item[:_LINE_MAX_CHARS]}"' for item in scene.openings[:3])
+        blocks.append(
+            "Opening candidates (rephrase one in your own words, never quote verbatim): "
+            f"{candidates}"
+        )
+    blocks.append("The learner is about to reply, so ask exactly one warm, easy question to open.")
     return [
-        LlmMessage(role="system", content=_OPENING_SYSTEM),
-        LlmMessage(
-            role="user",
-            content=(
-                f"Start a practice scene titled '{title}'. The learner is about to "
-                "reply, so ask exactly one warm, easy question."
-            ),
-        ),
+        LlmMessage(role="system", content=system),
+        LlmMessage(role="user", content="\n".join(blocks)),
     ]
 
 
@@ -553,7 +654,7 @@ def _append_instruction(messages: list[LlmMessage], tail: str) -> list[LlmMessag
 
 
 def _scene_messages(
-    scene_id: str,
+    scene: DialogueScene,
     history: list[dict[str, Any]],
     shown_suggestions: Sequence[str] = (),
 ) -> list[LlmMessage]:
@@ -565,23 +666,59 @@ def _scene_messages(
     * 句式指令**不再**硬写 "ONE short follow-up question" —— 那句 prompt 自己要求的
       固定形状正是"AI 反复问同一类问题"的第三个成因, 现在换成"没聊过的方向 + 禁重复
       清单" (:func:`_repeat_block`)。
+
+    **收已解析的 scene 对象** (§3 C3b): 目录与自定义场景走同一条解析接缝 (路由入口
+    ``_resolve_scene``), 这里不再按 id 猜场景 —— 兜底删除后"按 id 解析"只能发生在带
+    数据库会话的入口上。
+
+    §3 B6 素材消耗规则 (九场景扩容后这些字段不再是死数据): ``persona``/``user_role``
+    进 system 的扮演设定, ``beats`` 进议程, ``suggestions`` 作**示范句素材**进"本轮输入"
+    之前的取材提示 —— 这些全是 prompt 素材; 素材是"往哪儿写"的方向, **不是**"照本宣科
+    下一句"的台本, 台词/示范句仍由模型按学员刚说的现写 (兜底路径 T3 已删死)。
     """
-    scene: DialogueScene = get_scene(scene_id)
+    role_block = (
+        f"你在本场扮演: {scene.persona}。学员扮演: {scene.user_role}。"
+        if (scene.persona or scene.user_role)
+        else ""
+    )
+    # ``context`` 是自定义场景的情境行 (目录场景的情境已含在 description 里, 留空不渲染)。
+    context_block = f"情境: {scene.context}。" if scene.context else ""
     system = (
         "You are a friendly English-speaking coach helping a learner practice "
         "everyday conversation. Never break character. "
         f"场景: 「{scene.title}」 —— {scene.description}。"
+        f"{role_block}{context_block}"
         "学员是中文母语、能读写但开口少的英语初学者 (CEFR A2-B1)。"
         f"{mission_engine.GENERATION_RULES}"
     )
+    if scene.beats:
+        agenda = "\n".join(
+            f"{number}. {beat[:_LINE_MAX_CHARS]}" for number, beat in enumerate(scene.beats, 1)
+        )
+        agenda_block = (
+            f"## 议程\n按本场议程推进 (聊过的方向不回头):\n{agenda}\n"
+            "每轮只推进一步: 追问一个**没问过**的细节, 给学员一个新的可接话点; "
+            "别提前结束。\n"
+        )
+    else:
+        agenda_block = (
+            f"## 议程\n把「{scene.title}」这场聊下去: 追问一个**没问过**的细节, 给学员一个"
+            "新的可接话点; 别提前结束, 也别把话题绕回你已经问过的地方。\n"
+        )
+    material_block = ""
+    if scene.suggestions:
+        quoted = "; ".join(f'"{item[:_LINE_MAX_CHARS]}"' for item in scene.suggestions[:4])
+        material_block = (
+            f"## 参考句素材\n本场可用的示范英文: {quoted}。"
+            "suggestion 从这些里改写或另写, **不许原样复述**, 更不许给出你之前给过的句子。\n"
+        )
     history_messages = _history_messages(history)
     said = _repeat_block(history, shown_suggestions)
     learner_spoke = any(message.role == "user" for message in history_messages)
     tail = (
         f"## 已经说过的话\n{mission_engine.ANTI_REPEAT_RULES}\n"
         f"{said or '(还没有历史台词, 这是第一轮)'}\n\n"
-        f"## 议程\n把「{scene.title}」这场聊下去: 追问一个**没问过**的细节, 给学员一个"
-        "新的可接话点; 别提前结束, 也别把话题绕回你已经问过的地方。\n\n"
+        f"{agenda_block}\n{material_block}\n"
         "## 本轮输入\n"
         + (
             "学员刚说的那句 = 上面最后一条 Learner 消息 (learner_cn 译它)。"

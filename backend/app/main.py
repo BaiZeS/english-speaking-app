@@ -22,6 +22,7 @@ from app.api.v1 import (
     lessons,
     llm,
     polish,
+    scene_specs,
     scenes,
     score,
     tts,
@@ -55,6 +56,7 @@ app = FastAPI(
 install_error_handler(app)
 app.include_router(books.router, prefix="/api/v1")
 app.include_router(dialogue.router, prefix="/api/v1")
+app.include_router(scene_specs.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(version.router, prefix="/api/v1")
 app.include_router(health.router, prefix="/api/v1", tags=["health"])

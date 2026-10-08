@@ -1,4 +1,4 @@
-"""§3 C2/C3b 服务层 —— 自定义场景骨架的作业链路与归属隔离 (端点面在 test_dialogue_scenes.py).
+"""§3 C2/C3b 服务层 —— 自定义场景骨架的作业链路与归属隔离 (端点面在 test_dialogue_custom_scenes.py).
 
 覆盖:
 

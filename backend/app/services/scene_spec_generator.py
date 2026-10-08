@@ -227,6 +227,21 @@ async def _persist_scene(db: AsyncSession, job: GenerationJob, spec: CustomDialo
 # ====== 读路径 (归属隔离; §3 C3b) ======
 
 
+def scene_view_for_row(row: DialogueSceneRow) -> DialogueScene | None:
+    """一行 -> 目录同款视图; doc 坏掉/非 dict -> ``None`` (读侧逐行宽容, 同 T2 策略)."""
+    raw = row.doc
+    if not isinstance(raw, dict):
+        logger.warning("custom scene doc skipped (not a dict) | row={}", row.id)
+        return None
+    try:
+        # JSON 列读纪律: deepcopy 一份再校验 (不信任列里的旧数据).
+        spec = CustomDialogueScene.model_validate(copy.deepcopy(raw))
+    except ValidationError as exc:
+        logger.warning("custom scene doc skipped | row={} err={}", row.id, exc)
+        return None
+    return dialogue_scene_view(custom_scene_id(row.id), spec)
+
+
 async def find_ready_custom_scene(
     db: AsyncSession, user_id: str, scene_id: str
 ) -> DialogueScene | None:
@@ -250,17 +265,23 @@ async def find_ready_custom_scene(
     ).scalar_one_or_none()
     if row is None:
         return None
-    raw = row.doc
-    if not isinstance(raw, dict):
-        logger.warning("custom scene doc skipped (not a dict) | row={}", row.id)
-        return None
-    try:
-        # JSON 列读纪律: deepcopy 一份再校验 (不信任列里的旧数据).
-        spec = CustomDialogueScene.model_validate(copy.deepcopy(raw))
-    except ValidationError as exc:
-        logger.warning("custom scene doc skipped | row={} err={}", row.id, exc)
-        return None
-    return dialogue_scene_view(scene_id, spec)
+    return scene_view_for_row(row)
+
+
+async def list_ready_custom_scenes(db: AsyncSession, user_id: str) -> list[DialogueScene]:
+    """该用户全部 ``ready`` 自定义场景 (目录合并的读侧; 提交顺序稳定排列)."""
+    rows = (
+        (
+            await db.execute(
+                select(DialogueSceneRow)
+                .where(DialogueSceneRow.user_id == user_id, DialogueSceneRow.status == "ready")
+                .order_by(DialogueSceneRow.created_at, DialogueSceneRow.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [scene for row in rows if (scene := scene_view_for_row(row)) is not None]
 
 
 def dialogue_scene_view(scene_id: str, spec: CustomDialogueScene) -> DialogueScene:
@@ -283,7 +304,10 @@ def dialogue_scene_view(scene_id: str, spec: CustomDialogueScene) -> DialogueSce
         user_role=spec.user_role_cn,
         beats=tuple(spec.beats),
         openings=(spec.opener,),
-        context=spec.context_cn,
+        suggestions=(),
+        # ``goal`` 也是 prompt 素材, 而 DialogueScene 只有一格情境位: 情境与目标拼成一行
+        # 进 ``context`` (目录场景没有独立 goal, 不占这一格)。
+        context=f"{spec.context_cn}(本场目标:{spec.goal})",
     )
 
 
@@ -304,7 +328,9 @@ __all__ = [
     "dialogue_scene_view",
     "find_ready_custom_scene",
     "generate_scene_spec",
+    "list_ready_custom_scenes",
     "run_scene_brief_job",
+    "scene_view_for_row",
     "spawn_scene_brief_job",
     "spec_messages",
 ]

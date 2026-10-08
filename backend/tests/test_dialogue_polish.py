@@ -26,7 +26,7 @@ from app.api.v1 import dialogue
 from app.api.v1.dialogue import _apply_recognized_text
 from app.config import settings
 from app.models.db import AbilityEvent, AbilityProfile, AnnotatedDiff, User
-from app.services import llm_provider
+from app.services import dialogue_scenes, llm_provider
 from app.services import mission_engine as me
 from tests.test_drill_grader import FakeASR, install_llm
 from tests.test_mission import generation_json
@@ -296,13 +296,22 @@ def test_bilingual_coercion_rejects_ascii() -> None:
 
 
 def test_scene_messages_include_description_and_persona() -> None:
-    """§0 第二条缺陷: 旧 prompt 只给 ``scene.title`` —— 现在 description 也进 system."""
-    messages = dialogue._scene_messages("ordering_coffee", [], [])
+    """§0 第二条缺陷: 旧 prompt 只给 ``scene.title`` —— 现在 description 也进 system.
+
+    §3 C3b 起 ``_scene_messages`` 收**已解析的场景对象** (目录/custom 同一个入口),
+    本用例用 ``resolve_scene`` 精确命中目录 —— "静默回落第一条"的兜底已删, 未知 id 会
+    返回 ``None``, 这里顺带钉它不会把 custom 前缀当成目录。
+    """
+    scene = dialogue_scenes.resolve_scene("ordering_coffee")
+    assert scene is not None
+    messages = dialogue._scene_messages(scene, [], [])
     system = messages[0]
     assert system.role == "system"
-    scene = dialogue.get_scene("ordering_coffee")
     assert scene.title in str(system.content)
     assert scene.description in str(system.content)
+    # §3 B6: 扩容后人设也在 system 里 (persona/user_role 是 prompt 素材, 不是展示兜底)。
+    assert scene.persona in str(system.content)
+    assert scene.user_role in str(system.content)
     # 末尾指令带着共用形状与禁重复要求 (走的是 mission_engine 的那一份常量)。
     tail = str(messages[-1].content)
     assert me.GENERATION_JSON_SHAPE in tail and me.ANTI_REPEAT_RULES in tail

@@ -658,6 +658,9 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
         "polish": dg.POLISH_BUDGET_S,
         # 老客户端同步路径; async_judge=true 走 202 + 120s 后台作业 (见 split 测试)。
         "assessment/complete": dg.ASSESSMENT_JUDGE_BUDGET_S,
+        # §3 C3 自定义场景: 请求只校验身份/长度 + 建 job 行, LLM 在 202 之外慢慢跑
+        # (墙见 test_scene_brief_job_is_async_with_a_named_wall)。
+        "dialogue scenes custom (202, 请求内零 LLM)": 0.0,
     }
     for name, worst in fits.items():
         assert worst + MARGIN_S <= CLIENT_READ_TIMEOUT_S, (
@@ -793,6 +796,42 @@ def test_no_endpoint_waits_on_the_review_llm_any_more() -> None:
         f"收工入口的函数体里出现了会等总评文案的调用: {offenders}; "
         "数值骨架落库 -> 202 -> 文案交给 run_review_copy_job, 别把它拉回请求里"
     )
+
+
+def test_scene_brief_job_is_async_with_a_named_wall() -> None:
+    """§3 C3 的两级口径: 请求内零 LLM; 作业墙点名且真的传进 ``_judge``。
+
+    和 ``REVIEW_COPY_JOB_BUDGET_S`` 一族同理: 墙必须**大于** socket 默认 20s (坏 JSON 的
+    回喂重试真跑得完), 也必须**有限** (挂死的 LLM 不能把 job 永远留在 ``running``)。
+    调用点显式 ``hard_budget_s=SCENE_BRIEF_JOB_BUDGET_S`` —— 正因为如此,
+    ``ASYNC_JOB_MODULES`` 只豁免 ``course_generator.py`` 这件事**不需要**同步改动
+    (计划 §3 C3 "二者只能选一": 我们选了传预算)。
+    """
+    import inspect as _inspect
+
+    from app.api.v1 import scene_specs
+    from app.services import scene_spec_generator as ssg
+
+    gen_src = _inspect.getsource(ssg.generate_scene_spec)
+    assert "hard_budget_s=SCENE_BRIEF_JOB_BUDGET_S" in gen_src, (
+        "场景骨架的 _judge 调用必须显式传作业墙 (AST 门只豁免 course_generator.py)"
+    )
+    assert "extra_body=no_thinking_body()" in gen_src, (
+        "拆+关思考口径: 场景骨架也走 no_thinking_body (开关默认关, 见 llm_provider)"
+    )
+    # 墙的定义收在 drill_grader (与 REVIEW/GRADING 同族), 这里断的是"作业用它封顶":
+    assert ssg.SCENE_BRIEF_JOB_BUDGET_S is dg.SCENE_BRIEF_JOB_BUDGET_S
+    # 与 REVIEW_* 那对同理: 作业墙 > 同步预算, 且 socket 沿用 _judge 默认 (不为它动全局)。
+    assert dg.SCENE_BRIEF_JOB_BUDGET_S > dg.LLM_TIMEOUT_S, "墙钟须大于 socket 才能接住回喂重试"
+    assert dg.SCENE_BRIEF_JOB_BUDGET_S <= 60.0, (
+        "再慢的骨架也应早于整课作业级别的分钟数落终态 (15 分钟轮询封顶之上留足裕量)"
+    )
+    # 请求面不许长出 LLM 调用 (§3 C3 "不加同步 LLM 路径"的看门狗)。
+    req_src = _inspect.getsource(scene_specs.create_custom_scene)
+    assert "generate_scene_spec" not in req_src and "chat(" not in req_src, (
+        "POST /dialogue/scenes/custom 应只建 job + spawn, LLM 一律在请求外"
+    )
+    assert scene_specs.__file__.endswith("scene_specs.py")
 
 
 def _direct_chat_call_sites() -> list[tuple[str, int, bool]]:

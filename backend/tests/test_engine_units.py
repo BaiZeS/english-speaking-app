@@ -474,10 +474,14 @@ def test_scene_messages_skip_empty_turns_and_keep_roles() -> None:
     """§A4: 原生 messages 数组 (旧 ``_scene_context`` 的那段字符串拼接已删).
 
     空回合 (待回填的末尾 user 回合) 不进 messages —— 它是"这句话还没转写好"的占位,
-    喂给模型就是噪声; role 原样交替传下去。
+    喂给模型就是噪声; role 原样交替传下去。§3 C3b: 入口收已解析的场景对象。
     """
+    from app.services import dialogue_scenes
+
+    scene = dialogue_scenes.resolve_scene("daily_conversation")
+    assert scene is not None
     messages = dialogue._scene_messages(
-        "daily_conversation",
+        scene,
         [
             {"role": "assistant", "text": "Hi"},
             {"role": "user", "text": ""},  # 待回填的空回合不进 prompt
