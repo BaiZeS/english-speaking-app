@@ -338,8 +338,12 @@ class MissionHintPayload(BaseModel):
     task_id: str | None = None
     desc_cn: str = ""
     hint_en: str = ""
+    #: 任务的中文提示 (库内已有, 来自 ``MissionTaskView.hint_cn``).
+    hint_cn: str = ""
     #: 参考剧本里学员的下一句 (没有未完成任务时的兜底素材).
     script_line: str = ""
+    #: ``script_line`` 对应的中文 (库内已有, 来自 ``DialogueExchange.b_cn``).
+    script_line_cn: str = ""
     #: 中文说明 ("先把价格问出来" 之类).
     note_cn: str = ""
 
@@ -1609,6 +1613,7 @@ async def request_hint(
             task_id=str(first["id"]),
             desc_cn=str(first.get("desc_cn") or ""),
             hint_en=str(first.get("hint_en") or ""),
+            hint_cn=str(first.get("hint_cn") or ""),
             note_cn="先把这个沟通任务说出来。",
         )
     else:
@@ -1616,6 +1621,7 @@ async def request_hint(
         script = course.mission.exchanges[len(turns) % len(course.mission.exchanges)]
         hint = MissionHintPayload(
             script_line=script.b,
+            script_line_cn=script.b_cn,
             note_cn="任务都推进完了, 把对话自然收尾就行。",
         )
     mission["hints_used"] = _as_int(mission.get("hints_used")) + 1

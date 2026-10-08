@@ -151,6 +151,8 @@ class MissionTaskView(BaseModel):
     id: str
     desc_cn: str
     hint_en: str = ""
+    #: 中文提示/要点说明 (库内已有, 与 ``MissionTask.hint_cn`` 同一口径, 上限 300).
+    hint_cn: str = Field(default="", max_length=300)
     required: bool = True
     done: bool = False
     evidence: str = ""
@@ -217,6 +219,7 @@ def initial_task_states(tasks: Sequence[MissionTask]) -> list[dict[str, Any]]:
             "id": task.id,
             "desc_cn": task.desc_cn,
             "hint_en": task.hint_en,
+            "hint_cn": task.hint_cn,
             "required": bool(task.required),
             "done": False,
             "evidence": "",
@@ -270,6 +273,7 @@ def task_views(tasks_state: Sequence[Mapping[str, Any]]) -> list[MissionTaskView
                 id=str(entry.get("id") or ""),
                 desc_cn=str(entry.get("desc_cn") or ""),
                 hint_en=str(entry.get("hint_en") or ""),
+                hint_cn=str(entry.get("hint_cn") or ""),
                 required=bool(entry.get("required")),
                 done=bool(entry.get("done")),
                 evidence=str(entry.get("evidence") or ""),

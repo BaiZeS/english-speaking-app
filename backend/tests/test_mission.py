@@ -641,6 +641,81 @@ async def test_hint_when_all_tasks_done_falls_back_to_script(
 
 
 @pytest.mark.asyncio
+async def test_hint_and_checklist_expose_library_chinese(
+    client: AsyncClient, scene_root: Path
+) -> None:
+    """A7' 透出: 库内已有的双语进响应 —— MissionTaskView.hint_cn / hint_cn / script_line_cn."""
+    cn_by_task = {"t1": "先说要一杯咖啡。", "t2": "记得把价格问出来。", "t3": "走之前道个别。"}
+    course = make_course_dict("scene_alpha", "daily", briefing=BRIEFING6)
+    tasks = [
+        dict(task, hint_cn=cn_by_task[f"t{i}"])
+        for i, task in enumerate(course["mission"]["tasks"], 1)
+    ]
+    write_course(
+        scene_root, "scene_alpha", "daily", briefing=BRIEFING6,
+        mission={**course["mission"], "tasks": tasks},
+    )
+    scene_store.invalidate_cache()
+
+    sid = await _ready(client)
+    body = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
+    by_id = {view["id"]: view for view in body["checklist"]}
+    assert by_id["t1"]["hint_cn"] == "先说要一杯咖啡。"
+    # add-only: 既有 checklist 键零变化.
+    assert {"id", "desc_cn", "hint_en", "required", "done", "evidence", "done_at_turn"} <= set(
+        by_id["t1"]
+    )
+
+    h = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
+    assert h["hint"]["task_id"] == "t2"
+    assert h["hint"]["hint_cn"] == "记得把价格问出来。"
+    assert h["hint"]["hint_en"] == "How much is that?"  # 既有字段原样
+    assert {"task_id", "desc_cn", "hint_en", "script_line", "note_cn"} <= set(h["hint"])
+
+    await _mission(client, sid, {"text": "How much is that?"})
+    await _mission(client, sid, {"text": "Thanks, have a good day."})
+    h2 = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
+    b_cn = {ex["b"]: ex["b_cn"] for ex in course["mission"]["exchanges"]}
+    assert h2["hint"]["script_line"] in b_cn
+    assert h2["hint"]["script_line_cn"] == b_cn[h2["hint"]["script_line"]]  # 回落带上 B 行中文
+
+    await _finish(client, sid)
+    report = await _report(client, sid, run_copy_job=False)
+    assert {v["id"]: v["hint_cn"] for v in report["checklist"]} == cn_by_task
+
+
+@pytest.mark.asyncio
+async def test_hint_chinese_fields_empty_string_when_source_missing(
+    client: AsyncClient, scene_root: Path
+) -> None:
+    """库里没有中文时, 新字段是 "" 而不是 null / 缺键."""
+    course = make_course_dict("scene_alpha", "daily", briefing=BRIEFING6)
+    mission = {
+        **course["mission"],
+        "exchanges": [
+            {k: v for k, v in ex.items() if k not in ("a_cn", "b_cn")}
+            for ex in course["mission"]["exchanges"]
+        ],
+    }
+    write_course(scene_root, "scene_alpha", "daily", briefing=BRIEFING6, mission=mission)
+    scene_store.invalidate_cache()
+
+    sid = await _ready(client)
+    body = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
+    t1 = next(view for view in body["checklist"] if view["id"] == "t1")
+    assert "hint_cn" in t1 and t1["hint_cn"] == ""
+
+    h = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
+    assert "hint_cn" in h["hint"] and h["hint"]["hint_cn"] == ""
+
+    await _mission(client, sid, {"text": "How much is that?"})
+    await _mission(client, sid, {"text": "Thanks, have a good day."})
+    h2 = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
+    assert "script_line_cn" in h2["hint"] and h2["hint"]["script_line_cn"] == ""
+    assert h2["hint"]["script_line"]  # 既有回落素材不受影响
+
+
+@pytest.mark.asyncio
 async def test_hint_and_mission_blocked_after_finish(client: AsyncClient, scene_root: Path) -> None:
     sid = await _ready(client)
     await _mission(client, sid, {"text": "hi there."})
