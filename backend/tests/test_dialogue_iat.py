@@ -9,6 +9,8 @@ from httpx import ASGITransport, AsyncClient
 from app.api.v1 import dialogue
 from app.api.v1.dialogue import _PLACEHOLDER_USER_TEXT, _apply_recognized_text
 from app.main import app
+from tests.test_drill_grader import install_llm
+from tests.test_mission import generation_json
 
 
 def _clear_xunfei_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,7 +59,12 @@ def test_apply_recognized_text_only_replaces_placeholder_user_turn() -> None:
 async def test_turn_without_credentials_returns_200_and_no_recognized_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """没有 IAT 凭据: 转写缺席, 但**台词照常生成** (带身份才需要转写做证据, §A4).
+
+    §D5: 台词拿不到就是 503 —— 所以这条用例必须装假 LLM, 它断的是"转写缺席不影响本轮"。
+    """
     _clear_xunfei_credentials(monkeypatch)
+    install_llm(monkeypatch, generation=[generation_json()])
     payload = {
         "scene_id": "ordering_coffee",
         "history": [
@@ -70,9 +77,9 @@ async def test_turn_without_credentials_returns_200_and_no_recognized_text(
         r = await c.post("/api/v1/dialogue/turn", json=payload)
     assert r.status_code == 200
     data = r.json()
-    assert data["status"] == "stub"
+    assert data["status"] == "ready"
     assert data["recognized_text"] is None
-    assert data["reply_text"]
+    assert data["reply_text"] and data["reply_cn"]
 
 
 @pytest.mark.asyncio
@@ -80,6 +87,7 @@ async def test_turn_with_invalid_audio_b64_still_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_xunfei_credentials(monkeypatch)
+    install_llm(monkeypatch, generation=[generation_json()])
     payload = {
         "scene_id": "ordering_coffee",
         "history": [{"role": "user", "text": _PLACEHOLDER_USER_TEXT}],
@@ -107,6 +115,7 @@ async def test_turn_returns_recognized_text_when_transcription_succeeds(
 ) -> None:
     fake = _FakeIatProvider("I would like a cappuccino.")
     monkeypatch.setattr(dialogue, "_iat", fake)
+    install_llm(monkeypatch, generation=[generation_json()])
     audio = b"\x01" * 1600
     payload = {
         "scene_id": "ordering_coffee",

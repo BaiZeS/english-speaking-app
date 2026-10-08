@@ -3,11 +3,14 @@
 三件事在这里收口, 端点层 (``api/v1/course_sessions`` / ``polish`` / ``dialogue``)
 只做状态机与鉴权:
 
-1. **每轮 1 次 LLM 调用** (§四 决策表 / §5.5-2): persona 回复 + 提示 (suggestion)
-   + 语法润色 + 语法/词汇判分 + 任务清单**累积式**重判, 全在一个 JSON 里;
-   沿用 ``drill_grader._judge`` 的容错解析 + 校验错误回喂重试 1 次模式, 第二次仍
-   坏就退回**确定性降级** (``source="heuristic"``, ``llm_source="stub"``) ——
-   移动端不等第三分钟。
+1. **实战轮一分为二** (§A1/D1: 台词独占预算、判分移出请求): 请求里只剩
+   :func:`generate_turn` 这一次调用 —— 台词 ``reply`` + 双语 (``reply_cn``/
+   ``suggestion``/``suggestion_cn``/``learner_cn``); 润色 + 语法/词汇分 + 任务累积
+   重判 (:func:`judge_turn`) 改由后台作业在请求之外补 (p50 6.6s, 挤进请求必撞墙)。
+   两个函数都过 :func:`app.services.drill_grader._judge` 的**唯一**收口 (一次调用 +
+   坏 JSON 回喂一次 + ``LlmUnavailableError``), 各自报自己的预算与 schema 形状。
+   台词**没有**确定性降级可言: 拿不到就抛 :class:`LlmUnavailableError`, 端点回 503
+   且这一轮不落库、不前进 (D5) —— 剧本回放正是"每轮同一句"的根因 (§0)。
 2. **``transcript_anchored`` 发音证据的生产者** (§5.4/§5.6): 自由产出 (实战对话/
    自由对话) 没有标准答案, 发音维度拿 **IAT 转写当 ISE 参考文本** 打分。
    讯飞没配凭据时**直接不产出** —— StubASR 面对 "ref == 它自己吐的文本" 恒给 95,
@@ -43,6 +46,8 @@ from app.scoring.read_along import score_read_along
 from app.services.ability_engine import DIMENSIONS, ability_delta
 from app.services.audio_input import speech_rate_from_recognition
 from app.services.drill_grader import (
+    GEN_LLM_TIMEOUT_S,
+    GEN_TURN_BUDGET_S,
     POLISH_BUDGET_S,
     REVIEW_LLM_BUDGET_S,
     AbilityEvidence,
@@ -55,14 +60,22 @@ from app.services.drill_grader import (
     _truncate,
 )
 from app.services.interfaces import ASRProvider
-from app.services.llm_provider import LlmMessage
+from app.services.llm_provider import LlmMessage, no_thinking_body, resolve_roleplay_model
 from app.services.xunfei_asr import XunfeiASRProvider
 
 # ====== 常量 ======
 
-#: 每轮综合 JSON 的 token 预算 (reply + suggestion + polish + 任务判定要得下):
-#: 比 drill 判分 (400) 宽, 但仍远低于整课生成.
-TURN_MAX_TOKENS = 700
+#: **台词生成** (实战轮 / 自由对话轮请求内**唯一**的那次 LLM) 的输出预算与温度.
+#: 旧形状把台词 + 润色 + 两个分 + 任务重判塞进一个 JSON (``TURN_MAX_TOKENS=700``),
+#: 实测吐 ~1000 字 / p50 22.5s —— 生产 8 轮 7 轮撞 15s 墙 (§0 根因一). 拆开后 160 就够.
+GEN_MAX_TOKENS = 160
+#: 台词的温度必须**显式**给: 旧 ``judge_turn`` 不传它, 于是落进 :func:`_judge` 的判分
+#: 默认 0.2 —— 用判分温度写台词是"AI 反复问同一类问题"的第二个成因 (§0 第二条缺陷).
+GEN_TEMPERATURE = 0.7
+
+#: **判分** (后台作业专用: 润色 + 语法/词汇 + 任务判定) 的输出预算.
+#: 只判分不吐台词, 所以比旧合并形状 (700) 小、比纯 drill 判分 (400) 略宽.
+GRADE_MAX_TOKENS = 450
 
 #: 复盘文案批量调用的预算 (§5.5-3 一次喂全部转写).
 REVIEW_MAX_TOKENS = 500
@@ -93,8 +106,10 @@ class Polish(BaseModel):
     original: str = Field(min_length=1, max_length=500)
     polished: str = Field(min_length=1, max_length=500)
     explanation_cn: str = Field(default="", max_length=500)
+    #: 润色句的简体中文意思 (D4 双语, 与 ``a_cn``/``b_cn`` 同一口径 500).
+    polished_cn: str = Field(default="", max_length=500)
 
-    @field_validator("original", "polished", "explanation_cn")
+    @field_validator("original", "polished", "explanation_cn", "polished_cn")
     @classmethod
     def _strip(cls, v: str) -> str:
         return v.strip()
@@ -108,10 +123,35 @@ class TaskProgress(BaseModel):
     evidence: str = Field(default="", max_length=300)
 
 
-class MissionTurnJudgement(BaseModel):
-    """实战对话单轮的综合 JSON (§5.5-2 的字段清单)."""
+class TurnGeneration(BaseModel):
+    """请求内唯一一次 LLM 的产物: 台词 + 双语 + 学员那句的中文对照 (§A1/D4).
 
-    reply: str = Field(min_length=1, max_length=800)
+    与 :class:`MissionTurnJudgement` (判分侧) 是**两份** schema, 形状不共用 ——
+    一次调用既写台词又判分就是撞墙的那个旧形状 (§0)。所有字段可缺省且上限照仓内
+    既有 ``a_cn``/``b_cn``/``hint_cn`` 的中文口径 (500), 不自造一套; 空串表示
+    "这一行不渲染" (D5: 绝不机翻占位)。
+    """
+
+    reply: str = Field(default="", max_length=500)
+    reply_cn: str = Field(default="", max_length=500)
+    suggestion: str = Field(default="", max_length=500)
+    suggestion_cn: str = Field(default="", max_length=500)
+    learner_cn: str = Field(default="", max_length=500)
+
+    @field_validator("reply", "reply_cn", "suggestion", "suggestion_cn", "learner_cn")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+
+class MissionTurnJudgement(BaseModel):
+    """实战对话单轮的**判分**结果 (§5.5-2 的判分部分; 后台作业专用).
+
+    ``reply``/``suggestion`` 只作**兼容读**保留 (老形状 JSON / 老快照里有它们):
+    判分调用不再产出台词 (那是 :class:`TurnGeneration` 的活), 所以它们可缺省。
+    """
+
+    reply: str = Field(default="", max_length=800)
     suggestion: str = Field(default="", max_length=500)
     polish: Polish | None = None
     grammar_score: float | None = Field(default=None, ge=0, le=100)
@@ -122,13 +162,6 @@ class MissionTurnJudgement(BaseModel):
     @classmethod
     def _strip(cls, v: str) -> str:
         return v.strip()
-
-    @field_validator("reply")
-    @classmethod
-    def _non_blank(cls, v: str) -> str:
-        if not v:
-            raise ValueError("reply must not be blank")
-        return v
 
 
 class ReviewTextJudgement(BaseModel):
@@ -143,6 +176,8 @@ class PolishJudgement(BaseModel):
 
     polished: str = Field(default="", max_length=500)
     explanation_cn: str = Field(default="", max_length=500)
+    #: 润色句的中文意思 (D4 双语; 缺省空串 = 客户端不渲染那一行).
+    polished_cn: str = Field(default="", max_length=500)
 
 
 class MissionTaskView(BaseModel):
@@ -273,7 +308,9 @@ def task_views(tasks_state: Sequence[Mapping[str, Any]]) -> list[MissionTaskView
                 id=str(entry.get("id") or ""),
                 desc_cn=str(entry.get("desc_cn") or ""),
                 hint_en=str(entry.get("hint_en") or ""),
-                hint_cn=str(entry.get("hint_cn") or ""),
+                # 库内值可能比视图上限长 (存量语料): 先截到 300 再进视图, 否则
+                # pydantic 校验直接把 checklist / 提示卡变成 500 (T2 质量审查记的 Minor)。
+                hint_cn=_truncate(str(entry.get("hint_cn") or ""), 300),
                 required=bool(entry.get("required")),
                 done=bool(entry.get("done")),
                 evidence=str(entry.get("evidence") or ""),
@@ -287,28 +324,44 @@ def task_views(tasks_state: Sequence[Mapping[str, Any]]) -> list[MissionTaskView
     return views
 
 
-# ====== 3) 单轮综合 LLM 调用 ======
+# ====== 3) 单轮 LLM 调用: 生成侧 (请求内) 与判分侧 (后台作业) 两份形状 ======
 
-_TURN_SYSTEM_TMPL = (
-    "你是英语口语陪练「{persona}」。场景: {context}。学员扮演「{user_role}」, "
-    "中文母语、能读写但开口少 (CEFR {level})。你在推进一场**有任务清单**的实战对话。"
-    "只输出一个 JSON 对象, 不要解释、不要 markdown 围栏。要求: "
-    "(1) reply: 以 {persona} 身份用英文说下一句 (1-2 句, A2-B1 词汇, 必须带一个"
-    "追问或新信息, 把剧情往**未完成的任务**推; 别让对话提前结束); "
-    "(2) suggestion: 给学员下一句可直接开口的示范英文 (贴合未完成任务); "
-    "(3) polish: 仅当学员**刚才这句英文**有语法/用词问题时给出 "
-    "{{original, polished, explanation_cn}} (original 必须是学员原话, polished 是"
-    "能直接重说的地道版本, explanation_cn 一句简体中文解释), 没有问题就输出 null; "
-    "(4) grammar_score / vocabulary_score: 对学员刚才这句的语法与用词判 0-100 分, "
-    "必须有区分度 (说得过去 60-79, 自然准确 80-100, 影响理解 <60; 若这句没有"
-    "可判分的英文内容, 输出 null); "
-    "(5) task_progress: **重判全部任务**至今是否已由学员达成 (累积口径: 之前说过"
-    "的也算), 每项 {{id, done, evidence(一句中文/英文依据)}}, id 只能用清单里给定的。"
+#: 判分侧的 system: 只判分, 不写台词 (§A1 的收缩)。
+_JUDGE_RULES = (
+    "你是英语口语陪练的判分器。只输出一个 JSON 对象, 不要解释、不要 markdown 围栏。要求: "
+    "(1) polish: 仅当学员**这句英文**有语法/用词问题时给出 "
+    "{{original(必须是学员原话), polished(能直接重说的地道版本), "
+    "polished_cn(polished 的简体中文意思), explanation_cn(一句简体中文解释)}}, "
+    "没有问题就输出 null; "
+    "(2) grammar_score / vocabulary_score: 对学员这句的语法与用词判 0-100 分, 必须有区分度 "
+    "(说得过去 60-79, 自然准确 80-100, 影响理解 <60; 若这句没有可判分的英文内容, "
+    "输出 null); "
+    "(3) task_progress: **重判全部任务**至今是否已由学员达成 (累积口径: 之前说过的也算), "
+    "每项 {{id, done, evidence(一句中文/英文依据)}}, id 只能用清单里给定的。"
 )
 
-_JSON_SHAPE = (
-    '只输出 JSON: {"reply": "...", "suggestion": "...", '
-    '"polish": {"original": "...", "polished": "...", "explanation_cn": "..."} | null, '
+#: 生成侧 JSON 形状 (TurnGeneration 五字段)。**公开**: 自由对话那条路由自己拼 prompt
+#: (``dialogue._scene_messages``), 但它必须引这一份 —— 两边各写一段形状就是漂移的开始。
+GENERATION_JSON_SHAPE = (
+    '只输出 JSON: {"reply": "...", "reply_cn": "...", "suggestion": "...", '
+    '"suggestion_cn": "...", "learner_cn": "..."}'
+)
+
+#: 生成侧的行为要求 (五件事), 同样公开给自由对话复用。
+GENERATION_RULES = (
+    "只输出一个 JSON 对象, 不要解释、不要 markdown 围栏。要求: "
+    "(1) reply: 用英文说下一句 (1-2 句, A2-B1 词汇), 必须带一个追问或新信息, "
+    "把对话往**没聊过的方向**推, 别提前结束; "
+    "(2) reply_cn: reply 的简体中文意思; "
+    "(3) suggestion: 给学员下一句可直接开口的示范英文; "
+    "(4) suggestion_cn: suggestion 的简体中文意思; "
+    "(5) learner_cn: 学员刚说的那句英文的简体中文意思。"
+)
+
+#: 判分侧 JSON 形状 (不含任何台词字段 —— 生成侧永不复用判分形状, 反之亦然)。
+_JUDGE_JSON_SHAPE = (
+    '只输出 JSON: {"polish": {"original": "...", "polished": "...", '
+    '"polished_cn": "...", "explanation_cn": "..."} | null, '
     '"grammar_score": number|null, "vocabulary_score": number|null, '
     '"task_progress": [{"id": "...", "done": true|false, "evidence": "..."}]}'
 )
@@ -332,25 +385,50 @@ def _transcript_block(turns: Sequence[Mapping[str, Any]], *, keep: int = 8) -> s
     return "\n".join(lines)
 
 
+def _recent_lines_block(turns: Sequence[Mapping[str, Any]], *, keep: int = 10) -> str:
+    """最近 N 轮**已经说过的台词与给过的示范** —— 反重复的原料 (§A5).
+
+    实战侧服务端有状态 (``mission.turns[]`` 里存着每轮的 ``reply``/``suggestion``), 所以
+    这条清单不必客户端 echo。prompt 里配一句"不得同义复写"硬要求 —— 换新信息、换句式,
+    否则就是学员报的"AI 反复问同一类问题"。
+    """
+    lines: list[str] = []
+    for turn in turns[-keep:]:
+        reply = str(turn.get("reply") or "").strip()
+        suggestion = str(turn.get("suggestion") or "").strip()
+        if reply:
+            lines.append(f"- 你已经问过: {reply}")
+        if suggestion:
+            lines.append(f"- 你已经给过示范: {suggestion}")
+    return "\n".join(lines)
+
+
 def turn_prompt(
     course: SceneCourse,
     tasks_state: Sequence[Mapping[str, Any]],
     turns: Sequence[Mapping[str, Any]],
     user_text: str,
 ) -> list[LlmMessage]:
-    """§5.5-2 的单轮 prompt: 人设 + 场景 + 任务清单状态 + 已发生的对话 + 本轮输入."""
+    """§5.5-2 的**台词** prompt: 人设 + 场景 + 议程 + 已发生的对话 + 禁重复清单 + 本轮输入."""
     mission = course.mission
-    system = _TURN_SYSTEM_TMPL.format(
-        persona=_truncate(mission.persona_cn, 300),
-        context=_truncate(mission.context_cn, 800),
-        user_role=_truncate(mission.user_role_cn, 200),
-        level=course.level,
+    system = (
+        f"你是英语口语陪练「{_truncate(mission.persona_cn, 300)}」。"
+        f"场景: {_truncate(mission.context_cn, 800)}。"
+        f"学员扮演「{_truncate(mission.user_role_cn, 200)}」, 中文母语、能读写但开口少 "
+        f"(CEFR {course.level})。你在一场**有任务清单**的实战对话里推进议程。"
+        f"{GENERATION_RULES}"
     )
     user = (
-        f"任务清单 (按学员说的话累积判定):\n{_tasks_block(tasks_state)}\n\n"
-        f"已发生的对话 (Coach=你, Learner=学员):\n{_transcript_block(turns)}\n\n"
+        f"议程 (任务清单, 按学员说过的话累积判定):\n{_tasks_block(tasks_state)}\n"
+        "把剧情往**未完成的任务**推 (reply 带一个往那儿走的追问, suggestion 是学员"
+        "能直接开口推进它的那句), 别让对话提前结束。\n\n"
+        f"已发生的对话 (Coach=你, Learner=学员):\n"
+        f"{_transcript_block(turns, keep=6) or '(还没有对话, 这是第一轮)'}\n\n"
+        "你已经说过的台词与给过的示范 (**不得同义复写**: 换新信息、换角度, 句式也要换, "
+        "同一句话换个说法再说一遍就是失败):\n"
+        f"{_recent_lines_block(turns) or '(还没有历史台词)'}\n\n"
         f"学员本轮说 (英文转写):\n{user_text}\n\n"
-        f"{_JSON_SHAPE}"
+        f"{GENERATION_JSON_SHAPE}"
     )
     return [
         LlmMessage(role="system", content=system),
@@ -358,27 +436,41 @@ def turn_prompt(
     ]
 
 
-def fallback_turn(
+def judge_prompt(
     course: SceneCourse,
-    turn_index: int,
+    tasks_state: Sequence[Mapping[str, Any]],
+    user_text: str,
+) -> list[LlmMessage]:
+    """§5.5-2 的**判分** prompt: 只带最后一句 + 任务块 (§6: 两次调用的 prefill 成本).
+
+    整段对话不进判分 prompt: 判分只看"这一句说得怎么样 + 任务清单到哪了", 带上历史既
+    多烧 prefill 又让模型被无关上下文带偏。
+    """
+    system = f"学员是中文母语、能读写但开口少的英语学习者 (CEFR {course.level})。{_JUDGE_RULES}"
+    user = (
+        f"任务清单 (按学员说过的话累积判定):\n{_tasks_block(tasks_state)}\n\n"
+        f"学员本轮说 (英文转写):\n{user_text}\n\n"
+        f"{_JUDGE_JSON_SHAPE}"
+    )
+    return [
+        LlmMessage(role="system", content=system),
+        LlmMessage(role="user", content=user),
+    ]
+
+
+def heuristic_task_progress(
     user_text: str,
     tasks_state: Sequence[Mapping[str, Any]],
-    failure: Exception,
-) -> tuple[MissionTurnJudgement, GradeSource, str]:
-    """LLM 不可用/整轮超预算时的**确定性降级** (honest: source=heuristic, llm_source=stub).
+) -> list[TaskProgress]:
+    """**快判** (§A3「快判先顶」): 词面覆盖率先勾一次 checklist, 零 LLM、同步可跑。
 
-    * reply/suggestion: 走参考剧本的下一行 (A 说 / B 示范) —— 剧本就是 T2 人工
-      校对的"应该怎么说", 拿来撑住对话不冷场, 不冒充生成;
-    * 任务判定: 学员话术对未完成``required``任务 ``hint_en`` 示范句的内容词覆盖率
-      >= :data:`TASK_HEURISTIC_COVERAGE` 才算完成 (词面口径, 宁缺勿滥);
-    * grammar/vocabulary: 不给分 —— 词面覆盖率当"语法分"是假证据, 宁缺勿滥。
-      本轮于是没有语法/词汇事件, 画像自然不动 (要出假分数才是污染)。
+    * 口径: 学员话术对未完成任务 ``hint_en`` 示范句的**内容词**覆盖率 >=
+      :data:`TASK_HEURISTIC_COVERAGE` (``_matched_terms``, 与 drill 同源);
+    * 它是**词面**判定, 不是语义判定 —— 所以只动 checklist, **不发任何画像事件**
+      (要出假证据才是污染; LLM 判分回写时走 :func:`merge_task_progress` 的 done 粘滞,
+      只许变好不许变差);
+    * 没有示范句的任务直接跳过 (宁缺勿滥)。
     """
-    logger.warning("mission turn degraded to heuristic | reason={}", failure)
-    lines = course.mission.exchanges
-    # turn 1 的降级回复不能再吐 ``exchanges[0].a`` —— 开场白 (= 它) 已经由服务端
-    # 先说过了; 从剧本第 2 句往下走, 超出剧本长度后停在最后一句 (可接受的回环).
-    script = lines[min(turn_index, len(lines) - 1)]
     progress: list[TaskProgress] = []
     for entry in tasks_state:
         if entry.get("done"):
@@ -392,49 +484,117 @@ def fallback_turn(
                 TaskProgress(
                     id=str(entry["id"]),
                     done=True,
-                    evidence="词面覆盖了任务示范用语 (启发式判定, 未经语义核对)",
+                    evidence="词面覆盖了任务示范用语 (启发式快判, 未经语义核对)",
                 )
             )
-    judgement = MissionTurnJudgement(
-        reply=script.a,
-        suggestion=script.b,
-        polish=None,
-        grammar_score=None,
-        vocabulary_score=None,
-        task_progress=progress,
+    return progress
+
+
+def coerce_bilingual(text: str) -> str:
+    """双语字段的**可信度**门 (§A4/D5): 中文侧出现 ASCII 字母就算不可信 -> 置空.
+
+    为什么: 模型偶尔把 ``reply_cn`` 写成英文 (或中英混排), 那一行渲染出来就是"中文"标签下的
+    英文 —— 比缺行更糟 (D5: 缺字段 = 那一行不渲染, 绝不机翻占位)。判定只用最朴素的字符范围
+    扫 (``re`` 与 CJK 白名单都不引入: 仓里那两处 ``re`` 是 id 白名单用途)。
+
+    收口在 :func:`generate_turn` 里 (实战轮与自由对话轮共用这一份), 所以两个页面同一条纪律,
+    没有第二份可以漂移的实现。
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    if any("a" <= ch.lower() <= "z" for ch in cleaned):
+        return ""
+    return cleaned[:500]
+
+
+def _bilingual_generation(judgement: TurnGeneration) -> TurnGeneration:
+    """把五个字段里的三处中文过一遍可信度门 (台词/示范本身是英文, 不过门)."""
+    return judgement.model_copy(
+        update={
+            "reply_cn": coerce_bilingual(judgement.reply_cn),
+            "suggestion_cn": coerce_bilingual(judgement.suggestion_cn),
+            "learner_cn": coerce_bilingual(judgement.learner_cn),
+        }
     )
-    return judgement, "heuristic", "stub"
+
+
+async def generate_turn(
+    messages: Sequence[LlmMessage],
+    *,
+    model_id: str | None = None,
+) -> tuple[TurnGeneration, str]:
+    """**请求内唯一一次 LLM**: 台词 + 双语 (§A1/D1), 走 :func:`_judge` 的唯一收口.
+
+    收 **messages** 而不是课程/场景对象: 实战轮与自由对话轮**共用这一份 schema 与这组
+    参数**(prompt 各自拼 —— :func:`turn_prompt` 给实战轮, ``dialogue._scene_messages``
+    给自由对话), 两处的温度/token/超时/schema 因此没有第二份可以漂移的副本。
+
+    返回 ``(generation, llm_source)``。所有参数显式给:
+
+    * ``model=resolve_roleplay_model(model_id)`` —— 生成是**纯文本**用途, 可以跟随
+      客户端选的模型 (D2); 判分不吃 ``model_id``, 那是 :func:`judge_turn` 的事;
+    * ``max_tokens=GEN_MAX_TOKENS`` / ``temperature=GEN_TEMPERATURE`` —— 旧调用点
+      没传 ``temperature``, 落进判分默认 0.2 (§0 第二个成因), 新函数不许再犯;
+    * ``timeout=GEN_LLM_TIMEOUT_S(10)`` < ``hard_budget_s=GEN_TURN_BUDGET_S(14)``:
+      单次 socket 先炸, 坏 JSON 的回喂重试才真落在墙钟里 (旧形状 socket 20 > 墙钟 15,
+      一次尝试就吃穿整轮);
+    * ``extra_body=no_thinking_body()`` —— 关掉 Qwen3 系的隐藏思考 token (实测占掉
+      一半墙钟; 开关默认 false / ``.env`` 未设时返回 None, 调用形状不变)。
+
+    **拿不到台词就抛** :class:`LlmUnavailableError` (未配置/超时/两次都不合规/无 reply):
+    D5 —— 两个端点都回 503、这一轮不落库不前进, 绝不回放剧本、绝不机翻占位。
+    """
+    resolved = resolve_roleplay_model(model_id)
+    judgement = await _judge(
+        TurnGeneration,
+        messages,
+        max_tokens=GEN_MAX_TOKENS,
+        temperature=GEN_TEMPERATURE,
+        model=resolved,
+        timeout=GEN_LLM_TIMEOUT_S,
+        hard_budget_s=GEN_TURN_BUDGET_S,
+        extra_body=no_thinking_body(),
+    )
+    if not judgement.reply:
+        # schema 宽容 (五个字段都可缺省), 但"没有台词"不等于"这一轮发生了" —— 端点那边
+        # 一旦放行就会渲染一个空气泡, 所以在这里按不可用收口。
+        raise LlmUnavailableError("台词生成结果里没有 reply")
+    return _bilingual_generation(judgement), resolved
 
 
 async def judge_turn(
     course: SceneCourse,
-    tasks_state: list[dict[str, Any]],
-    turns: Sequence[Mapping[str, Any]],
+    tasks_state: Sequence[Mapping[str, Any]],
     user_text: str,
-    turn_index: int,
+    *,
     hard_timeout_s: float | None = None,
 ) -> tuple[MissionTurnJudgement, GradeSource, str | None]:
-    """实战单轮的综合 LLM 调用 (1 次; 坏 JSON 回喂重试 1 次; 再坏走降级).
+    """实战单轮的**判分**调用 (后台作业专用: 1 次; 坏 JSON 回喂重试 1 次; 再坏降级).
 
     返回 ``(judgement, source, llm_source)``; 判分模型 = 服务端默认
-    (:func:`app.services.drill_grader._resolve_judge_model`), 不吃客户端 ``model_id``。
+    (:func:`app.services.drill_grader._resolve_judge_model`), **不吃客户端 ``model_id``**
+    (D2: 判分口径必须在一门课内稳定); ``max_tokens=GRADE_MAX_TOKENS``。
 
-    ``hard_timeout_s``: 整轮 (含内置重试) 硬预算 —— 内层单次 timeout 是 20s,
-    坏 JSON 重试一遍最坏 40s; 移动端 OkHttp readTimeout 30s, 不封顶就是结构性
-    "评分失败: timeout"。超时不报错而是走既有 heuristic 降级 (宁缺勿滥)。
-    预算本身**不再**在这里用 ``asyncio.wait_for`` 实现 —— 交给 :func:`_judge` 的
-    ``hard_budget_s``, 一处强制 (它已把超时收敛成 ``LlmUnavailableError``);
-    下面仍接 ``TimeoutError`` 只是防将来 try 里混进别的 await。
+    ``hard_timeout_s``: 整个调用 (含内置重试) 的硬预算 —— 作业里报
+    ``GRADING_JOB_BUDGET_S`` (见 ``drill_grader`` 硬预算块)。降级 (LLM 不可用/超时/
+    两次都不合规) 不抛异常: 返回 ``source="heuristic"`` 的**词面快判**结果 (没有润色、
+    没有语法/词汇分) —— "判分失败 = 没有润色", 不是"这一轮不存在" (§A3)。
     """
     try:
         judgement = await _judge(
             MissionTurnJudgement,
-            turn_prompt(course, tasks_state, turns, user_text),
-            max_tokens=TURN_MAX_TOKENS,
+            judge_prompt(course, tasks_state, user_text),
+            max_tokens=GRADE_MAX_TOKENS,
             hard_budget_s=hard_timeout_s,
         )
     except (LlmUnavailableError, TimeoutError) as exc:
-        return fallback_turn(course, turn_index, user_text, tasks_state, exc)
+        logger.warning("mission turn grading degraded to heuristic | reason={}", exc)
+        return (
+            MissionTurnJudgement(task_progress=heuristic_task_progress(user_text, tasks_state)),
+            "heuristic",
+            "stub",
+        )
     return judgement, "llm", _resolve_judge_model()
 
 
@@ -496,6 +656,8 @@ def turn_ability_events(
     """一轮的维度证据 (§5.6): 语法/词汇 ← LLM 判分; 发音/流利 ← 锚定 ISE.
 
     启发式降级的判分 (若有) 也在 ``score_source="heuristic"`` 下被门控 (w=0)。
+    D1 拆调用之后**判分与 ISE 分两处落**: 作业只带 ``judgement`` (``anchored=None``),
+    请求只带 ``anchored`` (见 :func:`anchored_ability_events`)。
     """
     events: list[AbilityEvidence] = []
     stubbed = score_source in ("stub", "heuristic")
@@ -513,25 +675,36 @@ def turn_ability_events(
                 weight=0.0 if stubbed else 1.0,
             )
         )
-    if anchored is not None:
-        events.append(
-            AbilityEvidence(
-                dimension="pronunciation",
-                score=anchored.pronunciation,
-                source="xunfei",
-                weight=1.0,
-                ise_ref_mode="transcript_anchored",
-            )
-        )
-        events.append(
-            AbilityEvidence(
-                dimension="fluency",
-                score=anchored.fluency,
-                source="xunfei",
-                weight=1.0,
-            )
-        )
+    events.extend(anchored_ability_events(anchored))
     return events
+
+
+def anchored_ability_events(
+    anchored: AnchoredPronunciation | None,
+) -> list[AbilityEvidence]:
+    """转写锚定 ISE 的发音/流利证据 (§5.6 的生产者那一半).
+
+    与判分无关 (只依赖音频 + IAT 转写), 所以请求内就能落 —— 判分那半边在后台作业里
+    (D1)。``anchored is None`` = 讯飞没配/失败/超预算 -> 空列表: 宁可发音维度空缺,
+    不造假证据。
+    """
+    if anchored is None:
+        return []
+    return [
+        AbilityEvidence(
+            dimension="pronunciation",
+            score=anchored.pronunciation,
+            source="xunfei",
+            weight=1.0,
+            ise_ref_mode="transcript_anchored",
+        ),
+        AbilityEvidence(
+            dimension="fluency",
+            score=anchored.fluency,
+            source="xunfei",
+            weight=1.0,
+        ),
+    ]
 
 
 # ====== 5) 独立润色 / 对话轮润色 ======
@@ -542,7 +715,8 @@ _POLISH_SYSTEM = (
     "任务: 把学员的英文句子改得**语法正确且可以自然开口说出** (保持原意, 不换话题, "
     "不扩写)。explanation_cn 用一句简体中文指出关键修改 (时态/搭配/冠词/礼貌语气等), "
     "不要罗列所有改动。若句子本来就没有值得改的语法或用词问题, polished 输出空字符串。"
-    '只输出 JSON: {"polished": "...", "explanation_cn": "..."}'
+    "polished_cn 给润色句的简体中文意思 (D4 双语对照卡的那一行)。"
+    '只输出 JSON: {"polished": "...", "explanation_cn": "...", "polished_cn": "..."}'
 )
 
 
@@ -585,38 +759,10 @@ async def polish_text(
             original=text.strip()[:500],
             polished=polished[:500],
             explanation_cn=_truncate(judgement.explanation_cn, 500),
+            polished_cn=_truncate(judgement.polished_cn, 500),
         ),
         "llm",
         llm_used,
-    )
-
-
-def coerce_score(raw: Any) -> float | None:
-    """宽容解析 LLM 回的 0-100 分: 非数/越界 -> ``None`` (没有证据, 不是 0)."""
-    if isinstance(raw, bool) or raw is None:
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if value < 0 or value > 100:
-        return None
-    return round(value, 1)
-
-
-def coerce_polish(raw: Any) -> Polish | None:
-    """从 (可能不合规的) LLM JSON 里挖出 polish 对照; 缺件/空件 -> None."""
-    if not isinstance(raw, Mapping):
-        return None
-    original = str(raw.get("original") or "").strip()
-    polished = str(raw.get("polished") or "").strip()
-    if not polished:
-        return None
-    # 各字段先截到 max_length 再构造: 宽容路径不再可能因长度炸掉
-    return Polish(
-        original=(original or polished)[:500],
-        polished=polished[:500],
-        explanation_cn=str(raw.get("explanation_cn") or "").strip()[:500],
     )
 
 
@@ -1087,7 +1233,10 @@ def build_review_skeleton(
 
 __all__ = sorted(
     [
-        "AnnotatedPronunciation",
+        "AnchoredPronunciation",
+        "GEN_MAX_TOKENS",
+        "GEN_TEMPERATURE",
+        "GRADE_MAX_TOKENS",
         "MissionTaskView",
         "MissionTurnJudgement",
         "Polish",
@@ -1096,21 +1245,22 @@ __all__ = sorted(
         "ReviewReport",
         "ReviewSkeleton",
         "TASK_HEURISTIC_COVERAGE",
-        "TURN_MAX_TOKENS",
         "TranscriptPair",
+        "TurnGeneration",
         "aggregate_pronunciation_subs",
         "aggregate_step_dims",
         "all_required_done",
+        "anchored_ability_events",
         "anchored_pronunciation",
         "build_review_report",
         "build_review_skeleton",
-        "coerce_polish",
-        "coerce_score",
         "collect_new_tokens",
         "collect_transcript_pairs",
         "deterministic_review",
-        "fallback_turn",
+        "generate_turn",
+        "heuristic_task_progress",
         "initial_task_states",
+        "judge_prompt",
         "judge_turn",
         "merge_review_copy",
         "merge_task_progress",

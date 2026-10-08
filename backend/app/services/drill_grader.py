@@ -101,11 +101,12 @@ LLM_MAX_TOKENS = 400
 # tests/test_latency_budget.py 钉死这张表):
 #   POST /sessions/{id}/step      文本回答: 0          + STEP 20           = 20
 #   POST /sessions/{id}/step      音频回答: IAT <=13 (服务层) + STEP 20    = 33  见 (*)
-#   POST /sessions/{id}/mission (拆调用后)         iat 8 + GEN 14              = 22
-#     (判分与发音逐词分**移出请求** -> ``GRADING_JOB_BUDGET_S`` 那对作业预算; 见 §P6 同款说明)
-#   POST /dialogue/turn (拆调用后)                 iat 8 + max(ise 8.5, GEN 14) = 22.5
+#   POST /sessions/{id}/mission (§A 拆调用后)      iat 8 + max(ise 8, GEN 14)  = 22
+#     (判分**移出请求** -> ``GRADING_JOB_BUDGET_S`` 那对作业预算; 锚定 ISE 仍与生成并行 ——
+#      它 8s 短于台词的墙, **不吃额外墙钟**; 它也不能搬进作业: 音频不落库, 作业拿不到)
+#   POST /dialogue/turn (§A4 拆调用后)              iat 8 + max(ise 8.5, GEN 14) = 22.5
 #   POST /sessions/{id}/finish-mission           DB + 数值骨架 (零 LLM)     = DB  见 (§P6)
-#   POST /mission 聊到轮次上限自动收工              23 + 数值骨架 (零 LLM)    = 23  见 (§P6)
+#   POST /mission 聊到轮次上限自动收工              iat 8 + GEN 14 + 骨架    = 22  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10
 #   POST /assessment/{id}/complete             DB    + ASSESSMENT 20      = 20
 #     (老客户端同步路径; 新客户端 async_judge=true -> 202 + 后台作业。作业的
@@ -523,10 +524,11 @@ async def _judge(
 
     ``hard_budget_s``: **整个调用 (含坏 JSON 的重试那一次) 的墙钟硬预算**, 同步 HTTP
     路径必填 —— 取值与求和见模块顶部的硬预算块. 用 ``asyncio.wait_for`` 封顶, 并且
-    **在这里**就把 ``TimeoutError`` 翻成 ``LlmUnavailableError``: 四个同步调用点
+    **在这里**就把 ``TimeoutError`` 翻成 ``LlmUnavailableError``: 同步调用点
     (``_graded_text_step`` / ``mission_engine.review_copy`` 的同步入口
     ``build_review_report`` / ``mission_engine.polish_text`` /
-    ``assessment_engine.judge_level``) 只 ``except LlmUnavailableError``, 让裸
+    ``mission_engine.generate_turn`` / ``assessment_engine.judge_level``) 只
+    ``except LlmUnavailableError``, 让裸
     ``TimeoutError`` 逃逸会把"降级"变成 500, 比不封顶更糟. 反过来, 只把 ``timeout=``
     调小是没用的: 那只是单次尝试的上限.
 

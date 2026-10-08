@@ -1,26 +1,34 @@
 """实战对话 (mission) + 复盘报告 端点测试 (§5.3/§5.5-2/§5.6, 阶段 P3).
 
+§A(D1) 拆调用之后一轮实战是**两段**: 请求内的台词生成 (:func:`mission_engine.generate_turn`)
+与后台作业里的判分 (:func:`course_sessions.run_mission_grading_job`)。所以本文件的假 LLM
+按 prompt 形状给两份料 (``install_llm(..., generation=[...], grading=[...])``), 而"判分那半边"
+由用例自己 ``await run_mission_grading_job(sid)`` 驱动 (conftest 已把派生换成 no-op)。
+
 按"客户端会怎么踩"组织:
 
-* 打完基础 -> ``/mission`` 逐轮 (mock LLM 的综合 JSON) -> 任务累积打勾 -> cleared ->
-  ``/finish-mission`` 出 ReviewReport -> 报告持久化 + history 落行 (老历史页形状);
+* 打完基础 -> ``/mission`` 逐轮 -> 任务累积打勾 -> cleared -> ``/finish-mission`` 出
+  ReviewReport -> 报告持久化 + history 落行 (老历史页形状);
 * 门禁可区分: 阶段未解锁 / 归属 / 收工后的 409 各不相同, 越权 403;
 * 任务状态**累积合并** + 幂等 (同一段话连说两轮不重复打勾; LLM 翻供不回退);
-* LLM 坏 JSON -> 回喂重试一次 -> 再坏走剧本回放的确定性降级 (``source=heuristic``,
-  ``llm_source=stub``); 降级轮**不出**语法/词汇证据 (宁缺勿滥);
-* ``max_turns`` 到顶自动收工 (报告随最后一轮返回, 会话 ``review/completed``);
+* **D5**: 台词拿不到 -> 503 ``TURN_GENERATION_UNAVAILABLE``, 这一轮**不落库不前进** ——
+  旧版"坏 JSON 回放到剧本"那条降级路已删 (它是"每轮同一句"的根因), 用例改为断 503 +
+  无副作用 + 重发不重计;
+* ``max_turns`` 到顶自动收工 (响应带数值骨架 + 两个作业都派出);
 * 讯飞路径: 音频缺 IAT -> 400 TRANSCRIPT_UNAVAILABLE; ISE 配了才产
-  ``transcript_anchored`` 发音证据; ISE 失败回退 stub 时证据**整体丢弃**;
+  ``transcript_anchored`` 发音证据 (请求内就落, 逐词分进 step 行); ISE 失败回退 stub 时
+  证据**整体丢弃**;
 * ``/hint`` 不调 LLM、不改判定, 只把下一个判定回合标 ``costs_score``.
 
-Mock 手法沿用 T3 (``tests.test_drill_grader``): ``install_llm`` 换掉 ``AsyncOpenAI``
-并按脚本吐 content; 本文件自带 **autouse** provider 复位 —— 漏了会把"LLM 已配置"
+Mock 手法沿用 T3 (``tests.test_drill_grader``): ``install_llm`` 换掉 ``AsyncOpenAI`` 并按
+prompt 形状路由; 本文件自带 **autouse** provider 复位 —— 漏了会把"LLM 已配置"
 泄漏给后面的模块 (``test_dialogue_stub`` 那批断言会莫名变红, T3 踩过)。
 """
 
 from __future__ import annotations
 
 import base64
+import copy
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -62,20 +70,37 @@ def scene_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     scene_store.invalidate_cache()
 
 
-def mission_json(
+def generation_json(
     *,
     reply: str = "How about a size? We have small and large.",
+    reply_cn: str = "要哪种杯型, 我们有小杯和大杯",
     suggestion: str = "Can I change that to a large?",
+    suggestion_cn: str = "可以改成大杯吗",
+    learner_cn: str = "我想要一杯中杯咖啡。",
+) -> str:
+    """台词生成的 JSON (§A1 的 ``TurnGeneration`` 五字段形状)."""
+    return json.dumps(
+        {
+            "reply": reply,
+            "reply_cn": reply_cn,
+            "suggestion": suggestion,
+            "suggestion_cn": suggestion_cn,
+            "learner_cn": learner_cn,
+        },
+        ensure_ascii=False,
+    )
+
+
+def mission_json(
+    *,
     polish: dict[str, Any] | None = None,
     grammar: float | None = 66.0,
     vocabulary: float | None = 70.0,
     done: list[tuple[str, str]] | None = None,
 ) -> str:
-    """一轮的综合 JSON (§5.5-2 形状)."""
+    """判分作业的 JSON (§A1 收缩后的 ``MissionTurnJudgement``: 只判分, 不产台词)."""
     return json.dumps(
         {
-            "reply": reply,
-            "suggestion": suggestion,
             "polish": polish,
             "grammar_score": grammar,
             "vocabulary_score": vocabulary,
@@ -86,6 +111,31 @@ def mission_json(
         },
         ensure_ascii=False,
     )
+
+
+async def _snapshot(client: AsyncClient, sid: str, device: str = DEV) -> dict[str, Any]:
+    """客户端唯一的轮询通道 (``grading_status`` / 回填后的 turn 都在这里)."""
+    res = await client.get(f"/api/v1/sessions/{sid}", params={"device_id": device})
+    assert res.status_code == 200, res.text
+    return dict(res.json())
+
+
+def _graded_entry(snapshot: dict[str, Any], turn_index: int = -1) -> dict[str, Any]:
+    """快照里某一轮的 turn_entry (默认最后一轮) —— 判分回填后的样子."""
+    turns = list(snapshot["mission"]["turns"])
+    if turn_index < 0:
+        return dict(turns[-1])
+    return dict(next(turn for turn in turns if turn["index"] == turn_index))
+
+
+async def _grade(client: AsyncClient, sid: str) -> dict[str, Any]:
+    """驱动一次判分作业 (§A3) 并取回快照.
+
+    测试直接 ``await run_mission_grading_job`` 而不是让它真 ``create_task`` —— conftest 的
+    ``_no_detached_grading_jobs`` 已把 spawn 换成 no-op (同 ``run_review_copy_job`` 的口径)。
+    """
+    await course_sessions.run_mission_grading_job(sid)
+    return await _snapshot(client, sid)
 
 
 async def _open(client: AsyncClient, scene_id: str = "scene_alpha") -> str:
@@ -166,7 +216,18 @@ async def test_mission_loop_clears_tasks_and_finishes_with_report(
     sid = await _ready(client)  # 先打完基础 (启发式), 再装假 LLM, 免得判分吃掉剧本回复
     fake = install_llm(
         monkeypatch,
-        [
+        generation=[
+            generation_json(
+                reply="How about a size? We have small and large.",
+                suggestion="Can I change that to a large?",
+                learner_cn="我能不能来一杯中杯咖啡",
+            ),
+            generation_json(
+                reply="Sure — that comes to three dollars. Anything else?",
+                suggestion="No, that's all. Thanks!",
+            ),
+        ],
+        grading=[
             mission_json(done=[("t1", "说了点单内容")]),
             mission_json(
                 done=[("t1", "说了点单内容"), ("t2", "问了价格")],
@@ -174,15 +235,18 @@ async def test_mission_loop_clears_tasks_and_finishes_with_report(
                     "original": "How much money?",
                     "polished": "How much is that in total?",
                     "explanation_cn": "问价格说 how much is that。",
+                    "polished_cn": "一共多少钱",
                 },
             ),
+        ],
+        review=[
             json.dumps(
                 {
                     "highlights": ["点单和问价都当面说出口了, 沟通目的达成。"],
                     "improvements": ["语法: 特殊疑问句的语序再练一轮。"],
                 },
                 ensure_ascii=False,
-            ),
+            )
         ],
     )
 
@@ -191,26 +255,59 @@ async def test_mission_loop_clears_tasks_and_finishes_with_report(
     body = first.json()
     assert body["turn_index"] == 1 and body["transcript"] == "Can I get a medium coffee?"
     assert body["reply"].startswith("How about") and body["suggestion"]
-    assert body["polish"] is None and body["cleared"] is False
-    assert body["newly_done"] == [{"id": "t1", "evidence": "说了点单内容"}]
-    assert [view["done"] for view in body["checklist"]] == [True, False, False]
-    assert body["sub_scores"] == {
-        "pronunciation": None,
-        "grammar": 66.0,
-        "vocabulary": 70.0,
-        "fluency": None,
-    }  # 没配讯飞: 发音/流利没有证据, 不冒充 (§5.6)
-    assert body["max_turns"] == 8 and body["source"] == "llm"
+    # §A(D1): 请求里只有台词那一半 —— 润色/语法/词汇**本轮恒为空**, 判分在后台。
+    assert body["polish"] is None and body["sub_scores"]["grammar"] is None
+    assert body["source"] == "pending" and body["grading_status"] == "pending"
+    # D4 双语: 台词/示范/学员句三处的中文都在 (客户端渲染; 缺省是 "")
+    assert body["reply_cn"] and body["suggestion_cn"] and body["learner_cn"]
     assert body["llm_source"] == "qwen3.8-max" and body["costs_score"] is False
-    grammar_event = next(e for e in body["ability_events"] if e["dimension"] == "grammar")
-    assert grammar_event["weight"] == 1.0 and grammar_event["source"] == "llm"
+    # 词面快判先顶 (§A3): t1 的 hint_en 就在这句话里, 不必等判分作业。
+    assert body["newly_done"] == [
+        {"id": "t1", "evidence": "词面覆盖了任务示范用语 (启发式快判, 未经语义核对)"}
+    ]
+    assert [view["done"] for view in body["checklist"]] == [True, False, False]
+    assert body["cleared"] is False and body["max_turns"] == 8
+    assert body["ability_events"] == []  # 没配讯飞 + 判分还没跑 -> 本轮没有证据
+
+    # 判分作业跑完: 润色/语法/词汇回填进快照 (客户端拿 GET 回填, §A3 不新增端点)。
+    graded = await _grade(client, sid)
+    assert graded["grading_status"] == "ready"
+    entry = _graded_entry(graded, 1)
+    assert entry["grading"]["status"] == "ready"
+    assert entry["source"] == "llm" and entry["llm_source"] == "qwen3.8-max"
+    assert entry["sub_scores"]["grammar"] == pytest.approx(66.0)
+    assert entry["sub_scores"]["vocabulary"] == pytest.approx(70.0)
+    assert entry["newly_done"][0]["id"] == "t1"  # 快判那条保留 (去重后追加)
+    grammar_event = next(
+        event
+        for event in (
+            await db.execute(
+                select(AbilityEvent).where(
+                    AbilityEvent.session_id == sid, AbilityEvent.step_id == "m1"
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if event.dimension == "grammar"
+    )
+    assert grammar_event.weight == 1.0 and grammar_event.source_kind == "llm"
 
     second = (await _mission(client, sid, {"text": "How much money?"})).json()
-    assert second["turn_index"] == 2 and second["cleared"] is True
-    assert second["newly_done"] == [{"id": "t2", "evidence": "问了价格"}]
-    assert second["polish"]["polished"] == "How much is that in total?"
+    assert second["turn_index"] == 2
+    # 快判先顶: 这句就是 t2 的 hint_en, 所以 cleared 当场就翻了 (不必等判分)。
+    assert second["cleared"] is True
+    assert second["newly_done"] == [
+        {"id": "t2", "evidence": "词面覆盖了任务示范用语 (启发式快判, 未经语义核对)"}
+    ]
+    assert second["polish"] is None  # 判分还在后台
     optional_task = next(view for view in second["checklist"] if view["id"] == "t3")
     assert optional_task["required"] is False and optional_task["done"] is False
+
+    graded2 = await _grade(client, sid)
+    entry2 = _graded_entry(graded2, 2)
+    assert entry2["polish"]["polished"] == "How much is that in total?"
+    assert entry2["polish"]["polished_cn"] == "一共多少钱"  # D4 双语润色也带中文
 
     await _finish(client, sid)
     report = await _report(client, sid)
@@ -312,13 +409,17 @@ async def test_cleared_mission_keeps_talking_until_finish(
     sid = await _ready(client)
     install_llm(
         monkeypatch,
-        [
+        generation=[
+            generation_json(reply="Coffee it is. Small or medium?"),
+            generation_json(reply="Have a good day!"),
+        ],
+        grading=[
             mission_json(done=[("t1", "x"), ("t2", "y")]),
-            mission_json(done=[], reply="Have a good day!"),
+            mission_json(done=[]),
         ],
     )
     cleared_turn = (await _mission(client, sid, {"text": "Coffee. How much?"})).json()
-    assert cleared_turn["cleared"] is True
+    assert cleared_turn["cleared"] is True  # 快判先顶 (两句话都词面命中)
     extra = await _mission(client, sid, {"text": "Thanks, you too!"})
     assert extra.status_code == 200 and extra.json()["cleared"] is True
 
@@ -333,18 +434,24 @@ async def test_same_utterance_twice_does_not_double_count_task(
     sid = await _ready(client)
     install_llm(
         monkeypatch,
-        [
+        generation=[generation_json()],
+        grading=[
             mission_json(done=[("t1", "a")]),
             mission_json(done=[("t1", "a")]),
             mission_json(done=[("t1", "a"), ("t2", "b")]),
         ],
     )
     first = (await _mission(client, sid, {"text": "Medium coffee please."})).json()
+    await _grade(client, sid)
     repeat = (await _mission(client, sid, {"text": "Medium coffee please."})).json()
+    await _grade(client, sid)
     third = (await _mission(client, sid, {"text": "How much total?"})).json()
-    assert first["newly_done"] == [{"id": "t1", "evidence": "a"}]
+    snapshot = await _grade(client, sid)
+    assert first["newly_done"][0]["id"] == "t1"
     assert repeat["newly_done"] == [] and repeat["turn_index"] == 2  # 同句重说不重复打勾
-    assert third["newly_done"] == [{"id": "t2", "evidence": "b"}] and third["cleared"] is True
+    assert third["turn_index"] == 3 and third["cleared"] is True
+    # 判分作业的合并同样是累积口径: 第 3 轮才认出来的 t2 落在**这一轮**的 turn_entry 上
+    assert [item["id"] for item in _graded_entry(snapshot, 3)["newly_done"]] == ["t2"]
 
 
 @pytest.mark.asyncio
@@ -355,23 +462,19 @@ async def test_task_completion_is_sticky_when_llm_walks_it_back(
     sid = await _ready(client)
     install_llm(
         monkeypatch,
-        [
+        generation=[generation_json()],
+        grading=[
             mission_json(done=[("t1", "ok")]),
-            json.dumps(
-                {
-                    "reply": "r",
-                    "suggestion": "s",
-                    "polish": None,
-                    "grammar_score": 5,
-                    "vocabulary_score": 5,
-                    "task_progress": [{"id": "t1", "done": False, "evidence": ""}],
-                }
-            ),
+            # 判分翻供: 说 t1 其实没完成 (而且还给了 5 分) —— 勾必须粘住, 分数照收。
+            mission_json(done=[], grammar=5.0, vocabulary=5.0),
         ],
     )
     await _mission(client, sid, {"text": "Coffee please."})
+    await _grade(client, sid)
     second = (await _mission(client, sid, {"text": "er"})).json()
+    snapshot = await _grade(client, sid)
     assert second["checklist"][0]["done"] is True and second["newly_done"] == []
+    assert _graded_entry(snapshot, 2)["sub_scores"]["grammar"] == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
@@ -379,66 +482,108 @@ async def test_hallucinated_task_ids_are_dropped(
     client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sid = await _ready(client)
-    install_llm(monkeypatch, [mission_json(done=[("t99", "不存在")])])
+    install_llm(
+        monkeypatch,
+        generation=[generation_json()],
+        grading=[mission_json(done=[("t99", "不存在")])],
+    )
     body = (await _mission(client, sid, {"text": "hi there."})).json()
+    snapshot = await _grade(client, sid)
     assert body["newly_done"] == []
     assert [view["id"] for view in body["checklist"]] == ["t1", "t2", "t3"]
+    assert [view["id"] for view in snapshot["mission"]["tasks"]] == ["t1", "t2", "t3"]
 
 
-# ============================================================ 降级 / 坏 JSON
+# ============================================================ 坏 JSON / D5
 
 
 @pytest.mark.asyncio
 async def test_bad_json_retries_once_then_uses_the_good_reply(
     client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """台词侧的坏 JSON 仍然只回喂一次 (§A1: 两个函数共用 ``_judge`` 的这套纪律)."""
     sid = await _ready(client)
-    fake = install_llm(monkeypatch, ["这不是 JSON", mission_json(done=[("t1", "救回来了")])])
+    fake = install_llm(
+        monkeypatch,
+        generation=["这不是 JSON", generation_json(reply="A medium coffee, coming up.")],
+    )
     body = (await _mission(client, sid, {"text": "Medium coffee."})).json()
     assert len(fake.requests) == 2  # 初次 + 错误回喂重试一次
-    assert body["source"] == "llm" and body["newly_done"] == [{"id": "t1", "evidence": "救回来了"}]
+    assert body["reply"] == "A medium coffee, coming up." and body["llm_source"] == "qwen3.8-max"
     assert "上一条输出不合格" in str(fake.requests[1]["messages"][-1]["content"])
 
 
 @pytest.mark.asyncio
-async def test_second_bad_output_degrades_to_script_replay(
-    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
+async def test_second_bad_output_is_a_503_without_side_effects(
+    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch, db: AsyncSession
 ) -> None:
+    """D5 (替代旧的"回放到剧本"用例): 两次都拿不到台词 -> **503 + 这一轮没有发生**.
+
+    旧行为的代价有两层: ① 剧本回放从第 7 轮起永远同一句 (§0 根因); ② 它还冒充了一次
+    不存在的生成 (``source="heuristic"`` 的台词看起来像模型说的)。新契约: 明说不可用,
+    不落 turn、不落 step 行、不动任务清单、不出画像证据 —— "重发不重计"是这条断言的
+    另一半 (学员重试一次成功后, 只会有一条 m1)。
+    """
     sid = await _ready(client)
-    fake = install_llm(monkeypatch, ["garbage one", "garbage two"])
-    body = (await _mission(client, sid, {"text": "Medium coffee with cream please."})).json()
+    fake = install_llm(monkeypatch, generation=["garbage one", "garbage two"])
+    res = await _mission(client, sid, {"text": "Medium coffee with cream please."})
+    assert res.status_code == 503
+    err = res.json()["error"]
+    assert err["code"] == "TURN_GENERATION_UNAVAILABLE" and "没有发生" in err["message"]
     assert len(fake.requests) == 2  # 只重试一次, 不做第三次
-    assert body["source"] == "heuristic" and body["llm_source"] == "stub"
-    # 剧本回放从开场白的下一句开始 (开场白客户端已经播过, 不重复)
-    assert body["reply"] == "Anything else?"
-    assert body["suggestion"] == "No, that's all."
-    assert body["polish"] is None
-    assert body["sub_scores"]["grammar"] is None  # 降级轮不出语法/词汇证据 (宁缺勿滥)
-    assert body["ability_events"] == []
+
+    snapshot = await _snapshot(client, sid)
+    # 这一轮**一个字都没落**: mission 分区还是空的 (懒初始化只活在这次请求的内存里),
+    # 所以任务清单没被推、判分指针也没被留下。
+    assert snapshot["mission"] == {}
+    assert snapshot["grading_status"] is None
+    rows = (
+        (await db.execute(select(PracticeStep).where(PracticeStep.session_id == sid)))
+        .scalars()
+        .all()
+    )
+    assert [row.step_id for row in rows if row.step_type == "mission_turn"] == []
+
+    # 重发 (这次模型好了) -> 只计一轮
+    install_llm(monkeypatch, generation=[generation_json()])
+    retry = await _mission(client, sid, {"text": "Medium coffee with cream please."})
+    assert retry.status_code == 200 and retry.json()["turn_index"] == 1
+    rows2 = (
+        (
+            await db.execute(
+                select(PracticeStep)
+                .where(PracticeStep.session_id == sid, PracticeStep.step_type == "mission_turn")
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [row.step_id for row in rows2] == ["m1"]
 
 
 @pytest.mark.asyncio
-async def test_no_llm_creds_run_the_loop_on_heuristic_task_matching(
+async def test_no_llm_creds_is_a_503_and_writes_nothing(
     client: AsyncClient,
     scene_root: Path,
+    db: AsyncSession,
 ) -> None:
-    """本机/CI (只有 stub 凭据): hint_en 词面覆盖推进任务, 画像全程不动."""
+    """本机/CI (只有 stub 凭据): D5 —— 实战轮直接 503, **不**回落到词面启发式台词.
+
+    这是 §0 那条"7/8 轮降级"的正面契约: 宁可报错让学员重试, 也不拿剧本/目录里的下一句
+    冒充模型生成。词面快判本身仍在 (它在**生成成功的轮次**里勾 checklist, 见 happy path),
+    所以"启发式判定"这件事没有消失, 消失的只是"启发式台词"。
+    """
     sid = await _ready(client)
-    first = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
-    assert first["source"] == "heuristic" and first["llm_source"] == "stub"
-    assert first["newly_done"] and first["newly_done"][0]["id"] == "t1"
-    assert first["ability_events"] == []
-    off = (await _mission(client, sid, {"text": "The weather is nice today."})).json()
-    assert off["newly_done"] == []
-    second = (await _mission(client, sid, {"text": "How much is that?"})).json()
-    assert second["cleared"] is True  # t2 的 hint_en 就是这句话
-    await _finish(client, sid)
-    # 无 LLM 凭据: 后台文案作业走确定性降级, 但**照样落 ready** —— 学员永远能读到
-    # 一份报告, 只是复盘页的降级横幅会说明这是模板文案。
-    report = await _report(client, sid)
-    assert report["source"] == "heuristic" and report["llm_source"] == "stub"
-    assert report["cleared"] is True and report["highlights"] and report["improvements"]
-    assert report["ability_delta"]["grammar"] is None
+    res = await _mission(client, sid, {"text": "A small coffee, please."})
+    assert res.status_code == 503
+    assert res.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
+    snapshot = await _snapshot(client, sid)
+    assert snapshot["mission"] == {}
+    orphan_events = (
+        (await db.execute(select(AbilityEvent).where(AbilityEvent.step_id == "m1"))).scalars().all()
+    )
+    assert orphan_events == []
 
 
 @pytest.mark.asyncio
@@ -447,7 +592,6 @@ async def test_heuristic_and_stub_evidence_never_creates_a_profile(
 ) -> None:
     """§四 决策表的硬验收: 本机 (讯飞/LLM 都没 key) 画像永远不动."""
     sid = await _ready(client)
-    await _mission(client, sid, {"text": "A small coffee, please."})
     await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
     events = (await db.execute(select(AbilityEvent))).scalars().all()
     assert events  # 打基础的 stub/heuristic 证据全量进了流水 (审计)
@@ -478,6 +622,16 @@ async def test_max_turns_cap_auto_finishes_with_report(
     scene_store.invalidate_cache()
 
     sid = await _ready(client)
+    # 每轮都要有台词 (§A/D1: 拿不到就是 503); 不装 LLM 的话这条用例什么都测不到。
+    spawns: list[str] = []
+    monkeypatch.setattr(
+        course_sessions, "spawn_mission_grading_job", lambda sid_: spawns.append(sid_) or True
+    )
+    install_llm(
+        monkeypatch,
+        generation=[generation_json(reply="Tell me more about that.")],
+        grading=[mission_json(done=[])],
+    )
     for i in range(1, 4):
         body = (await _mission(client, sid, {"text": f"turn number {i} content"})).json()
         assert body["auto_finished"] is False and body["review"] is None
@@ -486,10 +640,18 @@ async def test_max_turns_cap_auto_finishes_with_report(
     assert last["stage"] == "review" and last["status"] == "completed"
     assert last["review"] is not None and last["review"]["auto_finished"] is True
     assert last["review"]["cleared"] is False  # 到顶未尽 -> 按未通关收口 (§5.1)
+    # §A3: 每轮的判分作业都派生了 (四次), 最后那一轮也不例外 —— 否则"聊到轮次上限自然
+    # 收工"这个最常见的结束方式会让最后一轮的润色/分数**永远**没人补。
+    assert len(spawns) == 4
+    assert last["grading_status"] == "pending"
 
-    snapshot = (await client.get(f"/api/v1/sessions/{sid}", params={"device_id": DEV})).json()
+    snapshot = await _snapshot(client, sid)
     assert snapshot["stage"] == "review" and snapshot["status"] == "completed"
     assert snapshot["review"]["session_id"] == sid
+    # 判分作业跑完: 最后一轮的回填照样落 (报告数值是收工那一刻的快照, 逐轮明细走这里)。
+    graded = await _grade(client, sid)
+    assert graded["grading_status"] == "ready"
+    assert _graded_entry(graded, 4)["grading"]["status"] == "ready"
 
 
 # ============================================================ 音频输入 / 转写锚定 ISE
@@ -516,6 +678,7 @@ async def test_audio_mission_uses_transcription_and_text_wins_over_audio(
     iat = FakeIAT("A small coffee to go.")
     monkeypatch.setattr(dg, "_IAT", iat)
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     by_audio = (await _mission(client, sid, {"audio_b64": PCM_B64})).json()
     assert by_audio["transcript"] == "A small coffee to go."
     both = (await _mission(client, sid, {"audio_b64": PCM_B64, "text": "typed answer"})).json()
@@ -533,6 +696,7 @@ async def test_transcript_anchored_ise_produces_pronunciation_evidence(
     """§5.4: 自由产出的发音证据 = 以**转写为参考文本**的 ISE (transcript_anchored)."""
     monkeypatch.setattr(dg, "_IAT", FakeIAT("A small coffee please."))
     sid = await _ready(client)  # 先开局: 打基础仍走 stub (凭据还没配)
+    install_llm(monkeypatch, generation=[generation_json()])
     for field in ("xunfei_app_id", "xunfei_api_key", "xunfei_api_secret"):
         monkeypatch.setattr(settings, field, "test")
     monkeypatch.setattr(me, "_ISE", FakeASR(scores=88.0))
@@ -561,6 +725,7 @@ async def test_anchored_evidence_dropped_when_ise_falls_back_to_stub(
     """讯飞配了但调用失败回退 StubASR: 证据整体丢弃 —— 宁可发音空缺, 不造假."""
     monkeypatch.setattr(dg, "_IAT", FakeIAT("A small coffee please."))
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     for field in ("xunfei_app_id", "xunfei_api_key", "xunfei_api_secret"):
         monkeypatch.setattr(settings, field, "test")
     monkeypatch.setattr(me, "_ISE", FakeASR(scores=95.0, source="stub"))
@@ -587,9 +752,10 @@ async def test_anchored_evidence_dropped_when_ise_falls_back_to_stub(
 
 @pytest.mark.asyncio
 async def test_hint_marks_next_turn_costs_score_without_judging(
-    client: AsyncClient, scene_root: Path, db: AsyncSession
+    client: AsyncClient, scene_root: Path, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     hint = await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})
     assert hint.status_code == 200, hint.text
     payload = hint.json()
@@ -625,9 +791,10 @@ async def test_hint_marks_next_turn_costs_score_without_judging(
 
 @pytest.mark.asyncio
 async def test_hint_when_all_tasks_done_falls_back_to_script(
-    client: AsyncClient, scene_root: Path
+    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     partial = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
     # t1 完成了, 但 t2/t3 还开着 -> 提示仍指向第一个未完成任务
     hint1 = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
@@ -642,7 +809,7 @@ async def test_hint_when_all_tasks_done_falls_back_to_script(
 
 @pytest.mark.asyncio
 async def test_hint_and_checklist_expose_library_chinese(
-    client: AsyncClient, scene_root: Path
+    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A7' 透出: 库内已有的双语进响应 —— MissionTaskView.hint_cn / hint_cn / script_line_cn."""
     cn_by_task = {"t1": "先说要一杯咖啡。", "t2": "记得把价格问出来。", "t3": "走之前道个别。"}
@@ -661,6 +828,7 @@ async def test_hint_and_checklist_expose_library_chinese(
     scene_store.invalidate_cache()
 
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     body = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
     by_id = {view["id"]: view for view in body["checklist"]}
     assert by_id["t1"]["hint_cn"] == "先说要一杯咖啡。"
@@ -689,7 +857,7 @@ async def test_hint_and_checklist_expose_library_chinese(
 
 @pytest.mark.asyncio
 async def test_hint_chinese_fields_empty_string_when_source_missing(
-    client: AsyncClient, scene_root: Path
+    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """库里没有中文时, 新字段是 "" 而不是 null / 缺键."""
     course = make_course_dict("scene_alpha", "daily", briefing=BRIEFING6)
@@ -704,6 +872,7 @@ async def test_hint_chinese_fields_empty_string_when_source_missing(
     scene_store.invalidate_cache()
 
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     body = (await _mission(client, sid, {"text": "A small coffee, please."})).json()
     t1 = next(view for view in body["checklist"] if view["id"] == "t1")
     assert "hint_cn" in t1 and t1["hint_cn"] == ""
@@ -719,8 +888,51 @@ async def test_hint_chinese_fields_empty_string_when_source_missing(
 
 
 @pytest.mark.asyncio
-async def test_hint_and_mission_blocked_after_finish(client: AsyncClient, scene_root: Path) -> None:
+async def test_legacy_snapshot_without_hint_cn_still_serves_hints_and_checklist(
+    client: AsyncClient,
+    scene_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    db: AsyncSession,
+) -> None:
+    """**存量会话**回归 (T2 质量审查记的坑): 老快照的任务里**没有** ``hint_cn`` 键.
+
+    库里躺着一堆升级前开的局 (T2 之前 ``initial_task_states`` 不写这个键)。它们请求提示与
+    checklist 必须照常工作: 缺键 -> ``""``, **不** 500、不 404。新字段的 add-only 承诺
+    只有在"老数据也能读"时才算数。
+    """
     sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
+    assert (await _mission(client, sid, {"text": "hi there."})).status_code == 200
+
+    row = (
+        await db.execute(
+            select(course_sessions.PracticeSession)
+            .where(course_sessions.PracticeSession.id == sid)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    doc = copy.deepcopy(dict(row.doc))
+    for task in doc["mission"]["tasks"]:
+        task.pop("hint_cn", None)  # 模拟存量快照
+    row.doc = doc
+    await db.commit()
+
+    hint = (await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})).json()
+    assert "hint_cn" in hint["hint"] and hint["hint"]["hint_cn"] == ""
+    assert hint["hint"]["hint_en"]  # 既有字段不受影响
+
+    turn = await _mission(client, sid, {"text": "and then?"})
+    assert turn.status_code == 200, turn.text
+    checklist = turn.json()["checklist"]
+    assert checklist and all(view["hint_cn"] == "" for view in checklist)
+
+
+@pytest.mark.asyncio
+async def test_hint_and_mission_blocked_after_finish(
+    client: AsyncClient, scene_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = await _ready(client)
+    install_llm(monkeypatch, generation=[generation_json()])
     await _mission(client, sid, {"text": "hi there."})
     await client.post(f"/api/v1/sessions/{sid}/finish-mission", json={"device_id": DEV})
     hint = await client.post(f"/api/v1/sessions/{sid}/hint", json={"device_id": DEV})

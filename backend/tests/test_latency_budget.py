@@ -44,6 +44,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.api.v1 import course_sessions as cs
+from app.api.v1 import dialogue
 from app.config import settings
 from app.models.course import FoundationStep, SceneCourse
 from app.services import assessment_engine as ae
@@ -403,11 +404,13 @@ async def test_judge_level_returns_none_within_budget(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_mission_turn_still_degrades_after_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``judge_turn`` 的临时 ``wait_for`` 换成 ``hard_budget_s`` 后行为不变 (防重构回退)。
+async def test_mission_turn_grading_degrades_inside_its_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``judge_turn`` (后台作业专用, §A3) 挂死时 **降级而不是抛**: 词面快判给出任务判定.
 
     它是这条契约的**模板** (docstring 早就写了"不封顶就是结构性『评分失败: timeout』");
-    本次只是把强制点收敛到 :func:`_judge` 一处, 所以模板也得回头钉一遍。
+    §A1 之后它只判分 (不再产台词), 但"预算是硬墙 + 超时降级"这件事一个字没变。
     """
     _hanging(monkeypatch)
     course = SceneCourse.model_validate(make_course_dict())
@@ -415,14 +418,59 @@ async def test_mission_turn_still_degrades_after_dedupe(monkeypatch: pytest.Monk
     judgement, source, llm_source = await me.judge_turn(
         course,
         [{"id": "t1", "required": True, "done": False, "hint_en": "Can I get a medium coffee?"}],
-        [],
-        "coffee please",
-        1,
+        "medium coffee please",
         hard_timeout_s=TINY_BUDGET_S,
     )
     assert time.monotonic() - started < 3.0
     assert source == "heuristic" and llm_source == "stub"
-    assert judgement.reply  # 剧本下一行撑住对话, 不冷场
+    # 降级 = 没有润色、没有分数, 但**词面快判**照样推进任务 (词面命中 hint_en)。
+    assert judgement.polish is None and judgement.grammar_score is None
+    assert [item.id for item in judgement.task_progress] == ["t1"]
+    assert judgement.reply == ""  # 台词是另一条路的事 (§A1: 判分侧不产台词)
+
+
+@pytest.mark.asyncio
+async def test_generate_turn_raises_inside_its_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``generate_turn`` (请求内唯一一次 LLM) 超预算**抛** ``LlmUnavailableError``.
+
+    D5: 台词拿不到 -> 端点 503 且这一轮不前进, 绝不回放剧本 (旧 ``fallback_turn`` 那条路
+    正是"每轮同一句"的根因)。所以这里断的是**异常**, 不是降级产物。
+
+    预算改的是 ``mission_engine`` 命名空间里的名字: 那是**实际查找**它的地方
+    (``generate_turn`` 从 ``drill_grader`` import 进来后绑在这个模块上, 见
+    :func:`shrink_budget` 的坑注)。
+    """
+    _hanging(monkeypatch)
+    course = SceneCourse.model_validate(make_course_dict())
+    shrink_budget(monkeypatch, me, "GEN_TURN_BUDGET_S")
+    started = time.monotonic()
+    with pytest.raises(dg.LlmUnavailableError):
+        await me.generate_turn(
+            me.turn_prompt(course, [], [], "hi"),
+        )
+    assert time.monotonic() - started < 3.0
+
+
+@pytest.mark.asyncio
+async def test_dialogue_turn_respects_the_same_gen_wall(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§A4: ``POST /dialogue/turn`` 也走**同一堵** GEN 墙 -> 503, 而不是把 socket 拖死.
+
+    自由对话**不**自己抄一份预算常量 (那正是两处慢慢跑偏的开始): 它调
+    ``mission_engine.generate_turn``, 所以 ``shrink_budget`` 改的仍是 ``mission_engine``
+    命名空间 —— 断的是"这条路由真的受那堵墙约束", 而不是"dialogue 里有没有一个同名常量"。
+    """
+    shrink_budget(monkeypatch, me, "GEN_TURN_BUDGET_S")
+    _hanging(monkeypatch)
+    started = time.monotonic()
+    res = await client.post(
+        "/api/v1/dialogue/turn",
+        json={"scene_id": "daily_conversation", "history": [{"role": "user", "text": "hi"}]},
+    )
+    assert time.monotonic() - started < 3.0
+    assert res.status_code == 503, res.text
+    assert res.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -486,9 +534,37 @@ def test_background_generation_is_still_explicitly_unbounded() -> None:
     assert all(not ok for mod, _line, ok in _judge_call_sites() if mod in ASYNC_JOB_MODULES)
 
 
-def test_handler_still_passes_the_mission_turn_budget() -> None:
-    """``LLM_TURN_BUDGET_S`` 必须仍然真的传进 ``judge_turn``; 漏传 = 该路径重新裸奔。"""
-    assert "hard_timeout_s=LLM_TURN_BUDGET_S" in Path(cs.__file__).read_text(encoding="utf-8")
+def test_the_grading_job_passes_the_grading_budget() -> None:
+    """判分作业必须把 ``GRADING_JOB_BUDGET_S`` 真的传进 ``judge_turn``; 漏传 = 该路径重新裸奔.
+
+    §A3 起判分**不在请求里**了: 这条断言读的是作业的源文本 (调用改名/传参变化时两处一起
+    改, 这是它存在的意义)。
+    """
+    assert "hard_timeout_s=GRADING_JOB_BUDGET_S" in inspect.getsource(cs._run_grading_job)
+
+
+def test_the_mission_handler_only_calls_generate_turn() -> None:
+    """机器检查 (§A2/D1): 实战轮的**请求**里只许有 ``generate_turn`` 这一次 LLM 调用.
+
+    两种复发形状都要挡: 有人把 ``judge_turn`` 拉回请求里 (那正是 22.5s 撞墙的形状),
+    或者干脆在 handler 里另开一次 ``provider.chat``。按**函数体**切范围 —— 判分作业自己
+    也调 ``judge_turn``, 按文件切会把合法的那处一起红掉。
+    """
+    src = Path(cs.__file__).read_text(encoding="utf-8")
+    assert "mission_engine.generate_turn(" in src, "请求里应走 generate_turn (请求内唯一一次 LLM)"
+    tree = ast.parse(src)
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name != "submit_mission_turn":
+            continue
+        for call in (n for n in ast.walk(node) if isinstance(n, ast.Call)):
+            called = getattr(call.func, "attr", None) or getattr(call.func, "id", None)
+            if called in {"judge_turn", "chat"}:
+                offenders.append(f"{node.name}:{call.lineno} 等了 {called}()")
+    assert offenders == [], (
+        f"实战轮的请求体里出现了第二次 LLM 调用: {offenders}; "
+        "台词 -> generate_turn (14s 墙), 判分 -> run_mission_grading_job, 别拉回请求里"
+    )
 
 
 def test_budgets_are_named_constants_at_the_call_sites() -> None:
@@ -506,6 +582,7 @@ def test_budgets_are_named_constants_at_the_call_sites() -> None:
         (dg._graded_text_step, "STEP_LLM_BUDGET_S"),
         (me.build_review_report, "REVIEW_LLM_BUDGET_S"),
         (me.polish_text, "POLISH_BUDGET_S"),
+        (me.generate_turn, "GEN_TURN_BUDGET_S"),
         (cs._run_review_copy_job, "REVIEW_COPY_JOB_BUDGET_S"),
     ):
         assert f"hard_budget_s={name}" in inspect.getsource(fn), (
@@ -538,17 +615,28 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
     """契约求和: 同请求内 ``其它 await + budget + 5s 余量 <= 30s``。
 
     "其它 await" 取该请求里**已封顶**的部分 (语音轮读 ``course_sessions`` 的
-    ``*_TURN_BUDGET_S``; DB/序列化算进余量)。求和**只许变小**: 已知装不下的那条
-    列在 ``over_budget`` 并给了 ceiling 与归属, 涨上去就红。
+    ``*_TURN_BUDGET_S`` 与 ``dialogue`` 的同名常量; DB/序列化算进余量)。求和**只许变小**:
+    已知装不下的那条列在 ``over_budget`` 并给了 ceiling 与归属, 涨上去就红。
+
+    §A(D1) 拆调用之后两条对话路径都重写了:
+
+    * ``mission 单轮``: 请求内只剩 IAT + **台词** (``GEN_TURN_BUDGET_S``) —— 判分移出请求,
+      所以不再与台词取 ``max``; 锚定 ISE 仍与生成并行, 但它 8s < GEN 14s, 天然被包含。
+    * ``dialogue 单轮``: 同一形状 (IAT 8 + max(ISE 8.5, GEN 14)), 而且它**第一次进这张
+      表** —— 之前它自己手搓 ``provider.chat`` 且不在求和里 (§A4 顺手请进时延门)。
     """
     # 音频步的 IAT 只有服务层自己的 8s + ws open_timeout 5s (调用点没包预算)。
     iat_service_worst_s = float(settings.xunfei_iat_timeout_s) + 5.0
-    mission_turn_s = cs.IAT_TURN_BUDGET_S + max(cs.ISE_TURN_BUDGET_S, cs.LLM_TURN_BUDGET_S)
+    mission_turn_s = cs.IAT_TURN_BUDGET_S + dg.GEN_TURN_BUDGET_S
+    dialogue_turn_s = dialogue._VOICE_CALL_BUDGET_S + max(
+        dialogue._ISE_TASK_BUDGET_S, dg.GEN_TURN_BUDGET_S
+    )
 
     fits: dict[str, float] = {
         "step (文本回答)": dg.STEP_LLM_BUDGET_S,
         "step (read_along: 只有 ISE)": float(settings.xunfei_ise_timeout_s),
-        "mission 单轮": mission_turn_s,
+        "mission 单轮 (台词独占预算)": mission_turn_s,
+        "dialogue 单轮 (同一形状)": dialogue_turn_s,
         # §P6: 收工与"到轮次上限自动收工"都**不再同步等总评文案** —— 请求里只剩
         # DB/聚合, 文案交给后台作业。自动收工因此从下面的 over_budget 搬回这里:
         # 它的最坏时长就是那一轮本身的 mission_turn_s, 不再叠加一次总评 LLM。
@@ -721,5 +809,23 @@ def test_bare_provider_chat_calls_pass_an_explicit_timeout() -> None:
     from app.api.v1 import dialogue
 
     assert dialogue._VOICE_CALL_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
-    assert dialogue._LLM_TURN_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
     assert dialogue._ISE_TASK_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+    # 台词那一半走 ``mission_engine.generate_turn`` (§A4): 预算在生成侧统一报, 所以这里
+    # 断的是"那条路封顶了", 而不是"dialogue.py 里还有一个自己的 LLM 常量"。
+    assert dg.GEN_TURN_BUDGET_S + MARGIN_S <= CLIENT_READ_TIMEOUT_S
+
+
+def test_dialogue_turn_is_no_longer_a_bare_provider_chat() -> None:
+    """§A4: ``/dialogue/turn`` 不许再手搓 ``provider.chat`` —— 它必须走 ``generate_turn``.
+
+    旧形状两个毛病一次修掉: ① 裸 ``chat`` 不受 ``hard_budget_s`` 保护 (``timeout=`` 只是
+    单次尝试); ② 它自己拼的 prompt/温度/token 与实战轮各一份, 慢慢就漂了。
+    """
+    from app.api.v1 import dialogue
+
+    src = inspect.getsource(dialogue.turn)
+    assert "mission_engine.generate_turn(" in src
+    assert "provider.chat(" not in src
+    # 形状标记: 两边共用同一份 schema 与同一份 JSON 形状 (漂移的接缝在这儿)。
+    assert "mission_engine.GENERATION_RULES" in inspect.getsource(dialogue._scene_messages)
+    assert "mission_engine.GENERATION_JSON_SHAPE" in inspect.getsource(dialogue._scene_messages)

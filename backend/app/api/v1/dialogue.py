@@ -4,25 +4,26 @@ Backend reads LLM credentials from environment (``LLM_BASE_URL`` / ``LLM_API_KEY
 and, when configured, generates conversation turns via an OpenAI-compatible
 provider (default: 阿里云百炼 Maas ``/compatible-mode/v1``).
 
-When no credentials are configured the module falls back to a deterministic
-local catalog so the Android client still produces a usable practice flow.
-``status`` in the response distinguishes the two: ``stub`` = local fallback,
-``ready`` = real LLM reply.
-
 The scene catalog itself lives in :mod:`app.services.dialogue_scenes` and is
 exposed via ``GET /dialogue/scenes`` so the Android picker can render it.
 
 v2.0 P3 扩展 (§5.5-4 / §5.6 / §5.7 / §四 魔法字符串):
 
-* ``/dialogue/turn`` 的**同一次** LLM 调用现在多带三样: 语法润色 ``polish``
-  (「原句 vs 更好说法」对照) + 语法/词汇判分 —— 拆成两次调用等于双倍延迟, 计划
-  明确"并入 /dialogue/turn 的单次 LLM 调用";
-* 带身份 (``device_id`` / ``user_id``) 时本轮证据写 §5.6 画像管线: 语法/词汇来自
-  LLM (仅当判分模型 = 服务端默认模型; 客户端自选模型的分数只回给 UI 不进画像),
-  发音走**转写锚定 ISE** (讯飞没配置就没有这条证据 —— 不造假);
+* ``/dialogue/turn`` 的同一次调用带语法润色与判分;
+* 带身份 (``device_id`` / ``user_id``) 时本轮证据写 §5.6 画像管线;
 * 历史回填不再匹配魔法字符串: 协议层面"当前这句话 = 末尾的 user 回合 (内容待
-  转写)", 老客户端的占位文本仍被接受 (向后兼容), 但服务端**不依赖**它 ——
-  mission 状态机 (course_sessions) 直接服务端持有历史, 才是彻底的解法。
+  转写)", 老客户端的占位文本仍被接受 (向后兼容)。
+
+§A4 (D1/D4/D5) 起这条路由**只做生成** —— 它与实战轮共用 :class:`TurnGeneration`
+这一份五字段 schema (台词 + 双语 + 学员句的中文对照), 走
+``mission_engine.generate_turn`` (即 ``drill_grader._judge`` 的唯一收口: 一次调用 +
+坏 JSON 回喂一次 + ``LlmUnavailableError``; 温度 0.7 / 160 token / 关思考)。润色与
+分数**不在**这里了 (那是请求内第二次调用, 12s + 14s 装不进 25s 契约): 学员要润色走
+现成的 ``POST /polish`` (纯文本工具, 不进画像)。
+
+拿不到台词 -> ``503 TURN_GENERATION_UNAVAILABLE`` (D5: 报错不前进)。**不再**有
+"降级到目录里的下一句"那条路 (``scene.fallback_reply`` / 写死的那两句): 它们正是
+"两轮之后永远同一句"的根因, 而且冒充了一次不存在的生成。
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import json
 import time
+from collections.abc import Sequence
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends
@@ -45,7 +46,7 @@ from app.models.db import User
 from app.services import mission_engine, users
 from app.services.ability_engine import record_step_evidence as ability_record
 from app.services.dialogue_scenes import DialogueScene, get_scene, list_scenes
-from app.services.drill_grader import AbilityEvidence
+from app.services.drill_grader import AbilityEvidence, LlmUnavailableError
 from app.services.llm_provider import (
     LlmMessage,
     get_llm_provider,
@@ -60,12 +61,17 @@ _iat = XunfeiIatProvider()
 
 #: 语音轮硬预算 (OkHttp readTimeout=30s, android di/NetworkModule.kt:40): 每次语音
 #: 调用服务层已由 settings.xunfei_{ise,iat}_timeout_s (8s) 硬顶, 这里再包一层防发帧
-#: 走偏; 发音证据 (转写锚定 ISE) 与 chat 并行 (只依赖 transcript, 互不相干),
-#: 最坏 iat(8) + max(chat 12, ise 8.5) + 落库 ≈ 20.5s < 30。
+#: 走偏; 发音证据 (转写锚定 ISE) 与台词生成并行 (只依赖 transcript, 互不相干),
+#: 最坏 iat(8) + max(ise 8.5, GEN 14) = 22 < 25 —— 台词那一半走
+#: ``mission_engine.generate_turn`` (墙 ``drill_grader.GEN_TURN_BUDGET_S``), 求和由
+#: ``tests/test_latency_budget.py`` 钉死 (本路由 §A4 起也在那张表里)。
 #: 2026-09-08 冒烟 (scripts/smoke_xunfei_ise.py): 3200B 快速节奏下 18s 语音 ~2.5s 发完.
 _VOICE_CALL_BUDGET_S = 8.0
-_LLM_TURN_BUDGET_S = 12.0
 _ISE_TASK_BUDGET_S = 8.5
+
+#: §A4: 生成侧不再自己写死温度/token/超时 —— 与实战轮共用
+#: ``mission_engine.generate_turn`` 的 ``GEN_*`` 常量 (15 行内那份 schema 才不会漂移)。
+#: 这里**不给**一个本地 ``_LLM_TURN_BUDGET_S``: 抄一份数字正是两者慢慢跑偏的开始。
 
 #: **LEGACY (v1.4.0 协议)**: 旧客户端把"当前这句话"的 user 回合填成这个占位文本.
 #: P3 起服务端不再依赖它做任何判断 (结构规则: 末尾 user 回合 = 当前输入), 这里只
@@ -112,25 +118,39 @@ class DialogueTurnRequest(BaseModel):
     #: v2.0 P3: 带身份则本轮证据进能力画像 (§5.6); 不带身份行为与旧版完全一致.
     device_id: str | None = Field(default=None, min_length=1, max_length=128)
     user_id: str | None = Field(default=None, min_length=1, max_length=36)
+    #: §A4/A5 add-only: 客户端 echo 回**最近已经展示过的参考句** (D5 裁决)。
+    #: 服务端有状态的那半 (实战轮) 从 ``mission.turns`` 拿; 自由对话没有会话表, 而
+    #: ``suggestedReply`` 每轮被覆盖, 所以只能由客户端把"给过的那几句"带回来 ——
+    #: 不带也能跑 (退化成"只从 assistant 回合取 Coach 台词"), 带了才真正防复写。
+    shown_suggestions: list[str] = Field(default_factory=list)
 
 
 class DialogueTurnResponse(BaseModel):
-    status: str  # "stub" | "ready"
+    status: str  # "ready" (生成成功; 拿不到就是 503, 不再有 stub 降级)
     reply_text: str
     reply_audio_url: str | None = None
     suggested_reply: str
     recognized_text: str | None = None
     model_id: str | None = None
     # ---- v2.0 P3 add-only (旧客户端 ignoreUnknownKeys, 不受影响) ----
-    #: 「原句 vs 更好说法」对照; 没问题 / 不可用时为 null.
+    #: 「原句 vs 更好说法」对照; §A4 起**恒为 null** —— 判分/润色不在本条请求里,
+    #: 学员要润色走 ``POST /polish`` (纯文本工具)。字段保留: 线上 APK 在解析这份 DTO.
     polish: Polish | None = None
-    #: 本轮语法/词汇判分 (null = 没有可判分的英文内容).
+    #: 本轮语法/词汇判分; §A4 起**恒为 null** (同上, 判分不再由本路由产出).
     grammar_score: float | None = None
     vocabulary_score: float | None = None
-    #: 本轮写进画像管线的维度证据 (未带身份时为空列表).
+    #: 本轮写进画像管线的维度证据: 只有**转写锚定 ISE** 的发音/流利 (未带身份/没音频/
+    #: 讯飞没配时为空列表).
     ability_events: list[AbilityEvidence] = Field(default_factory=list)
-    #: 证据/润色来源: ready 时为模型 id, 降级为 "stub".
+    #: 生成 provenance: 模型 id (失败走 503, 不再有 "stub" 占位).
     llm_source: str | None = None
+    # ---- §A4 (D4 双语) add-only: 空串 = 这一行不渲染, 绝不机翻占位 ----
+    #: 台词的简体中文意思.
+    reply_cn: str = ""
+    #: 示范句的简体中文意思 (要求学员开口的那句默认双语).
+    suggestion_cn: str = ""
+    #: 学员刚那句英文的简体中文意思 (「我」气泡的「译」).
+    learner_cn: str = ""
 
 
 # ====== Routes ======
@@ -212,25 +232,25 @@ async def turn(
 ) -> DialogueTurnResponse:
     """Return the next assistant turn and a model answer for the user.
 
-    With LLM configured we send the conversation history and parse a JSON
-    ``{reply, suggestion, polish, grammar_score, vocabulary_score}`` payload
-    back (ONE call — 润色与判分并入同一 JSON 是 §5.5-4 的明确决策, 双倍调用会
-    顶爆移动端延迟预算). 解析保持**宽容**: reply 是唯一关键字段, 缺了才降级;
-    polish/分数缺件不影响 "ready" (旧模型 / 旧 prompt 回 `{reply,suggestion}`
-    也照样通过, add-only 兼容)。With no credentials we fall back to a
-    deterministic rotating catalog so the UI never breaks.
+    §A4/D1: 这条请求里**只有一次 LLM 调用** —— ``mission_engine.generate_turn``
+    (复用 :class:`TurnGeneration` 五字段: 台词 + 双语 + 学员句中文), 与实战轮同一份
+    schema / 同一个 ``_judge`` 收口 / 同一组 ``GEN_*`` 常量, 所以两处不会漂移。
 
-    When the request carries the user's recorded reply (``user_audio_b64``)
-    we transcribe it via 讯飞 IAT and swap the client's placeholder user turn
-    for the recognized text, so the LLM responds to what was actually said.
-    Without IAT credentials (or on any failure) behavior is unchanged.
+    润色与分数**不再**塞进这里 (拆两次调用仍然是一次 12s+14s, 装不进 25s 契约):
+    学员要润色走现成的 ``POST /polish``。响应里那些字段保留但恒为 null/空 (add-only)。
 
-    P3: 带 ``device_id`` / ``user_id`` 时, 本轮的语法/词汇判分与**转写锚定 ISE**
-    发音证据 (讯飞已配置且有音频时才有) 走 §5.6 管线入库; 润色对照另记
-    ``annotated_diffs`` 一行。不带身份 = 纯无状态旧行为。
+    带 ``user_audio_b64`` 时先走讯飞 IAT 转写, 并把客户端 history **末尾**那条 user
+    回合换成真实转写 (协议见 :func:`_apply_recognized_text`), 让模型回应学员真说的话。
+
+    P3: 带 ``device_id`` / ``user_id`` 时, **转写锚定 ISE** 的发音/流利证据 (讯飞已
+    配置且有音频时才有) 走 §5.6 管线入库。不带身份 = 纯无状态旧行为。
+
+    D5: 拿不到台词 (未配置 / 超时 / 两次都不合规) -> ``503 TURN_GENERATION_UNAVAILABLE``,
+    **不返回 fabricated 气泡**: 旧版那个"回落到目录里的下一句 / 写死的两句"正是
+    "两轮之后永远是同一句"的根因。
     """
     scene = get_scene(req.scene_id)
-    # 身份在调用 LLM **之前**解析: 错误的 user_id 要 404, 不能被下面的降级兜成 200.
+    # 身份在调用 LLM **之前**解析: 错误的 user_id 要 404, 不能被下面的生成失败兜成 503。
     user = await _identity_user(db, req)
     audio_bytes = _decode_user_audio(req.user_audio_b64)
     _t_iat = time.monotonic()
@@ -243,86 +263,72 @@ async def turn(
         recognized_text = None
     iat_ms = round((time.monotonic() - _t_iat) * 1000)
     history = _apply_recognized_text(req.history, recognized_text)
-    logger.debug("dialogue turn perf | iat_ms={}", iat_ms)
-    provider = get_llm_provider()
+
+    # 发音证据只依赖转写文本, 与台词生成无依赖 -> 提前起跑, 落库前收账 (并行省一段延迟)。
     anchored_task: asyncio.Task[mission_engine.AnchoredPronunciation | None] | None = None
-    if cast(bool, getattr(provider, "is_configured", False)):
-        # 发音证据只依赖转写文本, 与 chat 无依赖 -> 提前起跑, persist 前收账 (并行省一整段延迟).
-        if user is not None and audio_bytes and recognized_text:
-            anchored_task = asyncio.create_task(
-                mission_engine.anchored_pronunciation(audio_bytes, recognized_text)
-            )
+    if user is not None and audio_bytes and recognized_text:
+        anchored_task = asyncio.create_task(
+            mission_engine.anchored_pronunciation(audio_bytes, recognized_text)
+        )
+    _t_gen = time.monotonic()
+    try:
+        generation, model = await mission_engine.generate_turn(
+            _scene_messages(req.scene_id, history, req.shown_suggestions),
+            model_id=req.model_id,
+        )
+    except LlmUnavailableError as exc:
+        if anchored_task is not None and not anchored_task.done():
+            anchored_task.cancel()  # 本轮作废时不再要发音证据
+        logger.warning("dialogue turn generation unavailable | scene={} err={}", req.scene_id, exc)
+        raise AppError(
+            503,
+            # 面向学员的中文文案 (全角标点是刻意的; 码表在客户端 T5)。
+            "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试",  # noqa: RUF001
+            "TURN_GENERATION_UNAVAILABLE",
+        ) from exc
+    except Exception:
+        if anchored_task is not None and not anchored_task.done():
+            anchored_task.cancel()
+        raise
+    gen_ms = round((time.monotonic() - _t_gen) * 1000)
+    anchored: mission_engine.AnchoredPronunciation | None = None
+    if anchored_task is not None:
         try:
-            model = _resolve_model(req.model_id)
-            messages = [
-                LlmMessage(role="system", content=_OPENING_SYSTEM),
-                LlmMessage(role="user", content=_scene_context(req.scene_id, history)),
-            ]
-            completion = await provider.chat(
-                model=model,
-                messages=messages,
-                temperature=0.6,
-                max_tokens=400,
-                timeout=_LLM_TURN_BUDGET_S,
+            anchored = await asyncio.wait_for(anchored_task, timeout=_ISE_TASK_BUDGET_S)
+        except TimeoutError:
+            logger.warning(
+                "dialogue anchored ise budget exceeded | budget_s={}", _ISE_TASK_BUDGET_S
             )
-            parsed = _parse_llm_json(completion.content)
-            # ``_parse_llm_json`` 保证 reply/suggestion 键存在; reply 兜底在解析器里
-            reply = str(parsed.get("reply") or "").strip() or "Could you tell me more?"
-            suggestion = str(parsed.get("suggestion") or "").strip() or scene.next_suggestion
-            polish = mission_engine.coerce_polish(parsed.get("polish"))
-            grammar = mission_engine.coerce_score(parsed.get("grammar_score"))
-            vocabulary = mission_engine.coerce_score(parsed.get("vocabulary_score"))
-            anchored: mission_engine.AnchoredPronunciation | None = None
-            if anchored_task is not None:
-                try:
-                    anchored = await asyncio.wait_for(anchored_task, timeout=_ISE_TASK_BUDGET_S)
-                except TimeoutError:
-                    logger.warning(
-                        "dialogue anchored ise budget exceeded | budget_s={}",
-                        _ISE_TASK_BUDGET_S,
-                    )
-            events = await _persist_turn_evidence(
-                db,
-                user=user,
-                scene_id=scene.id,
-                model=model,
-                grammar=grammar,
-                vocabulary=vocabulary,
-                anchored=anchored,
-                polish=polish,
-            )
-            return DialogueTurnResponse(
-                status="ready",
-                reply_text=reply,
-                suggested_reply=suggestion,
-                recognized_text=recognized_text,
-                model_id=model,
-                polish=polish,
-                grammar_score=grammar,
-                vocabulary_score=vocabulary,
-                ability_events=events,
-                llm_source=model,
-            )
-        except Exception as exc:
-            if anchored_task is not None and not anchored_task.done():
-                anchored_task.cancel()  # chat 挂掉的轮次不再要发音证据
-            logger.warning("LLM turn failed; using stub. scene={} err={}", req.scene_id, exc)
-
-    user_turns = sum(1 for item in history if item.get("role") == "user")
-    if user_turns <= 1:
-        reply_text = scene.fallback_reply
-        suggested_reply = scene.next_suggestion
-    else:
-        reply_text = "Thanks for sharing. Could you tell me a little more?"
-        suggested_reply = "I would be happy to tell you more about it."
-
+    events = await _persist_turn_evidence(
+        db,
+        user=user,
+        scene_id=scene.id,
+        anchored=anchored,
+    )
+    logger.info(
+        "dialogue turn perf | scene={} iat_ms={} gen_ms={} anchored={}",
+        req.scene_id,
+        iat_ms,
+        gen_ms,
+        anchored is not None,
+    )
     return DialogueTurnResponse(
-        status="stub",
-        reply_text=reply_text,
-        suggested_reply=suggested_reply,
+        status="ready",
+        reply_text=generation.reply,
+        suggested_reply=generation.suggestion,
         recognized_text=recognized_text,
-        model_id=None,
-        llm_source="stub",
+        model_id=model,
+        # 润色/分数不在本条请求里 (§A4): 字段保留, 值诚实缺席 (要润色走 POST /polish)。
+        polish=None,
+        grammar_score=None,
+        vocabulary_score=None,
+        ability_events=events,
+        llm_source=model,
+        # 三处中文已在 :func:`mission_engine.generate_turn` 里过了可信度门 (§A4/D5):
+        # 那一行不可信就是 "" (客户端不渲染), 绝不机翻占位。
+        reply_cn=generation.reply_cn,
+        suggestion_cn=generation.suggestion_cn,
+        learner_cn=generation.learner_cn,
     )
 
 
@@ -390,59 +396,48 @@ async def _persist_turn_evidence(
     *,
     user: User | None,
     scene_id: str,
-    model: str,
-    grammar: float | None,
-    vocabulary: float | None,
     anchored: mission_engine.AnchoredPronunciation | None,
-    polish: Polish | None,
+    model: str | None = None,
+    grammar: float | None = None,
+    vocabulary: float | None = None,
+    polish: Polish | None = None,
 ) -> list[AbilityEvidence]:
     """带身份时把自由对话轮写进 §5.6 画像管线; 不带身份 = 直接回空列表.
 
     判分完整性 (§5.7 + T3 先例): **客户端自选模型不等于可选判分口径** —— 只有当
     本轮走的就是服务端默认模型时, 语法/词汇分才进画像 (别的模型来的分只回给 UI,
-    不进 EWMA)。发音/流利证据来自转写锚定 ISE, 由调用方与 chat 并行算好后传入
+    不进 EWMA)。发音/流利证据来自转写锚定 ISE, 由调用方与生成并行算好后传入
     (讯飞未配置 / 失败 / 超预算 = None, 宁缺勿滥)。
+
+    §A4 之后本条路由**不再产出**语法/词汇/润色 (它们搬出请求了: 润色走
+    ``POST /polish``), 所以调用点不传 ``grammar``/``vocabulary``/``polish`` —— 三个
+    参数与那道门控**留着**: 它们是本模块对"带分的调用"的纪律 (D2), 而且单测直接调它
+    验证门控, 不该因为今天没有生产者就把规矩删掉。
     """
     if user is None:
         return []
     events: list[AbilityEvidence] = []
-    server_default = resolve_server_default_model()
-    if model == server_default:
-        for dimension, value in (("grammar", grammar), ("vocabulary", vocabulary)):
-            if value is None:
-                continue
-            events.append(
-                AbilityEvidence(
-                    dimension=cast("Any", dimension),
-                    score=value,
-                    source="llm",
-                    weight=1.0,
+    if grammar is not None or vocabulary is not None:
+        server_default = resolve_server_default_model()
+        if model == server_default:
+            for dimension, value in (("grammar", grammar), ("vocabulary", vocabulary)):
+                if value is None:
+                    continue
+                events.append(
+                    AbilityEvidence(
+                        dimension=cast("Any", dimension),
+                        score=value,
+                        source="llm",
+                        weight=1.0,
+                    )
                 )
+        else:
+            logger.debug(
+                "dialogue grading from client-chosen model {} (not server default); "
+                "scores stay out of the ability profile",
+                model,
             )
-    else:
-        logger.debug(
-            "dialogue grading from client-chosen model {} (not server default); "
-            "scores stay out of the ability profile",
-            model,
-        )
-    if anchored is not None:
-        events.append(
-            AbilityEvidence(
-                dimension="pronunciation",
-                score=anchored.pronunciation,
-                source="xunfei",
-                weight=1.0,
-                ise_ref_mode="transcript_anchored",
-            )
-        )
-        events.append(
-            AbilityEvidence(
-                dimension="fluency",
-                score=anchored.fluency,
-                source="xunfei",
-                weight=1.0,
-            )
-        )
+    events.extend(mission_engine.anchored_ability_events(anchored))
     if polish is not None:
         mission_engine.record_annotated_diff(
             db,
@@ -490,61 +485,112 @@ def _opening_prompt(scene: str, title: str) -> list[LlmMessage]:
     ]
 
 
-def _scene_context(scene_id: str, history: list[dict[str, Any]]) -> str:
-    """Render the dialogue history into a compact transcript for the LLM."""
-    lines = []
-    for item in history[-12:]:
-        role = item.get("role", "user")
-        text = item.get("text", "")
-        if not text:
-            continue
-        speaker = "Learner" if role == "user" else "Coach"
-        lines.append(f"{speaker}: {text}")
-    scene: DialogueScene = get_scene(scene_id)
-    return (
-        f"Scene: {scene.title}.\n"
-        "Conversation so far: (learner utterances in parentheses are awaiting "
-        "transcription, ignore them)\n" + "\n".join(lines) + "\n\n"
-        "Reply as Coach with ONE short follow-up question (1-2 sentences) and a "
-        "model answer for the learner. Also look at the learner's LAST real "
-        "English message: if it has grammar or wording mistakes worth fixing, "
-        "return a polish object (original = the learner's exact words, polished = "
-        "a natural sentence they can say out loud, explanation_cn = one short "
-        "Chinese sentence); otherwise polish must be null. Grade that last "
-        "message 0-100 on grammar and vocabulary (use null when there is no "
-        "English content to grade). Format your reply as JSON exactly like this:\n"
-        '{"reply": "<your question>", "suggestion": "<model answer>", '
-        '"polish": {"original": "...", "polished": "...", "explanation_cn": "..."} '
-        'or null, "grammar_score": number|null, "vocabulary_score": number|null}'
-    )
+#: 客户端 echo 回来的"已展示参考句"上限 (§A4/D5: add-only 的 list[str], 别让它无界).
+_SHOWN_SUGGESTIONS_MAX = 8
+#: 单条参考句/台词进 prompt 的字符上限 (与 ``MissionTurnGeneration`` 的 500 同量级).
+_LINE_MAX_CHARS = 200
+#: 带进 prompt 的历史回合数 (最近 N 条; 更早的对话对"下一句"没有增量).
+_HISTORY_KEEP = 12
 
 
-def _parse_llm_json(text: str) -> dict[str, Any]:
-    """Tolerantly parse the JSON object the LLM is instructed to emit.
+def _shown_suggestions(raw: Sequence[str]) -> list[str]:
+    """客户端 echo 的已展示参考句 -> 去空、截断、最多 :data:`_SHOWN_SUGGESTIONS_MAX` 条."""
+    kept: list[str] = []
+    for item in raw[:_SHOWN_SUGGESTIONS_MAX]:
+        text = str(item or "").strip()[:_LINE_MAX_CHARS]
+        if text:
+            kept.append(text)
+    return kept
 
-    P3: 返回**原始 dict** (polish/分数等新字段由调用方宽容取值); reply/suggestion
-    缺失或整体不是 JSON 时的兜底行为与旧版一致 (add-only 兼容)。
+
+def _repeat_block(history: list[dict[str, Any]], shown_suggestions: Sequence[str]) -> str:
+    """**反重复清单** (§A5): 历史里的 Coach 台词 + 客户端 echo 回来的已给参考句.
+
+    自由对话没有会话表, 所以 Coach 台词从历史 assistant 回合取 (无需新字段),
+    参考句只能靠 ``shown_suggestions`` —— ``suggestedReply`` 每轮被客户端覆盖, 服务端
+    自己没有留档。两样都不写死在 prompt 里: 清单为空就明说"还没说过"。
     """
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if "\n" in text:
-            text = text.split("\n", 1)[1]
-        text = text.rstrip("`").strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        parts = text.split("\n", 1)
-        reply = parts[0].strip()
-        suggestion = parts[1].strip() if len(parts) > 1 else ""
-        return {"reply": reply or "Could you tell me more?", "suggestion": suggestion}
-    if not isinstance(data, dict):
-        return {"reply": text, "suggestion": ""}
-    result: dict[str, Any] = dict(data)
-    reply = str(result.get("reply") or "").strip()
-    if not reply:
-        result["reply"] = text.split("\n", 1)[0].strip() or "Could you tell me more?"
-    else:
-        result["reply"] = reply
-    result.setdefault("suggestion", "")
-    return result
+    lines: list[str] = []
+    for item in history[-_HISTORY_KEEP:]:
+        if str(item.get("role") or "") != "assistant":
+            continue
+        text = str(item.get("text") or "").strip()[:_LINE_MAX_CHARS]
+        if text:
+            lines.append(f"- 你已经说过: {text}")
+    for text in _shown_suggestions(shown_suggestions):
+        lines.append(f"- 你已经给过参考句: {text}")
+    return "\n".join(lines)
+
+
+def _history_messages(history: list[dict[str, Any]]) -> list[LlmMessage]:
+    """客户端 history -> **原生 messages 数组** (§A4 的第二处修复).
+
+    旧版把整段历史压成一段文本塞进一条 user 消息 (``_scene_context`` 的字符串拼接),
+    模型因此拿不到"谁说的哪句"的结构 —— 现在按 role 原样交替传下去 (空回合并入下一条时
+    跳过: 待回填的末尾 user 回合已被 :func:`_apply_recognized_text` 换掉)。
+    """
+    messages: list[LlmMessage] = []
+    for item in history[-_HISTORY_KEEP:]:
+        role = str(item.get("role") or "user")
+        text = str(item.get("text") or "").strip()
+        if not text or role not in ("user", "assistant"):
+            continue
+        messages.append(LlmMessage(role=role, content=text))
+    return messages
+
+
+def _append_instruction(messages: list[LlmMessage], tail: str) -> list[LlmMessage]:
+    """把末尾指令并进 messages: 上一条已是 user 就并进去 (保持严格交替).
+
+    有些 OpenAI 兼容网关不接受连续两条同 role 的消息; 而"当前这句话"本来就应该是
+    同一条 user 回合的一部分 (它是学员这一轮说的), 合并比硬插一条更贴语义。
+    """
+    if messages and messages[-1].role == "user":
+        merged = LlmMessage(role="user", content=f"{messages[-1].content}\n\n{tail}")
+        return [*messages[:-1], merged]
+    return [*messages, LlmMessage(role="user", content=tail)]
+
+
+def _scene_messages(
+    scene_id: str,
+    history: list[dict[str, Any]],
+    shown_suggestions: Sequence[str] = (),
+) -> list[LlmMessage]:
+    """自由对话的台词 prompt -> 原生 messages (§A4).
+
+    §0 第二条缺陷的两处修复都在这里:
+
+    * ``scene.description`` 与人设真正进 prompt (旧版只给 ``scene.title``);
+    * 句式指令**不再**硬写 "ONE short follow-up question" —— 那句 prompt 自己要求的
+      固定形状正是"AI 反复问同一类问题"的第三个成因, 现在换成"没聊过的方向 + 禁重复
+      清单" (:func:`_repeat_block`)。
+    """
+    scene: DialogueScene = get_scene(scene_id)
+    system = (
+        "You are a friendly English-speaking coach helping a learner practice "
+        "everyday conversation. Never break character. "
+        f"场景: 「{scene.title}」 —— {scene.description}。"
+        "学员是中文母语、能读写但开口少的英语初学者 (CEFR A2-B1)。"
+        f"{mission_engine.GENERATION_RULES}"
+    )
+    history_messages = _history_messages(history)
+    said = _repeat_block(history, shown_suggestions)
+    learner_spoke = any(message.role == "user" for message in history_messages)
+    tail = (
+        "## 已经说过的话 (**不得同义复写**: 换新信息、换角度、换句式 —— "
+        "同一句话换个说法再说一遍就是失败)\n"
+        f"{said or '(还没有历史台词, 这是第一轮)'}\n\n"
+        f"## 议程\n把「{scene.title}」这场聊下去: 追问一个**没问过**的细节, 给学员一个"
+        "新的可接话点; 别提前结束, 也别把话题绕回你已经问过的地方。\n\n"
+        "## 本轮输入\n"
+        + (
+            "学员刚说的那句 = 上面最后一条 Learner 消息 (learner_cn 译它)。"
+            if learner_spoke
+            else "学员这一轮还没说话: learner_cn 输出空字符串。"
+        )
+        + f"\n\n{mission_engine.GENERATION_JSON_SHAPE}"
+    )
+    return [
+        LlmMessage(role="system", content=system),
+        *_append_instruction(history_messages, tail),
+    ]

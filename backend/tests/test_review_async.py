@@ -57,7 +57,15 @@ from app.services import mission_engine as me
 from tests.test_course_sessions import BRIEFING6, _open, _pass_briefing
 from tests.test_drill_grader import install_llm
 from tests.test_latency_budget import HANG_S, install_slow_llm, shrink_budget
-from tests.test_mission import DEV, _finish, _mission, _ready, _report, mission_json
+from tests.test_mission import (
+    DEV,
+    _finish,
+    _mission,
+    _ready,
+    _report,
+    generation_json,
+    mission_json,
+)
 from tests.test_scene_store import make_course_dict
 
 #: 假 LLM 的默认模型 id (``install_llm`` 写死), 作业的 ``llm_source`` 该等于它.
@@ -118,21 +126,27 @@ def _reset_llm_provider() -> Iterator[None]:
 
 @pytest_asyncio.fixture(autouse=True)
 async def _isolated_review_dispatch_state() -> AsyncIterator[None]:
-    """模块级派生门 (``_REVIEW_IN_FLIGHT`` / ``_REVIEW_JOBS``) 是用例之间的共享可变状态.
+    """模块级派生门 (``_REVIEW_IN_FLIGHT`` / ``_REVIEW_JOBS``, §A3 起还有判分那对) 是用例
+    之间的共享可变状态.
 
     不还清会在途 id 留给下一个用例 (幂等门会把它判成"已经在跑了"), 不 cancel 掉真任务的
     话, 它还会活过内存 sqlite 的 dispose —— 报错出现在 teardown 栈里, 看着像数据库坏了。
     """
     cs._REVIEW_IN_FLIGHT.clear()
     cs._REVIEW_JOBS.clear()
+    cs._GRADING_IN_FLIGHT.clear()
+    cs._GRADING_JOBS.clear()
     yield
     pending = [task for task in cs._REVIEW_JOBS if not task.done()]
+    pending += [task for task in cs._GRADING_JOBS if not task.done()]
     for task in pending:
         task.cancel()
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
     cs._REVIEW_IN_FLIGHT.clear()
     cs._REVIEW_JOBS.clear()
+    cs._GRADING_IN_FLIGHT.clear()
+    cs._GRADING_JOBS.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -216,13 +230,22 @@ def _numbers(report: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in report.items() if key not in PROSE_KEYS}
 
 
-async def _played_ready(client: AsyncClient, sid: str, *, turns: int = 2) -> None:
-    """**无凭据**聊几轮 (启发式判定, 不吃假 LLM 的脚本): 通关卡在 ``cleared`` 上.
+async def _played_ready(
+    client: AsyncClient,
+    sid: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    turns: int = 2,
+) -> None:
+    """聊几轮 (台词走假 LLM, **任务勾走词面快判**): 通关卡在 ``cleared`` 上.
 
     话术取自 ``test_mission`` 的启发式用例 —— ``A small coffee, please.`` 推进 t1,
-    ``How much is that?`` 推进 t2 并通关。分数是启发式的 (不可信来源 -> 四维可空),
-    但数值骨架照样完整, 所以"202 不等 LLM"那几条不需要真凭据。
+    ``How much is that?`` 推进 t2 并通关。§D5 之后**没有凭据就没有这一轮** (503), 所以
+    这里必须先装上假 LLM; 任务勾仍然来自请求内的词面快判, 分数由"没人驱动"的判分作业
+    决定 —— 四维可空, 但数值骨架照样完整, "202 不等 LLM"那几条不需要真分数。
+    需要真分数的用例走 :func:`_scored_session`。
     """
+    install_llm(monkeypatch, generation=[generation_json(reply="Tell me more about that.")])
     script = ["A small coffee, please.", "How much is that?", "Thanks, have a good day."]
     for index in range(turns):
         res = await _mission(client, sid, {"text": script[index % len(script)]})
@@ -237,17 +260,24 @@ async def _scored_session(
 ) -> str:
     """开一局打到**有真分数**的现场 (语法 66 / 词汇 70 -> 骨架 overall 68) 并主动收工.
 
-    ``replies`` 拼在两轮判定之后: ``_FakeOpenAI`` 先吐掉前面的脚本, 最后一条无限重复, 所以
-    传给它的**第一条**就是作业会拿到的那份总评文案。分数走假 LLM 是因为"数值一次写定"那条
-    锁要有非空的数才断得动 —— 全程无凭据时可信来源全空 (那也是有意义的状态, 但证不了"没被
-    改动")。
+    §A(D1) 之后一轮是两个形状的调用 (台词 / 判分), 所以这里按形状各给一份料; 判分那半边
+    由**用例自己驱动** (``run_mission_grading_job``, conftest 已把派生换成 no-op) —— 报告
+    的数值是收工那一刻从 ``practice_steps`` 行聚合的, 所以判分必须在收工前落库。
+    分数走假 LLM 是因为"数值一次写定"那条锁要有非空的数才断得动 —— 全程无凭据时可信来源
+    全空 (那也是有意义的状态, 但证不了"没被改动")。
     """
     course_root()
     sid = await _ready(client)  # 先打完基础, 免得判分吃掉脚本
-    install_llm(monkeypatch, [_TURN_T1, _TURN_T2, *replies])
+    install_llm(
+        monkeypatch,
+        generation=[generation_json(reply="A medium coffee, coming up.")],
+        grading=[_TURN_T1, _TURN_T2],
+        review=replies,
+    )
     for text in ("Can I get a medium coffee?", "How much money?"):
         res = await _mission(client, sid, {"text": text})
         assert res.status_code == 200, res.text
+        await cs.run_mission_grading_job(sid)  # 判分移出请求 (§A3): 用例驱动它
     await _finish(client, sid)
     return sid
 
@@ -267,7 +297,7 @@ async def test_finish_mission_returns_202_without_the_prose_or_the_llm(
     """
     course_root()
     sid = await _ready(client)
-    await _played_ready(client, sid)
+    await _played_ready(client, sid, monkeypatch)
     fake = install_slow_llm(monkeypatch, [(HANG_S, "")])  # 谁调谁睡, 且永不给合法 JSON
 
     started = time.monotonic()
@@ -345,7 +375,7 @@ async def test_an_all_untrusted_session_says_so_instead_of_rendering_a_dash(
     """
     course_root()
     sid = await _ready(client)  # 无凭据: 打基础全走 stub/heuristic
-    await _played_ready(client, sid)
+    await _played_ready(client, sid, monkeypatch)
     await _finish(client, sid)
     report = await _report(client, sid, run_copy_job=False)
 
@@ -377,13 +407,13 @@ async def test_a_briefing_with_skips_is_worded_as_finished_not_as_failed(
     """
     course_root()
     all_passed = await _ready(client)
-    await _played_ready(client, all_passed)
+    await _played_ready(client, all_passed, monkeypatch)
     await _finish(client, all_passed)
     clean = await _report(client, all_passed, run_copy_job=False)
 
     skipped_sid = await _open(client)
     await _pass_briefing(client, skipped_sid, skip_steps=("f6",))
-    await _played_ready(client, skipped_sid)
+    await _played_ready(client, skipped_sid, monkeypatch)
     await _finish(client, skipped_sid)
     with_skip = await _report(client, skipped_sid, run_copy_job=False)
 
@@ -411,7 +441,7 @@ async def test_finish_mission_dispatches_exactly_one_copy_job(
     """
     spawned = _record_spawns(monkeypatch)
     sid = await _ready(client)
-    await _played_ready(client, sid)
+    await _played_ready(client, sid, monkeypatch)
 
     await _finish(client, sid)
     assert spawned.calls == [sid], "收工没派文案作业 (或派给了别的会话)"
@@ -732,7 +762,7 @@ async def test_review_status_is_visible_on_get_at_every_stage(
 
     course_root()
     sid = await _ready(client)
-    await _played_ready(client, sid)
+    await _played_ready(client, sid, monkeypatch)
     active = await _snapshot(client, sid)
     assert active["review_status"] is None and active["review"] is None
 
@@ -994,26 +1024,27 @@ async def test_the_auto_finish_at_max_turns_is_async_too(
 
     它以前是结构性超时 (23s 的语音轮 + 一次总评 = 43s > 30s), 而"聊到轮次上限自然收工"恰好
     是每日练习结束最常出现的形状; 压预算救不了 (压到 7s 以下等于总评每次都退成模板), 所以
-    只能整段移出请求。脚本形状值得留意: 前几条**即时**给合法判定 (否则连判分那一问都会睡),
-    最后一条挂死 = 任何"顺手再问一次总评"的实现都会睡在那里, 于是墙钟与调用次数同时露馅。
+    只能整段移出请求。脚本形状值得留意 (§A/D1 之后每轮只有**台词**那一次调用): 前几条即时
+    给合法台词, 最后一条挂死 = 任何"顺手再问一次 LLM (判分/总评)"的实现都会睡在那里,
+    于是墙钟与调用次数同时露馅。
     """
     course_root(max_turns=4)
     sid = await _ready(client)
     fake = install_slow_llm(
         monkeypatch,
         [
-            (0.0, mission_json(done=[("t1", "说了点单")])),
-            (0.0, mission_json(done=[("t2", "问了价格")])),
-            (0.0, mission_json(reply="Almost there, what else?", done=[])),
-            (0.0, mission_json(reply="Nice, anything else?", done=[])),
-            (HANG_S, ""),  # 第 5 次调用只会是"顺手再问一次总评"的实现撞上来的那堵墙
+            (0.0, generation_json(reply="Small or medium?")),
+            (0.0, generation_json(reply="Anything to eat?")),
+            (0.0, generation_json(reply="Almost there, what else?")),
+            (0.0, generation_json(reply="Nice, anything else?")),
+            (HANG_S, ""),  # 第 5 次调用只会是"顺手再问一次"的实现撞上来的那堵墙
         ],
     )
     for index in range(3):
         res = await _mission(client, sid, {"text": f"turn number {index + 1} content"})
         assert res.status_code == 200, res.text
         assert res.json()["auto_finished"] is False and res.json()["review"] is None
-    assert fake.calls == 3, "每轮一次判定调用 (合法 JSON, 不回喂重试)"
+    assert fake.calls == 3, "每轮一次台词调用 (合法 JSON, 不回喂重试)"
 
     spawned = _record_spawns(monkeypatch)
     started = time.monotonic()
@@ -1022,16 +1053,21 @@ async def test_the_auto_finish_at_max_turns_is_async_too(
     assert res.status_code == 200, res.text
     body = res.json()
 
-    assert elapsed < 3.0, f"自动收工那一轮又去等总评了 (实际 {elapsed:.1f}s)"
-    # 3 次已在前面 + 本轮判分 1 次 = 4。第 5 次调用只可能是"请求里顺手再问一次总评"。
+    assert elapsed < 3.0, f"自动收工那一轮又去等总评/判分了 (实际 {elapsed:.1f}s)"
+    # 3 次已在前面 + 本轮台词 1 次 = 4。第 5 次调用只可能是"请求里顺手再来一次"。
     assert fake.calls == 4, "请求里多出的那次 LLM 调用就是学员报的超时"
     assert (body["stage"], body["status"]) == ("review", "completed")
     assert body["auto_finished"] is True and body["finished"] is True
     assert body["review_status"] == "generating"
+    assert body["grading_status"] == "pending"  # §A3: 判分作业刚派生, 还没跑
     report = body["review"]
     assert report is not None and report["auto_finished"] is True
     assert report["turn_count"] == 4 and report["max_turns"] == 4
-    assert report["overall"] == pytest.approx(68.0)  # 判分给过的 66/70 就在工作响应里
+    # §A3 的诚实面: 收工那一刻判分还在后台, 所以这一轮**没有可信分数证据** ——
+    # 逐轮 ``grading`` 态就是给客户端的显式"未评"标记, 而报告数值是收工那一刻的快照,
+    # 作业晚到也**不会**回头改写它 (§P6 "数值一次写定" 仍在)。
+    assert report["overall"] is None and report["dims"]["grammar"] is None
+    assert report["evidence_note_cn"]  # 明说"本场没有可信评分证据", 不是画个破折号
     assert report["source"] == "heuristic" and report["highlights"]
     assert spawned.calls == [sid], "自动收工没派文案作业"
 

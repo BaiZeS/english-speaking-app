@@ -70,9 +70,36 @@ async def test_polish_returns_original_vs_polished_with_explanation(
         "original": "He go to meeting yesterday.",
         "polished": "He went to the meeting yesterday.",
         "explanation_cn": "过去时 went, 且 meeting 前要加 the。",
+        # D4 双语: 模型没给这项就诚实地是空串 (客户端那一行不渲染), 不是 null。
+        "polished_cn": "",
     }
     assert body["source"] == "llm" and body["llm_source"] == "qwen3.8-max"
     assert fake.requests[0]["model"] == "qwen3.8-max"  # 未给 model_id -> 服务端默认
+
+
+@pytest.mark.asyncio
+async def test_polish_carries_the_bilingual_line_when_the_model_gives_one(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D4: 润色卡的中文行来自 ``polished_cn`` (旧模型不给就是 "", 客户端不渲染)."""
+    install_llm(
+        monkeypatch,
+        [
+            json.dumps(
+                {
+                    "polished": "He went to the meeting yesterday.",
+                    "explanation_cn": "过去时 went。",
+                    "polished_cn": "他昨天去了会议。",
+                },
+                ensure_ascii=False,
+            )
+        ],
+    )
+    body = (
+        await client.post("/api/v1/polish", json={"text": "He go to meeting yesterday."})
+    ).json()
+    assert body["polish"]["polished_cn"] == "他昨天去了会议。"
+    assert body["polish"]["explanation_cn"] == "过去时 went。"
 
 
 @pytest.mark.asyncio

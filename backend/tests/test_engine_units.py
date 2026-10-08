@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +26,7 @@ from app.services import llm_provider
 from app.services import mission_engine as me
 from app.services.users import lookup_user
 from tests.test_drill_grader import FakeIAT, install_llm
+from tests.test_mission import generation_json
 from tests.test_scene_store import make_course_dict
 
 
@@ -40,9 +40,17 @@ def _reset_llm_provider() -> Iterator[None]:
 # ============================================================ mission_engine 单元
 
 
-def test_mission_judgement_rejects_blank_reply() -> None:
-    with pytest.raises(ValidationError):
-        me.MissionTurnJudgement.model_validate({"reply": "   "})
+def test_turn_generation_accepts_partial_payload() -> None:
+    """§A1: ``TurnGeneration`` 五个字段都可缺省 (宽容解析), 但**没有** ``reply`` 由调用点收口.
+
+    旧 ``MissionTurnJudgement`` 那条"reply 非空"的校验搬走了: 判分侧不再产台词, 而台词侧
+    的空 ``reply`` 在 :func:`me.generate_turn` 里被当成"拿不到台词" -> ``LlmUnavailableError``
+    -> 端点 503 (D5), 所以那条规矩在**调用点**而不是 schema (schema 宽容是 `_judge` 回喂
+    重试的前提)。
+    """
+    assert me.TurnGeneration.model_validate({}).reply == ""
+    blank = me.MissionTurnJudgement.model_validate({"polish": None})
+    assert blank.reply == "" and blank.task_progress == []  # 判分侧不产台词也能过校验
 
 
 def test_all_required_done_semantics() -> None:
@@ -73,7 +81,8 @@ def test_merge_task_progress_edge_cases() -> None:
     assert len(newly) == 1 and newly[0]["evidence"] == evidence
 
 
-def test_fallback_turn_skips_tasks_without_hint_en() -> None:
+def test_heuristic_task_progress_skips_tasks_without_hint_en() -> None:
+    """快判 (§A3「快判先顶」): 没有示范句的任务直接跳过 (词面口径宁缺勿滥)."""
     course_payload = make_course_dict()
     from app.models.course import SceneCourse
 
@@ -81,31 +90,41 @@ def test_fallback_turn_skips_tasks_without_hint_en() -> None:
     state = me.initial_task_states(course.mission.tasks)
     # 第一个任务没 hint_en -> 词面口径直接跳过它; 有示范句的任务正常判定
     state[0]["hint_en"] = ""
-    judgement, source, llm = me.fallback_turn(
-        course, 1, "How much is that?", state, me.LlmUnavailableError("x", not_configured=True)
+    progress = me.heuristic_task_progress("How much is that?", state)
+    assert [item.id for item in progress] == ["t2"]  # t1 无示范句被跳过
+    assert all(item.done for item in progress)
+    assert me.heuristic_task_progress("totally unrelated", state) == []
+
+
+def test_polish_schema_carries_the_bilingual_line() -> None:
+    """D4: ``Polish`` 的 ``polished_cn`` 默认空串 (add-only), 给了就原样带出来."""
+    bare = me.Polish(original="Bad.", polished="Better.")
+    assert bare.polished_cn == ""
+    full = me.Polish(
+        original="Bad.", polished="Better.", explanation_cn="x", polished_cn="好一点。"
     )
-    assert source == "heuristic" and llm == "stub"
-    assert judgement.reply == course.mission.exchanges[1].a  # 开场白不重播
-    assert [p.id for p in judgement.task_progress] == ["t2"]  # t1 无示范句被跳过
+    assert full.polished_cn == "好一点。"
 
 
-def test_coerce_score_branches() -> None:
-    assert me.coerce_score(None) is None
-    assert me.coerce_score(True) is None
-    assert me.coerce_score("abc") is None
-    assert me.coerce_score(-1) is None
-    assert me.coerce_score(101) is None
-    assert me.coerce_score("88.88") == pytest.approx(88.9)
-    assert me.coerce_score(70) == 70.0
+def test_task_views_truncates_an_overlong_hint_cn() -> None:
+    """T2 遗留 Minor: 库内超长的 ``hint_cn`` 先截到 300 再进视图.
 
-
-def test_coerce_polish_branches() -> None:
-    assert me.coerce_polish(None) is None
-    assert me.coerce_polish("not-a-dict") is None
-    assert me.coerce_polish({"polished": "  "}) is None
-    assert me.coerce_polish({"polished": "Better."}) is not None
-    ok = me.coerce_polish({"polished": "Better.", "original": "Bad.", "explanation_cn": "x"})
-    assert ok is not None and ok.original == "Bad."
+    视图上限是 300: 不截的话 pydantic 校验直接把 checklist/提示卡打成 500 —— 事故形状是
+    "某门课的语料长了一行, 学员整页打不开"。
+    """
+    views = me.task_views(
+        [
+            {
+                "id": "t1",
+                "desc_cn": "点单",
+                "hint_cn": "很长的中文提示" * 100,
+                "required": True,
+                "done": False,
+            }
+        ]
+    )
+    assert len(views[0].hint_cn) <= 300
+    assert views[0].hint_cn.startswith("很长的中文提示")
 
 
 def test_deterministic_review_templates_for_weak_dims() -> None:
@@ -393,25 +412,46 @@ async def test_polish_collect_unknown_user_id_is_404(
 # ============================================================ dialogue 容错解析 / 生成
 
 
-def test_parse_llm_json_branches() -> None:
-    assert dialogue._parse_llm_json('{"reply": "a", "suggestion": "b"}')["reply"] == "a"
-    fenced = dialogue._parse_llm_json('```json\n{"reply": "fenced"}\n```')
-    assert fenced["reply"] == "fenced"
-    prose = dialogue._parse_llm_json("How about coffee?\nSure, thanks.")
-    assert prose["reply"] == "How about coffee?" and prose["suggestion"] == "Sure, thanks."
-    one_line = dialogue._parse_llm_json("just one line")
-    assert one_line["reply"] == "just one line" and one_line["suggestion"] == ""
-    array = dialogue._parse_llm_json("[1, 2]")
-    assert array["reply"] == "[1, 2]"
-    obj_no_reply = dialogue._parse_llm_json('{"suggestion": "x"}')
-    assert obj_no_reply["reply"]  # 回落取首行, 不空着
-    assert obj_no_reply["suggestion"] == "x"
-    empty_obj = dialogue._parse_llm_json('{"reply": ""}')
-    assert empty_obj["reply"]  # 空 reply 也兜出内容 (取原始首行), 绝不把空串当回复
+@pytest.mark.asyncio
+async def test_generate_turn_rejects_monolingual_reply_cn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D5/§A4: 中文侧出现 ASCII 字母 -> 那一处置空 (宁可缺行, 不机翻占位).
+
+    实现在 ``mission_engine.generate_turn`` 里 (两个页面共用的那一次调用), 所以这条钉的是
+    **生成侧**而不是某个端点: 坏输出进来, 五字段里的三处中文有一处不可信就变 ``""``,
+    台词/示范本身不受影响。
+    """
+    install_llm(
+        monkeypatch,
+        # 直接喂一条 message, prompt 里没有形状标记 -> 走 ``replies`` 那条旧脚本口径。
+        replies=[
+            json.dumps(
+                {
+                    "reply": "What did you do?",
+                    "reply_cn": "What did you do?",  # 模型把中文写成了英文
+                    "suggestion": "I went for a walk.",
+                    "suggestion_cn": "我去散步了。",
+                    "learner_cn": "中英混排 bad",  # 混排也不可信
+                },
+                ensure_ascii=False,
+            )
+        ],
+    )
+    generation, _model = await me.generate_turn([me.LlmMessage(role="user", content="hi")])
+    assert generation.reply == "What did you do?"  # 英文不受影响
+    assert generation.reply_cn == ""
+    assert generation.suggestion_cn == "我去散步了。"
+    assert generation.learner_cn == ""
 
 
-def test_scene_context_skips_empty_items() -> None:
-    text = dialogue._scene_context(
+def test_scene_messages_skip_empty_turns_and_keep_roles() -> None:
+    """§A4: 原生 messages 数组 (旧 ``_scene_context`` 的那段字符串拼接已删).
+
+    空回合 (待回填的末尾 user 回合) 不进 messages —— 它是"这句话还没转写好"的占位,
+    喂给模型就是噪声; role 原样交替传下去。
+    """
+    messages = dialogue._scene_messages(
         "daily_conversation",
         [
             {"role": "assistant", "text": "Hi"},
@@ -419,8 +459,12 @@ def test_scene_context_skips_empty_items() -> None:
             {"role": "user", "text": "Hello!"},
         ],
     )
-    assert "Coach: Hi" in text and "Learner: Hello!" in text
-    assert "Learner: \n" not in text
+    assert messages[0].role == "system"
+    # 三条: system + assistant + (末尾那条 user, 指令并进了学员刚说的那句里)
+    assert [m.role for m in messages] == ["system", "assistant", "user"]
+    assert messages[1].content == "Hi"
+    # 末尾那条是**并进最后一条 user** 的指令 (严格交替, 不给网关留连续同 role 的坑)
+    assert messages[-1].role == "user" and "Hello!" in messages[-1].content
 
 
 @pytest.mark.asyncio
@@ -438,9 +482,14 @@ async def test_generate_strips_quoted_opening_and_degrades(
 
 
 @pytest.mark.asyncio
-async def test_turn_stub_path_second_user_turn_text(
+async def test_turn_without_credentials_is_503_not_a_recycled_line(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """§A4/D5 取代旧断言 (那条钉的是写死的 ``"Thanks for sharing…"``).
+
+    旧行为把"模型没回话"渲染成一句与学员无关的台词, 而且第 3 轮起永远是同一句 —— 现在
+    同一条路是 503 (端点明说不可用), 客户端不会看到伪造的气泡。
+    """
     monkeypatch.setattr(dialogue, "_iat", FakeIAT(None))
     history = [
         {"role": "user", "text": "first"},
@@ -450,10 +499,8 @@ async def test_turn_stub_path_second_user_turn_text(
     res = await client.post(
         "/api/v1/dialogue/turn", json={"scene_id": "daily_conversation", "history": history}
     )
-    body = res.json()
-    assert body["status"] == "stub"
-    assert body["reply_text"].startswith("Thanks for sharing")
-    assert body["polish"] is None and body["grammar_score"] is None
+    assert res.status_code == 503
+    assert res.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -470,7 +517,7 @@ async def test_turn_with_identity_and_audio_persists_anchored_evidence(
 
     audio = base64.b64encode(b"\x00\x01" * 3200).decode()
     monkeypatch.setattr(dialogue, "_iat", FakeIAT("I very like it."))
-    install_llm(monkeypatch, [json.dumps({"reply": "Cool", "suggestion": "I really like it"})])
+    install_llm(monkeypatch, generation=[generation_json()])
     for field in ("xunfei_app_id", "xunfei_api_key", "xunfei_api_secret"):
         monkeypatch.setattr(settings, field, "test")
     from tests.test_drill_grader import FakeASR
@@ -490,7 +537,7 @@ async def test_turn_with_identity_and_audio_persists_anchored_evidence(
     assert body["recognized_text"] == "I very like it."
     dims = {e["dimension"]: e for e in body["ability_events"]}
     assert dims["pronunciation"]["ise_ref_mode"] == "transcript_anchored"
-    assert "grammar" not in dims  # 旧形状 JSON 没带判分 -> 没有语法事件 (不是 0 分)
+    assert "grammar" not in dims  # 判分已搬出这条请求 (§A4) -> 没有语法事件 (不是 0 分)
     events = (await db.execute(select(AbilityEvent))).scalars().all()
     assert {(e.dimension, e.source_kind, e.weight) for e in events} >= {
         ("pronunciation", "xunfei", 1.0),

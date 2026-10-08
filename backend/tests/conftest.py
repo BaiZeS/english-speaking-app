@@ -79,6 +79,19 @@ def _no_detached_review_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_detached_grading_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """实战轮判分作业 (§A3) 同理不真的 ``create_task`` 派生: 口径与上面那个替身完全一致.
+
+    * 断言"派生了一个判分作业"的用例: 自己 monkeypatch 记调用;
+    * 断言判分终态的用例: 直接 ``await course_sessions.run_mission_grading_job(sid)``
+      —— 这也是 ``tests/test_grading_async.py`` 的手法。
+    """
+    from app.api.v1 import course_sessions
+
+    monkeypatch.setattr(course_sessions, "spawn_mission_grading_job", lambda session_id: False)
+
+
+@pytest.fixture(autouse=True)
 def _no_detached_judge_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """判级 (202) 不真的 ``create_task`` 派作业: 口径同上面的总评作业替身.
 

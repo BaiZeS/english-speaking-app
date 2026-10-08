@@ -1,23 +1,21 @@
-"""/dialogue/turn 的 v2.0 扩展测试 (§5.5-4 润色并入单次调用 + §5.6 证据 + 魔法字符串).
+"""/dialogue/turn 的判分面 (§A4: 判分搬出这条请求; §5.6 证据 + D2 门控).
 
-旧断言 (``test_dialogue_stub`` / ``test_llm_endpoints`` / ``test_dialogue_iat``)
-一条不动也得过 —— 这里只钉**新增**行为:
+历史: 这条路由曾用**一次**调用同时拿台词 + 润色 + 语法/词汇分 (§5.5-4 的"并入单次调用")。
+§A(D1) 拆调用之后它只剩台词那一半 (:class:`TurnGeneration` 五字段), 判分**不在请求里**:
+学员要润色走现成的 ``POST /polish`` (纯文本工具, 不进画像)。于是本文件钉四件事:
 
-* 单次 LLM 调用同时回 ``polish`` + 语法/词汇分 (mock 返回扩展 JSON);
-  模型只回 ``{reply, suggestion}`` (旧 prompt 形状) 时新字段为 null 但不报错;
-* 带身份的轮次把证据写进 §5.6 管线: 未配置讯飞 -> 没有发音证据; 配了真 ISE ->
-  ``transcript_anchored`` 一条不少; **客户端自选模型出的分不进画像** (判分口径
-  恒为服务端默认模型), 润色对照另记 ``annotated_diffs``;
-* 不带身份的轮次 = 纯旧行为 (零落库, 但 UI 字段照给);
-* history 回填按**结构** (末尾 user 回合) 而不是魔法字面量: 新客户端空串标记
-  与旧客户端占位文本都会被替换; 用户真打过字的末尾回合不动。
+* 响应形状: 判分字段诚实缺席 (``polish``/分数 null), 而不是塞一份没人判的分;
+* 身份管道真的接通: 带 ``device_id`` 才落库, 不带就零副作用 (旧客户端行为不变);
+* **D2 门控仍然成立**: 客户端自选模型出的分不进画像 —— 今天没有生产者会往自由对话传分,
+  所以这条直接调 :func:`dialogue._persist_turn_evidence` 断 (规矩不该因为没人用就消失);
+* history 回填按**结构** (末尾 user 回合) 而不是魔法字面量。
 """
 
 from __future__ import annotations
 
 import base64
-import json
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -31,6 +29,7 @@ from app.models.db import AbilityEvent, AbilityProfile, AnnotatedDiff, User
 from app.services import llm_provider
 from app.services import mission_engine as me
 from tests.test_drill_grader import FakeASR, install_llm
+from tests.test_mission import generation_json
 
 DEV = "dev-dialogue-polish"
 
@@ -54,138 +53,45 @@ def turn_payload(**over: object) -> dict[str, object]:
     return payload
 
 
-def rich_reply(
-    grammar: float | None = 61.0, vocabulary: float | None = 66.0, polished: str | None = None
-) -> str:
-    polish = None
-    if polished is not None:
-        polish = {
-            "original": "I go to park yesterday.",
-            "polished": polished,
-            "explanation_cn": "昨天发生过的事要用过去时 went。",
-        }
-    return json.dumps(
-        {
-            "reply": "A park? That sounds relaxing!",
-            "suggestion": "I went to the park with my family.",
-            "polish": polish,
-            "grammar_score": grammar,
-            "vocabulary_score": vocabulary,
-        },
-        ensure_ascii=False,
-    )
-
-
-# ============================================================ 响应扩展 (add-only)
+# ============================================================ 响应形状 (add-only)
 
 
 @pytest.mark.asyncio
-async def test_turn_adds_polish_and_scores_in_one_call(
+async def test_turn_response_carries_no_grading_any_more(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = install_llm(
-        monkeypatch,
-        [rich_reply(polished="I went to the park yesterday.")],
-    )
+    """§A4: 一次调用只出台词 + 双语; 判分字段保留但**诚实缺席** (值由 /polish 或后续补)。
+
+    旧断言 ("一次调用拿到 polish + 两个分") 是 §5.5-4 的口径, 已被实测推翻 (D1): 台词的墙
+    14s 装不下判分, 硬塞就是生产那 7/8 轮降级。这条用例现在钉的是**反面** —— 那几个字段
+    不许再有人偷偷填上。
+    """
+    fake = install_llm(monkeypatch, generation=[generation_json()])
     res = await client.post("/api/v1/dialogue/turn", json=turn_payload())
     body = res.json()
-    assert len(fake.requests) == 1  # 一次调用拿到全部 (§5.5-4)
+    assert len(fake.requests) == 1  # 请求里**只有**这一次调用
     assert res.status_code == 200 and body["status"] == "ready"
-    assert body["reply_text"] == "A park? That sounds relaxing!"
-    assert body["suggested_reply"].startswith("I went")
-    assert body["polish"]["polished"] == "I went to the park yesterday."
-    assert body["polish"]["original"] == "I go to park yesterday."
-    assert body["grammar_score"] == 61.0 and body["vocabulary_score"] == 66.0
+    assert body["reply_text"] and body["suggested_reply"]
+    assert body["polish"] is None
+    assert body["grammar_score"] is None and body["vocabulary_score"] is None
     assert body["llm_source"] == "qwen3.8-max"
-    # 未带身份 = 不落库 (旧客户端零副作用)
-    assert body["ability_events"] == []
-
-
-@pytest.mark.asyncio
-async def test_turn_legacy_shaped_reply_still_ready_with_null_extras(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """旧形状 JSON ({reply, suggestion}) 不报错: 新字段 null, status 仍 ready."""
-    install_llm(monkeypatch, [json.dumps({"reply": "Cool!", "suggestion": "Nice day."})])
-    body = (await client.post("/api/v1/dialogue/turn", json=turn_payload())).json()
-    assert body["status"] == "ready" and body["reply_text"] == "Cool!"
-    assert body["polish"] is None and body["grammar_score"] is None
-    assert body["llm_source"] == "qwen3.8-max"
-
-
-@pytest.mark.asyncio
-async def test_out_of_range_scores_are_dropped_not_clamped(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    install_llm(monkeypatch, [rich_reply(grammar=250.0, vocabulary=None)])
-    body = (await client.post("/api/v1/dialogue/turn", json=turn_payload())).json()
-    assert body["grammar_score"] is None  # 越界分不进画像也不当真, 直接视为无证据
-    assert body["vocabulary_score"] is None
-
-
-# ============================================================ 画像写侧
-
-
-@pytest.mark.asyncio
-async def test_turn_with_identity_persists_grammar_vocabulary_events(
-    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    user = User(device_id=DEV)
-    db.add(user)
-    await db.commit()
-    install_llm(monkeypatch, [rich_reply(polished="I went to the park yesterday.")])
-    body = (await client.post("/api/v1/dialogue/turn", json=turn_payload(device_id=DEV))).json()
-    assert {e["dimension"] for e in body["ability_events"]} == {"grammar", "vocabulary"}
-    rows = (await db.execute(select(AbilityEvent))).scalars().all()
-    assert {(r.dimension, r.source_kind, r.weight) for r in rows} == {
-        ("grammar", "llm", 1.0),
-        ("vocabulary", "llm", 1.0),
-    }
-    profile = (await db.execute(select(AbilityProfile))).scalar_one()
-    assert profile.grammar == pytest.approx(61.0) and profile.vocabulary == pytest.approx(66.0)
-    assert profile.cefr_level is None
-    diffs = (await db.execute(select(AnnotatedDiff))).scalars().all()
-    assert [(d.origin, d.polished) for d in diffs] == [
-        ("dialogue", "I went to the park yesterday.")
-    ]
 
 
 @pytest.mark.asyncio
 async def test_turn_without_identity_writes_nothing(
     client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    install_llm(monkeypatch, [rich_reply(polished="I went to the park yesterday.")])
+    install_llm(monkeypatch, generation=[generation_json()])
     await client.post("/api/v1/dialogue/turn", json=turn_payload())
     assert (await db.execute(select(AbilityEvent))).scalars().all() == []
     assert (await db.execute(select(AnnotatedDiff))).scalars().all() == []
 
 
 @pytest.mark.asyncio
-async def test_client_chosen_model_scores_stay_out_of_the_profile(
-    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """客户端自选模型只影响人设文本; 画像判分口径恒为服务端默认 (T3 先例)."""
-    user = User(device_id=DEV)
-    db.add(user)
-    await db.commit()
-    install_llm(monkeypatch, [rich_reply()])  # default = qwen3.8-max (install_llm 设的)
-    body = (
-        await client.post(
-            "/api/v1/dialogue/turn", json=turn_payload(model_id="qwen-turbo", device_id=DEV)
-        )
-    ).json()
-    assert body["model_id"] == "qwen-turbo"  # 文本照旧跟随客户端
-    assert body["grammar_score"] == 61.0  # 分也回给 UI
-    assert body["ability_events"] == []  # 但不进画像
-    assert (await db.execute(select(AbilityEvent))).scalars().all() == []
-    assert (await db.execute(select(AbilityProfile))).scalars().all() == []
-
-
-@pytest.mark.asyncio
 async def test_unknown_user_id_on_turn_is_404(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    install_llm(monkeypatch, [rich_reply()])
+    install_llm(monkeypatch, generation=[generation_json()])
     res = await client.post(
         "/api/v1/dialogue/turn",
         json=turn_payload(user_id="00000000-0000-0000-0000-000000000000"),
@@ -193,44 +99,137 @@ async def test_unknown_user_id_on_turn_is_404(
     assert res.status_code == 404 and res.json()["error"]["code"] == "USER_NOT_FOUND"
 
 
-@pytest.mark.asyncio
-async def test_anchored_ise_feeds_pronunciation_for_free_dialogue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """讯飞配齐 + 有音频有转写 -> 发音证据 (transcript_anchored) 进事件列表."""
-    audio = b"\x00\x01" * 3200
+# ============================================================ 画像写侧 (D2 门控)
 
-    async def fake_transcribe(_pcm: bytes) -> str | None:
+
+@pytest.mark.asyncio
+async def test_client_chosen_model_scores_stay_out_of_the_profile(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """客户端自选模型≠服务端默认时**不污染**画像 (T3 先例 / D2).
+
+    §A4 之后这条路由不再产分, 所以门控由调用点转为**单元**钉法: 规矩就是规矩 ——
+    谁将来把分数接回自由对话, 都必须走这道门。
+    """
+    user = User(device_id=DEV)
+    db.add(user)
+    await db.commit()
+    install_llm(monkeypatch, generation=[generation_json()])  # default = qwen3.8-max
+    events = await dialogue._persist_turn_evidence(
+        db,
+        user=user,
+        scene_id="daily_conversation",
+        anchored=None,
+        model="qwen-turbo",  # 客户端选的, 不是服务端默认
+        grammar=61.0,
+        vocabulary=66.0,
+    )
+    assert events == []
+    assert (await db.execute(select(AbilityEvent))).scalars().all() == []
+    assert (await db.execute(select(AbilityProfile))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_server_default_model_scores_enter_the_profile(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同一道门的**正面**: 走的确实是服务端默认模型时分才进画像 (D2 的另一半)."""
+    user = User(device_id=DEV + "-2")
+    db.add(user)
+    await db.commit()
+    install_llm(monkeypatch, generation=[generation_json()])
+    events = await dialogue._persist_turn_evidence(
+        db,
+        user=user,
+        scene_id="daily_conversation",
+        anchored=None,
+        model="qwen3.8-max",
+        grammar=61.0,
+        vocabulary=66.0,
+    )
+    assert {event.dimension for event in events} == {"grammar", "vocabulary"}
+    profile = (await db.execute(select(AbilityProfile))).scalar_one()
+    assert profile.grammar == pytest.approx(61.0) and profile.vocabulary == pytest.approx(66.0)
+
+
+@pytest.mark.asyncio
+async def test_turn_with_identity_and_ise_writes_anchored_evidence(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """身份 + 音频 + 讯飞配齐 -> 发音/流利两条 ``transcript_anchored`` 证据落库.
+
+    这是"自由对话从没往画像写过一笔"那件事的正面验收 (§4 第 5 条): ``device_id`` 一路
+    传到 :func:`dialogue._persist_turn_evidence`, 画像真的动了。
+    """
+    user = User(device_id=DEV + "-3")
+    db.add(user)
+    await db.commit()
+    install_llm(monkeypatch, generation=[generation_json()])
+
+    async def fake_transcribe(_pcm: bytes) -> str:
         return "I went to the park."
 
     class _Iat:
         transcribe = staticmethod(fake_transcribe)
 
     monkeypatch.setattr(dialogue, "_iat", _Iat())
-    sid_probe = await dialogue.turn(
+    for field in ("xunfei_app_id", "xunfei_api_key", "xunfei_api_secret"):
+        monkeypatch.setattr(settings, field, "test")
+    monkeypatch.setattr(me, "_ISE", FakeASR(scores=82.0))
+
+    body = (
+        await client.post(
+            "/api/v1/dialogue/turn",
+            json=turn_payload(
+                device_id=DEV + "-3",
+                history=[],
+                user_audio_b64=base64.b64encode(b"\x00\x01" * 3200).decode(),
+            ),
+        )
+    ).json()
+    assert body["recognized_text"] == "I went to the park."
+    dims = {event["dimension"] for event in body["ability_events"]}
+    assert dims == {"pronunciation", "fluency"}
+    rows = (await db.execute(select(AbilityEvent))).scalars().all()
+    assert {(row.dimension, row.source_kind, row.weight) for row in rows} == {
+        ("pronunciation", "xunfei", 1.0),
+        ("fluency", "xunfei", 1.0),
+    }
+    profile = (await db.execute(select(AbilityProfile))).scalar_one()
+    assert profile.pronunciation == pytest.approx(82.0)
+
+
+@pytest.mark.asyncio
+async def test_anchored_ise_dropped_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, db: AsyncSession
+) -> None:
+    """没配讯飞凭据: **不产**发音证据 (回声 95 不算数, §5.6 宁缺勿滥)."""
+    audio = b"\x00\x01" * 3200
+
+    async def fake_transcribe(_pcm: bytes) -> str:
+        return "I went to the park."
+
+    class _Iat:
+        transcribe = staticmethod(fake_transcribe)
+
+    monkeypatch.setattr(dialogue, "_iat", _Iat())
+    install_llm(monkeypatch, generation=[generation_json()])
+    user = User(device_id=DEV + "-4")
+    db.add(user)
+    await db.commit()
+    probe = await dialogue.turn(
         dialogue.DialogueTurnRequest(
             scene_id="daily_conversation",
             history=[],
             user_audio_b64=base64.b64encode(audio).decode(),
-        )
+            device_id=DEV + "-4",
+        ),
+        db=db,
     )
-    assert sid_probe.recognized_text == "I went to the park."
-    # 没配凭据: 不产发音证据 (回声 95 不算数)
-    assert [e for e in sid_probe.ability_events if e.dimension == "pronunciation"] == []
-
-    for field in ("xunfei_app_id", "xunfei_api_key", "xunfei_api_secret"):
-        monkeypatch.setattr(settings, field, "test")
-    monkeypatch.setattr(me, "_ISE", FakeASR(scores=82.0))
-    anchored = await me.anchored_pronunciation(audio, "I went to the park.")
-    assert anchored is not None and anchored.pronunciation == pytest.approx(82.0)
-    events = me.turn_ability_events(
-        me.MissionTurnJudgement(reply="r", grammar_score=None, vocabulary_score=None),
-        anchored,
-        score_source="heuristic",
-    )
-    dims = {(e.dimension, e.weight, e.ise_ref_mode) for e in events}
-    assert ("pronunciation", 1.0, "transcript_anchored") in dims
-    assert ("fluency", 1.0, None) in dims
+    assert probe.recognized_text == "I went to the park."
+    assert probe.ability_events == []
+    # helper 本身的口径: 没凭据 -> None (不喂 StubASR 的假分)
+    assert await me.anchored_pronunciation(audio, "I went to the park.") is None
 
 
 # ============================================================ 魔法字符串退役
@@ -257,3 +256,51 @@ def test_trailing_user_turn_replaced_by_structure_not_literal() -> None:
     # 没有转写 -> 原对象返回 (旧断言钉过的 identity)
     same: list[dict[str, str]] = [{"role": "user", "text": dialogue._PLACEHOLDER_USER_TEXT}]
     assert _apply_recognized_text(same, None) is same
+
+
+def test_shown_suggestions_are_capped_and_trimmed() -> None:
+    """§A4 add-only 字段的边界: ≤8 条、去空、单条截断 (别让它变成无界 prompt 注入面)."""
+    raw: list[Any] = [f"Sentence {index}." for index in range(12)]
+    raw[0] = "   "
+    kept = dialogue._shown_suggestions(raw)
+    assert len(kept) == 7  # 8 条上限里有一条是空的
+    assert kept[0] == "Sentence 1."
+    assert dialogue._shown_suggestions([""]) == []
+    assert len(dialogue._shown_suggestions(["x" * 500])[0]) <= dialogue._LINE_MAX_CHARS
+
+
+def test_repeat_block_lists_coach_lines_and_shown_suggestions() -> None:
+    """§A5: 反重复清单 = 历史里的 Coach 台词 + 客户端 echo 的已给参考句."""
+    history: list[dict[str, Any]] = [
+        {"role": "user", "text": "Hi"},
+        {"role": "assistant", "text": "How was your weekend?"},
+    ]
+    block = dialogue._repeat_block(history, ["I went to the park."])
+    assert "How was your weekend?" in block
+    assert "I went to the park." in block
+    assert dialogue._repeat_block([], []) == ""
+
+
+def test_bilingual_coercion_rejects_ascii() -> None:
+    """D5: 中文侧含 ASCII 字母 = 不可信 -> 置空; 纯中文照收 (不引入 re / CJK 白名单).
+
+    实现收口在 ``mission_engine.generate_turn`` 里 (那两个页面共用的那一次调用), 所以自由
+    对话与实战轮共用同一条纪律 —— 这条只断实现本身。
+    """
+    assert me.coerce_bilingual("你好呀") == "你好呀"
+    assert me.coerce_bilingual("   ") == ""
+    assert me.coerce_bilingual("Hello 你好") == ""
+    assert me.coerce_bilingual('{"reply_cn": "x"}') == ""
+
+
+def test_scene_messages_include_description_and_persona() -> None:
+    """§0 第二条缺陷: 旧 prompt 只给 ``scene.title`` —— 现在 description 也进 system."""
+    messages = dialogue._scene_messages("ordering_coffee", [], [])
+    system = messages[0]
+    assert system.role == "system"
+    scene = dialogue.get_scene("ordering_coffee")
+    assert scene.title in str(system.content)
+    assert scene.description in str(system.content)
+    # 末尾指令带着共用形状与禁重复要求 (走的是 mission_engine 的那一份常量)。
+    tail = str(messages[-1].content)
+    assert me.GENERATION_JSON_SHAPE in tail and "不得同义复写" in tail

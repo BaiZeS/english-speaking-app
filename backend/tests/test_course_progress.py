@@ -20,12 +20,13 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1 import course_sessions as cs
 from app.models.db import CourseProgressRow, PracticeSession
 from app.services import scene_store
 from app.services.llm_provider import get_llm_provider
 from tests.test_course_sessions import BRIEFING6, _open, _pass_briefing
 from tests.test_drill_grader import install_llm
-from tests.test_mission import _finish, _report, mission_json
+from tests.test_mission import _finish, _report, generation_json, mission_json
 from tests.test_scene_store import write_course
 
 DEV = "dev-session"  # 与 test_course_sessions 的 helper 共用身份 (_open/_pass_briefing 写死了它)
@@ -78,10 +79,12 @@ async def test_finish_mission_writes_course_progress(
     sid = await _open(client)
     await _pass_briefing(client, sid)
 
-    # 实战两轮 (t1/t2 打勾 -> cleared), 用 test_mission 的综合 JSON 脚本
+    # 实战两轮 (t1/t2 打勾 -> cleared), 用 test_mission 的两种形状脚本; 判分 (§A3) 在请求外,
+    # 报告数值要它落库, 所以每轮之后自己驱动一次作业。
     install_llm(
         monkeypatch,
-        [
+        generation=[generation_json(reply="A small coffee it is. Anything else?")],
+        grading=[
             mission_json(done=[("t1", "说了点单内容")]),
             mission_json(done=[("t2", "问了价格")]),
         ],
@@ -92,11 +95,13 @@ async def test_finish_mission_writes_course_progress(
         json={"device_id": DEV, "text": "A small coffee, please."},
     )
     assert first.status_code == 200, first.text
+    await cs.run_mission_grading_job(sid)
     second = await client.post(
         f"/api/v1/sessions/{sid}/mission", json={"device_id": DEV, "text": "How much is that?"}
     )
     assert second.status_code == 200
     assert second.json()["cleared"] is True
+    await cs.run_mission_grading_job(sid)
 
     await _finish(client, sid)
     # cleared/overall 都是确定性聚合, 202 的骨架里就有 —— 本用例关心的是
@@ -147,7 +152,8 @@ async def test_best_total_monotonic_across_sessions(
     """第二场低分 -> best_total 不回退; 第三场高分 -> 更新 (upsert 竞争语义)."""
     install_llm(
         monkeypatch,
-        [
+        generation=[generation_json(reply="A small coffee it is. Anything else?")],
+        grading=[
             mission_json(done=[("t1", "说了点单内容")]),
             mission_json(done=[("t2", "问了价格")]),
         ],
@@ -160,6 +166,7 @@ async def test_best_total_monotonic_across_sessions(
             json={"device_id": DEV, "text": "A small coffee, please."},
         )
         assert res.status_code == 200
+        await cs.run_mission_grading_job(sid)
     await _finish(client, sid)
     row = await _row(db)
     assert row is not None and row.best_total == pytest.approx(68.0)

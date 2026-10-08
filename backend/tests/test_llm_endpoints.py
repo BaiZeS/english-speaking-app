@@ -205,9 +205,14 @@ async def test_dialogue_turn_parses_llm_json_payload(
 
 
 @pytest.mark.asyncio
-async def test_dialogue_turn_degrades_to_stub_when_llm_raises(
+async def test_dialogue_turn_reports_503_when_llm_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """上游炸了 -> **503 TURN_GENERATION_UNAVAILABLE**, 不再返回 fabricated 气泡 (D5).
+
+    旧行为是 200 + ``status="stub"`` + 目录里的下一句/写死的那两句 —— 它不但冒充生成,
+    还让第 3 轮起永远是同一句 (§0 根因三)。现在明说不可用, 客户端按码表给中文文案。
+    """
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_base_url", "https://example.com/v1")
 
@@ -241,7 +246,6 @@ async def test_dialogue_turn_degrades_to_stub_when_llm_raises(
     }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/turn", json=payload)
-    data = r.json()
-    assert r.status_code == 200
-    assert data["status"] == "stub"
-    assert data["model_id"] is None
+    assert r.status_code == 503, r.text
+    assert r.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
+    assert "reply_text" not in r.json().get("error", {})

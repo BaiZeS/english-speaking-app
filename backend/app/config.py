@@ -75,7 +75,8 @@ class Settings(BaseSettings):
     # 关掉 Qwen3 系的隐藏思考 token (``extra_body={"enable_thinking": False}``)。
     # 实测 (scripts/smoke_split_latency.py, qwen3.8-flash): 同一条 prompt 开着思考
     # 4031ms/191 完成 token (其中 reasoning_tokens≈106), 关掉 1240-2405ms/69 token ——
-    # 生产 ``LLM_TURN_BUDGET_S=15`` 的墙钟有一半烧在学员看不到的推理上。
+    # 生产那条台词路 (§A/D1: 墙钟 ``drill_grader.GEN_TURN_BUDGET_S=14``, 旧形状 15)
+    # 有一半烧在学员看不到的推理上。
     # **默认 False**: 未知 body 参数有的网关直接 400 (同网关 ``thinking_budget=0``
     # 实测就回 ``invalid_parameter_error``), 所以按部署显式打开; 本次对话链路依赖它。
     llm_disable_thinking: bool = Field(default=False)

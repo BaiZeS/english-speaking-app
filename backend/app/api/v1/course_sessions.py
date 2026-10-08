@@ -15,7 +15,7 @@ finish-mission (ReviewReport) 与 §5.6 画像落库在 P3 (T4)。
 ``POST /sessions``                开场: 建会话 + 课程快照 + 打基础清单 (201)
 ``POST /sessions/{id}/step``      逐步评分并推进 (4 种题型 -> DrillGrade)
 ``POST /sessions/{id}/skip-step`` 跳过一步 (每场最多 2 次, 第 3 次 409)
-``POST /sessions/{id}/mission``   实战对话每轮 (1 次综合 LLM 调用, §5.5-2)
+``POST /sessions/{id}/mission``   实战对话每轮 (1 次**台词** LLM 调用; 判分进后台作业, §A3)
 ``POST /sessions/{id}/hint``      要提示 (不消耗判定, 标记 costs_score, 不调 LLM)
 ``POST /sessions/{id}/finish-mission`` 主动收工 -> ReviewReport (§5.3)
 ``GET  /sessions/{id}``           崩溃恢复快照 (含 mission / review 视图)
@@ -43,7 +43,7 @@ import asyncio
 import copy
 import time
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
 from fastapi import APIRouter, Depends, Query
 from loguru import logger
@@ -64,11 +64,14 @@ from app.services.ability_engine import record_step_evidence
 from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
+    GRADING_JOB_BUDGET_S,
     PASS_SCORE,
     REVIEW_COPY_JOB_BUDGET_S,
     SKIP_SOURCE,
     AbilityEvidence,
     DrillGrade,
+    GradeSource,
+    LlmUnavailableError,
     ability_evidence,
     grade_step,
     transcribe_audio,
@@ -79,18 +82,18 @@ router = APIRouter(tags=["course-sessions"])
 
 # ====== 语音轮次硬预算 (移动端 OkHttp readTimeout=30s, NetworkModule.kt) ======
 # 冒烟实测 (scripts/smoke_xunfei_ise.py, 2026-09-08): 快速节奏下 ISE/IAT 单轮
-# 正常 ~2-3s (18s 音频), 但引擎慢/挂死时无上限会拖穿整个 HTTP 请求 ——
-# ISE (= 转写锚定发音证据) 与 LLM 判分都只依赖本句 transcript, 彼此无关,
-# 并行后加和封顶: iat(8) + max(ise 8, llm 15) < 30; 超时/失败 = 诚实降级
-# (证据缺位, 绝不冒充)。
+# 正常 ~2-3s (18s 音频), 但引擎慢/挂死时无上限会拖穿整个 HTTP 请求。
 #
-# 同一条契约的**另一半** —— 文本步判分 / 总评文案 / 润色 / 测评判级四条 LLM 路径的
-# ``*_BUDGET_S`` 与最坏求和表 —— 写在 ``app/services/drill_grader.py`` 的硬预算块
-# (服务层拿不到本文件的常量, 反向 import 会成环)。改任何一边都要重算求和;
-# 求和由 tests/test_latency_budget.py 钉死, 不靠人记。
+# §A(D1) 拆调用之后本请求的求和: ``IAT 8 + max(ISE 8, GEN 14) = 22 < 25``。
+# 台词的墙 (``drill_grader.GEN_TURN_BUDGET_S``) 独占那 14s: 润色/语法/词汇/任务判定
+# 搬进了 :func:`run_mission_grading_job`, 总评文案早在 §P6 就搬走了 —— 三条路径不再
+# 和台词抢同一个墙钟 (旧形状 700 token 合并 JSON 实测 p50 22.5s, 生产 8 轮 7 轮撞顶)。
+#
+# ISE 与生成**并行**且天然短于生成 (8 < 14), 所以它不吃额外的墙钟 —— 音频只存在于
+# 这一次请求里 (没有任何列/表存音频, 补一个就是本计划的越界), 作业跑不了 ISE,
+# 逐词分因此在请求内就落到 ``turn_entry``/``annotated_json`` (见 §A3 的说明)。
 ISE_TURN_BUDGET_S = 8.0
 IAT_TURN_BUDGET_S = 8.0
-LLM_TURN_BUDGET_S = 15.0
 
 # ====== 总评文案的后台作业 (§P6: 收工改 202 + review_status 轮询) ======
 #
@@ -111,11 +114,23 @@ LLM_TURN_BUDGET_S = 15.0
 # 一次 LLM 还多 bump 一次 revision。反过来 90s 仍是"当晚打开复盘页就看得到总评"的量级。
 REVIEW_REDISPATCH_AFTER_S = REVIEW_COPY_JOB_BUDGET_S * 2
 
+#: 同一形状的**另一半**: 实战轮判分作业的重启水位 (见 :func:`resume_stranded_grading`)。
+#: 与总评那对完全同构: ``pending`` 态要求老过 **2 倍作业预算** (一个还活着的作业可能跑满
+#: 一整个周期), ``failed`` 态一个周期之后就能重试 (§A3「判分失败 = 没有润色」, 学员不该
+#: 等下一次重启才看到润色)。
+GRADING_REDISPATCH_AFTER_S = GRADING_JOB_BUDGET_S * 2
+
 #: ``doc["review_status"]`` 的取值域 (JSON 列里的新键, **无迁移**).
 #:   ``generating`` = 数值骨架已落库, 文案作业在途 (或已 stranded, 由 GET 重派)
 #:   ``ready``      = 文案已补 (``review.source`` 告诉客户端是 llm 还是 heuristic)
 #:   ``failed``     = 作业遇到预期外异常; 数值与确定性文案仍在 ``review`` 里, 可渲染
+#: 判分作业与总评文案作业**不共用**一份状态:
+#:   ``ReviewStatus`` 管 ``doc["review_status"]`` (总评那一句文案);
+#:   ``GradingStatus`` 管 ``doc["mission"]["grading"]`` 与逐轮的 ``turn_entry["grading"]``
+#:   (§A3: ``pending`` = 这一轮还没评 / ``ready`` = 判分已落 / ``failed`` = LLM 不可用,
+#:   没有润色与分数 —— 但它**是终态**, 客户端不必再等)。
 ReviewStatus = Literal["generating", "ready", "failed"]
+GradingStatus = Literal["pending", "ready", "failed"]
 
 # ====== 状态机常量 ======
 
@@ -214,6 +229,11 @@ class SessionView(BaseModel):
     #: 类型为 ``str | None`` 而不是字面量: 这是 JSON 列里的旧数据, 脏值该降级成"不可知",
     #: 不该在响应模型校验时把 GET 打成 500。
     review_status: str | None = None
+    #: §A3: 实战轮**判分**作业状态 —— ``pending`` = 还有轮次没评 (客户端继续轮询本端点),
+    #: ``ready`` / ``failed`` 都是终态 (``failed`` = 那一轮没有润色也没有分数, 别再等)。
+    #: 逐轮的细粒度状态在 ``mission.turns[].grading`` 里: 客户端拿它决定哪一行的润色/
+    #: 分数还不该渲染。老会话 (判分早在请求里同步做完) 恒为 ``ready``。
+    grading_status: str | None = None
     #: 整课内容: 开场与恢复都要回, 客户端画词汇卡/题干不必再打一次 /scenes/{id}.
     course: SceneCourse | None = None
 
@@ -269,6 +289,9 @@ class MissionTurnRequest(_Identity):
 
     audio_b64: bytes | None = Field(default=None, max_length=_MAX_AUDIO_B64_CHARS)
     text: str | None = Field(default=None, max_length=ANSWER_MAX_CHARS)
+    #: 台词生成的模型覆盖 (白名单内, D2): 生成是**纯文本**用途, 可以跟随客户端;
+    #: 判分永远不吃它 (走服务端默认模型, 见 ``run_mission_grading_job``)。
+    model_id: str | None = Field(default=None, max_length=128)
 
 
 class NewlyDoneTask(BaseModel):
@@ -279,7 +302,13 @@ class NewlyDoneTask(BaseModel):
 
 
 class MissionTurnResponse(BaseModel):
-    """``POST /sessions/{id}/mission`` 的返回 (§5.3 形状: 含 newly_done + checklist)."""
+    """``POST /sessions/{id}/mission`` 的返回 (§5.3 形状: 含 newly_done + checklist).
+
+    §A(D1) 之后本响应只有**台词**那一半"当场定下来": 台词 + 双语 + 词面快判的 checklist
+    + 锚定 ISE 的逐词染色。润色/语法/词汇/任务语义判定由后台作业补
+    (``grading_status="pending"``), 客户端拿 ``GET /sessions/{id}`` 回填 —— 字段
+    **一个都没删** (线上 APK 正在解析这份 DTO), 只是本轮为 null/空。
+    """
 
     session_id: str
     revision: int
@@ -291,11 +320,18 @@ class MissionTurnResponse(BaseModel):
     transcript: str
     #: persona 的下一句英文 (客户端播 TTS).
     reply: str
+    #: 台词的中文意思 (D4; 缺省空串 = 不渲染那一行).
+    reply_cn: str = ""
     #: 给学员的下一句示范.
     suggestion: str
-    #: 「原句 vs 更好说法」对照; 没问题 / 不可用时为 null.
+    #: 示范句的中文意思 (要求学员开口的那句默认双语).
+    suggestion_cn: str = ""
+    #: 学员刚那句英文的中文意思 (供「我」气泡的「译」).
+    learner_cn: str = ""
+    #: 「原句 vs 更好说法」对照。判分在后台跑, 所以本轮的这里**恒为 null**
+    #: (老会话/老快照里它仍有值; 客户端等 ``grading_status`` 转终态后从 GET 回填).
     polish: Polish | None = None
-    #: 4 维子分 (null = 本轮该维度没有证据, §5.3 sub_scores).
+    #: 4 维子分 (null = 本轮该维度没有证据, §5.3 sub_scores). 语法/词汇由判分作业补.
     sub_scores: dict[str, float | None] = Field(default_factory=dict)
     #: 锚定 ISE 的逐词染色 (自由产出; 讯飞没配时为 []).
     word_details: list[WordScore] = Field(default_factory=list)
@@ -312,13 +348,16 @@ class MissionTurnResponse(BaseModel):
     #: 会话是否已结束 (auto-finish 或 finish-mission 之后 true).
     finished: bool
     #: 本轮写进 §5.6 管线的维度证据 (stub/heuristic 为 weight=0).
+    #: §A(D1): 这里只有**锚定 ISE 的发音/流利**; 语法/词汇证据由判分作业在请求外落。
     ability_events: list[AbilityEvidence] = Field(default_factory=list)
-    #: 评分侧来源: llm | heuristic (UI 按 heuristic 打"非真实评测"警示).
+    #: 评分侧来源: ``pending`` (判分作业还没落, 看 ``grading_status``) | llm | heuristic.
     source: str
-    #: 判分 LLM 的 provenance: 模型 id | "stub".
+    #: 台词生成的 provenance: 模型 id (判分 provenance 由作业补进快照).
     llm_source: str | None = None
     #: 本轮是否因之前"要提示"被标记 (提示过的回合分数可信度打折, §5.3).
     costs_score: bool = False
+    #: 本轮的判分作业状态 (§A3): ``pending`` = 还没评, 客户端隔几秒再 GET 本端点。
+    grading_status: str | None = None
     #: 仅 ``auto_finished`` 时有值: 服务端已生成的复盘报告 (§5.3 ReviewReport)。
     #: §P6: 这是**数值骨架** —— 分数/清单/逐词全在, ``source`` 仍为 ``heuristic``,
     #: 因为 AI 文案改由后台作业补 (见 ``review_status``), 本请求不再为此多等一次 LLM。
@@ -395,7 +434,13 @@ class FinishMissionResponse(BaseModel):
 #     "ability_before": {4 维画像分快照 | None},        # P3: 开局基线 (§5.3 ability_delta)
 #     "mission": { P3: v / turns / tasks(累积状态) / turn_count / max_turns /
 #                  cleared / auto_finished / finished / hints_used / pending_costs
-#                  / opening },   首轮 /mission 时才初始化
+#                  / opening /
+#                  grading: {"status": "pending"|"ready"|"failed", "turn": int} },
+#                 §A3: 顶层是判分作业的**轻量指针** (GET 重派与客户端读它);
+#                 逐轮的细粒度状态在 turns[].grading = {"status", "at"} ——
+#                 **那一份才是作业门与回填的唯一状态位**。逐轮还有
+#                 reply_cn/suggestion_cn/learner_cn (D4 双语) 与 polish/分数 (作业补)。
+#                 首轮 /mission 时才初始化
 #     "review": { ReviewReport.model_dump() },    # P3: 收工后写入 (此前不存在)。§P6:
 #                  收工当场写的是**数值骨架** (source="heuristic"), 文案由后台作业
 #                  就地覆盖那四个字段 (highlights/improvements/source/llm_source)
@@ -892,6 +937,7 @@ def _view(row: PracticeSession, course: SceneCourse) -> SessionView:
         mission=dict(doc.get("mission") or {}),
         review=dict(review) if isinstance(review, dict) else None,
         review_status=_review_status_of(doc),
+        grading_status=grading_status_of(doc),
         course=course,
     )
 
@@ -1016,6 +1062,10 @@ async def get_session(
     永远"生成中"的总评。这里不写库 (自愈那次才写), 数值也早在 202 之前落好了 —— 重派只
     关乎那两句文案; 幂等由 ``_REVIEW_IN_FLIGHT`` + 作业开头的状态复查共同保证
     (理由与取舍见 :func:`resume_stranded_review_copy` 的 docstring)。
+
+    §A3 起同一个端点还承担**实战轮判分作业**的同款兜底 (:func:`resume_stranded_grading`):
+    响应里的 ``grading_status`` 就是客户端"还要不要再 GET"的键, 所以停摆的判分必须在这里
+    被推回去 —— 否则轮次会永远停在 ``pending``。
     """
     row = await _load_owned_session(
         db,
@@ -1033,6 +1083,9 @@ async def get_session(
         )
         await _save_doc(db, row, doc)
     resume_stranded_review_copy(str(row.id), doc)
+    # §A3 同一件事的另一半: 实战轮判分作业停摆时也在这里重派 (客户端唯一轮询通道仍只有
+    # 本端点 —— GET 的返回值里带着 ``grading_status``)。
+    resume_stranded_grading(str(row.id), doc)
     return _view(row, _course_of(doc))
 
 
@@ -1127,10 +1180,16 @@ async def skip_step(
 #
 # 状态全部长在 doc["mission"] 里 (首轮懒初始化), 复用
 # ``_load_owned_session(for_update=True)`` + ``_save_doc`` 这套序列 —— 乐观锁与
-# 回滚纪律和 /step 完全一致。每轮**恰好一次** LLM 综合调用 (§5.5-2: 人设回复 +
-# 提示 + 润色 + 语法/词汇判分 + 任务累积重判一个 JSON), 判分模型为服务端默认,
-# 客户端不能选 (§四 决策表 / T3 先例); LLM 不可用退回剧本回放的确定性降级,
-# ``source="heuristic"`` + ``llm_source="stub"``, 画像按 §5.6 门控不吃降级证据。
+# 回滚纪律和 /step 完全一致。
+#
+# §A(D1) 把一轮劈成两半: 请求内**恰好一次**调用只出台词 (``generate_turn``: 人设回复 +
+# 双语; 判分模型不吃客户端 ``model_id``), 润色 + 语法/词汇判分 + 任务累积重判
+# (``judge_turn``) 由 :func:`run_mission_grading_job` 在请求之外补 —— 旧形状把五件事塞进
+# 一个 JSON (700 token) 实测 p50 22.5s, 生产 8 轮 7 轮撞 15s 硬预算。
+#
+# 台词拿不到**没有**确定性降级可言: 端点回 503 且这一轮不落库不前进 (D5) —— 剧本回放既是
+# "每轮同一句"的根因, 也冒充了一次不存在的生成。判分失败相反: 静默 (没有润色/没有分数,
+# 但这一轮存在), 画像按 §5.6 门控不吃降级证据。
 
 
 def _initial_mission(course: SceneCourse) -> dict[str, Any]:
@@ -1148,7 +1207,23 @@ def _initial_mission(course: SceneCourse) -> dict[str, Any]:
         "hints_used": 0,
         "pending_costs": 0,
         "started_at": _iso(_now()),
+        # §A3: 判分作业的顶层指针。起始 ``ready`` + ``turn=0`` = "还没有任何一轮需要判分";
+        # 首轮请求把它翻成 ``pending`` + 那一轮 (崩在 _save_doc 与派生作业之间时, GET 的
+        # 水位会因此重派一次, 见 mission_grading_is_stranded)。
+        "grading": {"status": "ready", "turn": 0},
     }
+
+
+async def _drain(task: asyncio.Task[Any]) -> None:
+    """收掉一个不该再要的并行任务, 并把它的异常咽下去.
+
+    只 ``task.cancel()`` 不 await 的话, 任务里那个还没跑到过的协程永远排不上,
+    事件循环退出时留下 ``coroutine ... was never awaited`` 的噪声 (测试里也是 warning);
+    ``gather(return_exceptions=True)`` 顺手把 ``CancelledError`` 与"刚拿到手就炸"的
+    结果一起吃掉 —— 调用方已经在处理自己的错误了, 这里不再抢戏。
+    """
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 def _require_mission_actionable(row: PracticeSession, doc: dict[str, Any]) -> None:
@@ -1173,51 +1248,108 @@ def _require_mission_actionable(row: PracticeSession, doc: dict[str, Any]) -> No
         raise AppError(409, "the mission was already finished", "MISSION_FINISHED")
 
 
+def _mission_step_values(
+    entry: dict[str, Any], *, session_id: str, user_id: str, turn_index: int
+) -> dict[str, Any]:
+    """实战一轮 -> ``practice_steps`` 一行的字段值 (**单点构造**, §A3 的回填通道).
+
+    请求建行 (:func:`_add_mission_step_row`) 与判分作业回填 (:func:`_update_mission_step_row`)
+    共用这一份, 免得两处慢慢漂成两种形状。分数列按维度**稀疏**落: 没证据的维度留 NULL
+    (§5.6 前提); ``ok`` 记"本轮是否新完成了任务" —— 实战轮的"达标"事实是沟通推进,
+    不是分数。
+    """
+    sub = entry.get("sub_scores") or {}
+    total = [v for v in sub.values() if isinstance(v, (int, float))]
+    return {
+        "session_id": session_id,
+        "user_id": user_id,
+        "step_id": f"m{turn_index}",
+        "step_index": turn_index,
+        "step_type": "mission_turn",
+        "attempt": 1,
+        "transcript": entry.get("user_text"),
+        "score_total": round(sum(total) / len(total), 1) if total else None,
+        "score_pronunciation": sub.get("pronunciation"),
+        "score_fluency": sub.get("fluency"),
+        "score_grammar": sub.get("grammar"),
+        "score_vocabulary": sub.get("vocabulary"),
+        "ise_ref_mode": entry.get("ise_ref_mode"),
+        "annotated_json": {
+            "reply": entry.get("reply"),
+            "reply_cn": entry.get("reply_cn"),
+            "suggestion": entry.get("suggestion"),
+            "suggestion_cn": entry.get("suggestion_cn"),
+            "learner_cn": entry.get("learner_cn"),
+            "polish": entry.get("polish"),
+            "newly_done": entry.get("newly_done"),
+            "tasks_done": entry.get("tasks_done"),
+            # 逐词染色 (转写锚定 ISE 的产物) 落在这一格: 复盘页的弱词表读它 (§A3)。
+            "word_details": entry.get("word_details"),
+            "costs_score": entry.get("costs_score"),
+            "hinted": entry.get("costs_score"),
+            "ise_source": entry.get("ise_source"),
+            "grading": entry.get("grading"),
+        },
+        "speech_rate_wpm": entry.get("speech_rate_wpm"),
+        "source": str(entry.get("source") or "heuristic"),
+        "llm_source": entry.get("llm_source"),
+        "ok": bool(entry.get("newly_done")),
+    }
+
+
 def _add_mission_step_row(
     db: AsyncSession,
     row: PracticeSession,
     entry: dict[str, Any],
     turn_index: int,
 ) -> None:
-    """实战一轮 = 一行 ``practice_steps`` (step_type=``mission_turn``).
+    """实战一轮 = 一行 ``practice_steps`` (step_type=``mission_turn``), 在**请求里**建行.
 
-    分数列按维度**稀疏**落: 没证据的维度留 NULL (§5.6 前提). ``ok`` 记"本轮是否
-    新完成了任务" —— 实战轮的"达标"事实是沟通推进, 不是分数。
+    建行时就落好台词/双语/ISE 逐词分 (那时音频还在手上); 润色与语法/词汇分由判分作业
+    回填到**同一行** (不新增行 —— 复盘按行聚合, 凭空多一行等于造证据)。
     """
-    sub = entry.get("sub_scores") or {}
-    total = [v for v in sub.values() if isinstance(v, (int, float))]
     db.add(
         PracticeStep(
-            session_id=row.id,
-            user_id=row.user_id,
-            step_id=f"m{turn_index}",
-            step_index=turn_index,
-            step_type="mission_turn",
-            attempt=1,
-            transcript=entry.get("user_text"),
-            score_total=round(sum(total) / len(total), 1) if total else None,
-            score_pronunciation=sub.get("pronunciation"),
-            score_fluency=sub.get("fluency"),
-            score_grammar=sub.get("grammar"),
-            score_vocabulary=sub.get("vocabulary"),
-            ise_ref_mode=entry.get("ise_ref_mode"),
-            annotated_json={
-                "reply": entry.get("reply"),
-                "suggestion": entry.get("suggestion"),
-                "polish": entry.get("polish"),
-                "newly_done": entry.get("newly_done"),
-                "tasks_done": entry.get("tasks_done"),
-                "word_details": entry.get("word_details"),
-                "costs_score": entry.get("costs_score"),
-                "hinted": entry.get("costs_score"),
-                "ise_source": entry.get("ise_source"),
-            },
-            speech_rate_wpm=entry.get("speech_rate_wpm"),
-            source=str(entry.get("source") or "heuristic"),
-            llm_source=entry.get("llm_source"),
-            ok=bool(entry.get("newly_done")),
+            **_mission_step_values(
+                entry, session_id=str(row.id), user_id=str(row.user_id), turn_index=turn_index
+            )
         )
     )
+
+
+async def _update_mission_step_row(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    user_id: str,
+    entry: dict[str, Any],
+    turn_index: int,
+) -> None:
+    """判分回填: 更新本轮**已在请求里落库**的那一行 (分数列 + ``annotated_json`` + source)."""
+    step_id = f"m{turn_index}"
+    step_row = (
+        (
+            await db.execute(
+                select(PracticeStep)
+                .where(PracticeStep.session_id == session_id, PracticeStep.step_id == step_id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if step_row is None:
+        # 行不见了 (快照被动过 / 老会话): 不新造一行 —— 那等于凭空造一份证据。
+        logger.warning(
+            "mission step row missing on grading backfill | session={} step={}",
+            session_id,
+            step_id,
+        )
+        return
+    for key, value in _mission_step_values(
+        entry, session_id=session_id, user_id=user_id, turn_index=turn_index
+    ).items():
+        setattr(step_row, key, value)
 
 
 async def _finish_mission_state(
@@ -1392,11 +1524,19 @@ async def submit_mission_turn(
 ) -> MissionTurnResponse:
     """实战对话的一轮 (§5.3: 客户端发 ``audio_b64`` 或 ``text``, 状态在服务端).
 
-    流程: 门禁 -> (音频则 IAT 转写, 转不出 = 400 TRANSCRIPT_UNAVAILABLE: 没有转写
-    就没有证据) -> (有真音频且讯飞已配置则**转写锚定 ISE**, 产出
-    ``transcript_anchored`` 发音/流利证据) -> **单次**综合 LLM 调用 (回复/提示/
-    润色/语法词汇/任务累积重判) -> 服务端累积合并任务状态 -> 落 step 行 + §5.6
-    维度证据 -> 到 ``max_turns`` 自动收工 (报告随本响应返回) -> 一次提交.
+    §A2/D1: 请求里**只剩一次 LLM** —— 台词 (:func:`mission_engine.generate_turn`:
+    双语五字段, 墙 14s / socket 10s / 关思考)。流程:
+
+    门禁 -> (音频则 IAT 转写, 转不出 = 400 TRANSCRIPT_UNAVAILABLE: 没有转写就没有证据)
+    -> 台词生成 (失败 -> 503 ``TURN_GENERATION_UNAVAILABLE``, **这一轮不落库不前进**, D5)
+    -> **词面快判**先勾一次 checklist (零 LLM, §A3「快判先顶」) + 锚定 ISE 的发音/
+    逐词证据 (ISE 与生成并行、8s 封顶; 音频只存在这次请求里, 所以它在这里跑而不是作业)
+    -> 落 turn + step 行 + 发音证据 -> 到 ``max_turns`` 自动收工 (数值骨架)
+    -> 一次提交 -> **派生判分作业** :func:`run_mission_grading_job` (润色/语法/词汇/
+    任务重判, 客户端 `GET /sessions/{id}` 看 ``grading_status`` 回填)。
+
+    响应里的 ``polish``/语法/词汇分**本轮恒为空** —— 字段保留 (线上 APK 在解析这份
+    DTO), 值由判分作业补。判分失败也**不会**让这一轮变成 503: 判分失败 = 没有润色。
     """
     row = await _load_owned_session(db, session_id, req, for_update=True)
     doc = _reconcile_stage(_doc_of(row))
@@ -1443,53 +1583,69 @@ async def submit_mission_turn(
     turn_index = _as_int(mission.get("turn_count")) + 1
 
     # 自由产出的发音证据 (转写锚定 ISE; 没配讯飞 -> None, 绝不拿回声 95 分冒充)。
-    # ISE 与 LLM 判分并行 (预算见模块常量): 判分不可失败 (judge_turn 自带 heuristic
-    # 降级), 发音证据失败/超时 -> None = 本轮维度缺位 (诚实)。
-    _t_pair = time.monotonic()
-    ise_task = asyncio.ensure_future(
-        asyncio.wait_for(
-            mission_engine.anchored_pronunciation(audio_bytes, user_text),
-            timeout=ISE_TURN_BUDGET_S,
-        )
-    )
+    # 它与台词生成**并行**且天然短于它 (``ISE_TURN_BUDGET_S`` 8 < ``GEN_TURN_BUDGET_S``
+    # 14), 所以不吃额外的墙钟: 求和仍是 ``iat 8 + max(ise 8, gen 14) = 22``。为什么
+    # 不给作业跑: 音频不落库 (没有列可加, 加一格 base64 就是往 JSON 列塞兆字节), 请求
+    # 一结束字节就没了 —— "宁缺勿滥"那条纪律的边界在这儿。
+    ise_task = asyncio.ensure_future(mission_engine.anchored_pronunciation(audio_bytes, user_text))
+    _t_gen = time.monotonic()
     try:
-        judgement, score_source, llm_source = await mission_engine.judge_turn(
-            course,
-            tasks_state,
-            turns,
-            user_text,
+        generation, gen_source = await mission_engine.generate_turn(
+            mission_engine.turn_prompt(course, tasks_state, turns, user_text),
+            model_id=req.model_id,
+        )
+    except LlmUnavailableError as exc:
+        await _drain(ise_task)  # 本轮作废: 收掉并行任务 (不留 "never awaited" 的噪声)
+        logger.warning(
+            "mission turn generation unavailable | session={} turn={} err={}",
+            session_id,
             turn_index,
-            hard_timeout_s=LLM_TURN_BUDGET_S,
+            exc,
         )
+        # D5: 报错不前进 —— 不落 turn、不推进任务、不写 step 行, 也**不**回放剧本。
+        raise AppError(
+            503,
+            # 面向学员的中文文案 (全角标点是刻意的, 见 A6 的码表口径)。
+            "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试",  # noqa: RUF001
+            "TURN_GENERATION_UNAVAILABLE",
+        ) from exc
     except Exception:
-        ise_task.cancel()  # 本轮作废时不留孤儿会话
+        await _drain(ise_task)
         raise
+    gen_ms = round((time.monotonic() - _t_gen) * 1000)
     try:
-        anchored = await ise_task
+        # 预算在**收账这一下**封 (任务早就起跑了): 挂死的 ISE 最多让本请求多等
+        # ``ISE_TURN_BUDGET_S``, 而它恒短于台词的墙 -> 求和仍是 iat 8 + max(ise 8, gen 14)。
+        anchored = await asyncio.wait_for(ise_task, timeout=ISE_TURN_BUDGET_S)
     except Exception as exc:  # 宁缺勿滥: 证据缺失不阻断本轮
         logger.warning("mission anchored ise dropped | err={}", exc)
         anchored = None
-    pair_ms = round((time.monotonic() - _t_pair) * 1000)
     logger.info(
-        "mission turn perf | input={} iat_ms={} pair_ms={} anchored={}",
+        "mission turn perf | input={} iat_ms={} gen_ms={} anchored={}",
         input_kind,
         iat_ms,
-        pair_ms,
+        gen_ms,
         anchored is not None,
     )
+
+    # 快判先顶 (§A3): 词面覆盖率勾一次 checklist, 让学员不必等判分作业就看到任务推进;
+    # 它是词面判定 (不发画像事件), LLM 判分回写时走 done 粘滞 —— 只许变好不许变差。
     newly_done_raw = mission_engine.merge_task_progress(
-        tasks_state, judgement.task_progress, turn_index=turn_index
+        tasks_state,
+        mission_engine.heuristic_task_progress(user_text, tasks_state),
+        turn_index=turn_index,
     )
     mission["cleared"] = mission_engine.all_required_done(tasks_state)
     costs_score = _as_int(mission.get("pending_costs")) > 0
     if costs_score:
         mission["pending_costs"] = _as_int(mission.get("pending_costs")) - 1
 
-    events = mission_engine.turn_ability_events(judgement, anchored, score_source=score_source)
+    anchored_events = mission_engine.anchored_ability_events(anchored)
     sub_scores: dict[str, float | None] = {
         "pronunciation": anchored.pronunciation if anchored else None,
-        "grammar": judgement.grammar_score,
-        "vocabulary": judgement.vocabulary_score,
+        # 语法/词汇要等判分作业 (§A3): 请求里没有判分, 所以是 None 而不是 0。
+        "grammar": None,
+        "vocabulary": None,
         "fluency": anchored.fluency if anchored else None,
     }
     turn_entry: dict[str, Any] = {
@@ -1497,12 +1653,16 @@ async def submit_mission_turn(
         "at": _iso(_now()),
         "user_text": user_text,
         "input": input_kind,
-        "reply": judgement.reply,
-        "suggestion": judgement.suggestion,
-        "polish": judgement.polish.model_dump(mode="json") if judgement.polish else None,
+        "reply": generation.reply,
+        "reply_cn": generation.reply_cn,
+        "suggestion": generation.suggestion,
+        "suggestion_cn": generation.suggestion_cn,
+        "learner_cn": generation.learner_cn,
+        # 判分槽位: 作业回填 (restore 路径整体重读 doc, 客户端零新通道)。
+        "polish": None,
         "sub_scores": sub_scores,
-        "grammar_score": judgement.grammar_score,
-        "vocabulary_score": judgement.vocabulary_score,
+        "grammar_score": None,
+        "vocabulary_score": None,
         "ise_ref_mode": "transcript_anchored" if anchored else None,
         "ise_source": "xunfei" if anchored else None,
         "speech_rate_wpm": anchored.speech_rate_wpm if anchored else None,
@@ -1511,55 +1671,51 @@ async def submit_mission_turn(
         ),
         "newly_done": newly_done_raw,
         "tasks_done": [str(t["id"]) for t in tasks_state if t.get("done")],
-        "source": score_source,
-        "llm_source": llm_source,
+        # ``pending`` = "这一轮的判分还没落" (不是 heuristic 降级): 客户端看
+        # ``grading.status`` 决定要不要渲染润色行 (§A3)。
+        "source": "pending",
+        "llm_source": gen_source,
         "costs_score": costs_score,
+        "grading": {"status": "pending", "at": _iso(_now())},
     }
     mission["turns"] = [*turns, turn_entry]
     mission["turn_count"] = turn_index
-    _push_event(doc, "mission_turn", f"m{turn_index}", judgement.grammar_score)
-    if judgement.polish is not None:
-        mission_engine.record_annotated_diff(
-            db,
-            row.user_id,
-            polish=judgement.polish,
-            origin="mission",
-            session_id=row.id,
-            step_id=f"m{turn_index}",
-            scene_id=course.id,
-            llm_source=llm_source,
-        )
+    mission["grading"] = {"status": "pending", "turn": turn_index}
+    _push_event(doc, "mission_turn", f"m{turn_index}", None)
     _add_mission_step_row(db, row, turn_entry, turn_index)
+    # 发音/流利证据在请求里就落 (§5.6): 它只依赖音频 + 转写, 与判分无关; 语法/词汇那
+    # 一半由判分作业在请求外落 (两道证据都跟各自的事务提交/回滚)。
     await record_step_evidence(
         db,
         user_id=row.user_id,
         session_id=row.id,
         step_id=f"m{turn_index}",
-        evidence=events,
+        evidence=anchored_events,
     )
 
     skeleton: ReviewReport | None = None
     # 到回合上限 -> 服务端自动收工 (§5.1 max_turns: "到顶仍未集齐必选任务则按未通关
     # 收口"), 客户端不用再打一次 finish-mission.
     #
-    # §P6: 本请求**只落数值骨架**。这一轮已经花掉 iat(8) + max(ise 8, llm 15) = 23s 在
-    # 语音与判分上, 再挂一次总评 LLM 就是结构性超时 (43s > 30s, 而且"聊到轮次上限自然
-    # 收工"恰是每日练习结束最常发生的时刻) —— 压预算救不了它 (压到 7s 以下等于总评每次
-    # 都退化成模板文案), 所以把文案整体移出请求: 本端点回到 23s 预算内, 文案由后台作业补。
+    # §P6: 本请求**只落数值骨架** (零 LLM)。这一轮已经花掉 iat(8) + 台词(14) = 22s,
+    # 再挂一次总评 LLM 就是结构性超时 —— 文案由 ``run_review_copy_job`` 补。
+    # §A3: 同一条路上还要派**判分**作业 —— 否则最后一轮的润色/分数没人补 ("到轮次上限
+    # 自动收工"恰是每日练习结束最常发生的时刻), 学员在复盘页会一直看不到那一轮。
     if turn_index >= _as_int(mission.get("max_turns")):
         skeleton = await _finish_mission_state(db, row, doc, course, mission, auto=True)
     turn_session_id = str(row.id)  # commit 之后不再读 ORM 属性 (见 _save_doc 的坑注)
     revision = await _save_doc(db, row, doc)
+    spawn_mission_grading_job(turn_session_id)
     if skeleton is not None:
         spawn_review_copy_job(turn_session_id)
     logger.info(
-        "mission turn graded | session={} turn={} source={} llm={} newly_done={} cleared={}",
+        "mission turn generated | session={} turn={} llm={} newly_done={} cleared={} gen_ms={}",
         turn_session_id,
         turn_index,
-        score_source,
-        llm_source,
+        gen_source,
         len(newly_done_raw),
         bool(mission["cleared"]),
+        gen_ms,
     )
     return MissionTurnResponse(
         session_id=turn_session_id,
@@ -1568,9 +1724,12 @@ async def submit_mission_turn(
         status=str(doc.get("status") or "active"),
         turn_index=turn_index,
         transcript=user_text,
-        reply=judgement.reply,
-        suggestion=judgement.suggestion,
-        polish=judgement.polish,
+        reply=generation.reply,
+        reply_cn=generation.reply_cn,
+        suggestion=generation.suggestion,
+        suggestion_cn=generation.suggestion_cn,
+        learner_cn=generation.learner_cn,
+        polish=None,  # 判分在后台 (§A3): 本轮不给润色, 等 GET 回填
         sub_scores=sub_scores,
         word_details=list(anchored.word_details) if anchored else [],
         speech_rate_wpm=anchored.speech_rate_wpm if anchored else None,
@@ -1581,10 +1740,11 @@ async def submit_mission_turn(
         max_turns=_as_int(mission.get("max_turns")),
         auto_finished=bool(mission.get("auto_finished")),
         finished=bool(mission.get("finished")),
-        ability_events=events,
-        source=score_source,
-        llm_source=llm_source,
+        ability_events=anchored_events,
+        source="pending",
+        llm_source=gen_source,
         costs_score=costs_score,
+        grading_status="pending",
         review=skeleton,
         review_status=_review_status_of(doc),
     )
@@ -1743,22 +1903,31 @@ def spawn_review_copy_job(session_id: str) -> bool:
     return True
 
 
-async def load_review_snapshot(db: AsyncSession, session_id: str) -> dict[str, Any] | None:
-    """作业专用读路径: 取快照的**私有深拷贝** (纪律同 :func:`_doc_of`, 但不校验清单).
+async def _job_row(db: AsyncSession, session_id: str) -> PracticeSession | None:
+    """作业专用读路径: 绕过身份缓存地取会话行 (``populate_existing``).
 
     作业跑在请求之外, 拿不到 :func:`_load_owned_session` 那套身份/归属判定 —— 身份早在
-    收工那次 202 里验过了, 而快照里的 ``review_status`` 才是本作业唯一关心的门。
+    202 里验过了; 而作业门读的是 doc 里的状态位。``populate_existing`` 是乐观锁语义的
+    一半: 复读必须拿到库里那一份, 不能拿身份映射里的旧快照。
     """
     stmt = (
         select(PracticeSession)
         .where(PracticeSession.id == session_id)
         .execution_options(populate_existing=True)
     )
-    row = (await db.execute(stmt)).scalar_one_or_none()
-    if row is None:
-        return None
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+def _snapshot_copy(row: PracticeSession) -> dict[str, Any]:
+    """会话行 -> 快照的**私有深拷贝** (纪律同 :func:`_doc_of`: JSON 列原地改不脏)."""
     raw: Any = row.doc
-    return None if not isinstance(raw, dict) else copy.deepcopy(raw)
+    return copy.deepcopy(raw) if isinstance(raw, dict) else {}
+
+
+async def load_session_snapshot(db: AsyncSession, session_id: str) -> dict[str, Any] | None:
+    """两个后台作业共用的快照读路径: 取**私有深拷贝** (不校验清单, 行没了回 ``None``)."""
+    row = await _job_row(db, session_id)
+    return None if row is None else _snapshot_copy(row)
 
 
 async def run_review_copy_job(session_id: str) -> None:
@@ -1788,7 +1957,7 @@ async def run_review_copy_job(session_id: str) -> None:
 
 async def _run_review_copy_job(db: AsyncSession, session_id: str) -> None:
     """作业主体 (与 :func:`run_review_copy_job` 分开: 兜底要能接住这里任何一步的抛错)."""
-    doc = await load_review_snapshot(db, session_id)
+    doc = await load_session_snapshot(db, session_id)
     if doc is None:
         logger.warning("review copy job skipped | session={} reason=session row gone", session_id)
         return
@@ -1877,7 +2046,7 @@ async def _fail_review_copy(db: AsyncSession, session_id: str, exc: Exception) -
     """
     try:
         await db.rollback()
-        doc = await load_review_snapshot(db, session_id)
+        doc = await load_session_snapshot(db, session_id)
         if doc is None or str(doc.get("review_status") or "") not in ("", "generating"):
             return  # 已经有终态了, 别把 ready 改回 failed
         # review_facts **留着**: failed 的会话还能被 GET 重派, 重派需要同一份输入。
@@ -1890,6 +2059,401 @@ async def _fail_review_copy(db: AsyncSession, session_id: str, exc: Exception) -
         )
     except Exception:  # pragma: no cover - 只剩日志可依赖的角落
         logger.exception("review copy failed-state write itself died | session={}", session_id)
+
+
+# ====== 实战轮判分的后台作业 (§A3: 判分移出请求) ======
+#
+# 为什么异步: 实测 (scripts/smoke_split_latency.py, 2026-10-08, qwen3.8-flash, 关思考)
+# 判分 p50 6.6s、台词 p50 3.0s —— 挤在同一个请求里 (旧 700 token 合并 JSON) p50 22.5s,
+# 生产 8 轮 7 轮撞 15s 硬预算。拆开后台词独占 14s 墙, 判分搬到这里慢慢跑 (45s 封顶)。
+#
+# 与 §P6 的总评文案作业 (:func:`run_review_copy_job`) **同形** —— 四条纪律一条不落:
+# 自开 AsyncSession / 模块级持 task / 每次状态变更立即 commit / 一切异常收敛成终态。
+# 与它的**唯一**区别: 一次收工只有一份总评, 而一条会话有 N 轮 —— 所以状态是**逐轮**的
+# (``doc["mission"]["turns"][i]["grading"]``), 顶层再挂一个轻量指针
+# (``doc["mission"]["grading"] = {"status", "turn"}``) 给 GET 的重派与客户端读。
+#
+# **判分重放不幂等 = 硬门**: ``record_step_evidence`` 只 add、画像 EWMA 会被重复计入,
+# 所以每一轮只许写一次画像证据 (见 :func:`_publish_grading` 的终态 CAS 门)。
+#
+# **作业失败必须静默**: 判分失败 = 没有润色/没有语法词汇分, **不是**"这一轮不存在"
+# (D5 的 503 只属于台词拿不到那种情况)。失败也落终态 (``failed``), 绝不留在 ``pending``
+# 让客户端无限轮询。
+
+#: 模块级持有在途 task (同 :data:`_REVIEW_JOBS`: asyncio 只弱引用 ``create_task`` 的返回值)。
+_GRADING_JOBS: set[asyncio.Task[None]] = set()
+
+#: **本进程内**已经在跑的会话: 幂等门 (跨进程靠作业事务里的复读谓词 + 乐观锁收敛)。
+_GRADING_IN_FLIGHT: set[str] = set()
+
+#: 可以被"救回来"的逐轮判分态: ``pending`` (在途或已随进程死掉) / ``failed`` (判分没落)。
+#: ``ready`` 不在其内 —— 评完的轮次绝不能被重评 (那会重复计入画像)。
+_GRADING_RESUME_STATUSES: tuple[str, ...] = ("pending", "failed")
+
+#: 判分整体的重试次数 (判分**算完**之后写库输掉乐观锁时复读重放; 不必重烧 LLM)。
+_GRADING_WRITE_ATTEMPTS = 3
+
+
+def _turn_grading_status(entry: dict[str, Any]) -> str:
+    """一轮的判分态 -> 收敛后的字面量 (老会话/脏值 = ``""``).
+
+    ``""`` 的语义是"**不是作业的活**"而不是 ``pending``: §A3 之前收的会话 (判分早在请求里
+    同步做完) 的 turn_entry 里根本没有 ``grading`` 键, 把它们当待判就是重评 = 画像双计。
+    """
+    block = entry.get("grading")
+    if isinstance(block, dict):
+        status = str(block.get("status") or "")
+        if status in ("pending", "ready", "failed"):
+            return status
+    return ""
+
+
+def _pending_grading_turns(mission: dict[str, Any]) -> list[dict[str, Any]]:
+    """还没落终态的轮次 (按 ``index`` 升序) —— 作业的待办清单 / GET 重派的判据."""
+    turns = [t for t in mission.get("turns") or [] if isinstance(t, dict)]
+    todo = [t for t in turns if _turn_grading_status(t) in _GRADING_RESUME_STATUSES]
+    return sorted(todo, key=lambda t: _as_int(t.get("index")))
+
+
+class _GradingPointer(TypedDict):
+    """``doc["mission"]["grading"]`` 的形状 (§A3 的轻量指针)."""
+
+    status: GradingStatus
+    turn: int
+
+
+def _grading_pointer(mission: dict[str, Any]) -> _GradingPointer:
+    """从逐轮状态重算顶层指针 ``{"status", "turn"}`` (§A3 的轻量读).
+
+    ``turn`` = 还有非终态轮次时取那**最新**的一轮, 否则取最后一轮。客户端与 GET 只读这个
+    指针, 不必为了一个状态字符串把 turns 遍历一遍; 它的值永远等于逐轮状态的真值 (重算,
+    不是增量维护 —— 少一个会漂的状态)。
+    """
+    turns = [t for t in mission.get("turns") or [] if isinstance(t, dict)]
+    indexes = [_as_int(t.get("index")) for t in turns]
+    newest = max(indexes) if indexes else 0
+    pending = _pending_grading_turns(mission)
+    if any(_turn_grading_status(t) == "pending" for t in pending):
+        return {"status": "pending", "turn": max(_as_int(t.get("index")) for t in pending)}
+    if pending:  # 只剩 failed: 终态 (没有润色/分数), 但 GET 过一个周期还会重试它
+        return {"status": "failed", "turn": max(_as_int(t.get("index")) for t in pending)}
+    return {"status": "ready", "turn": newest}
+
+
+def grading_status_of(doc: dict[str, Any]) -> str | None:
+    """快照里的**判分**状态 -> API 字段 (§A3; 没有 mission / 没有轮次 = ``None``).
+
+    老会话 (逐轮无 ``grading`` 键) 恒报 ``ready``: 它的判分早在请求里同步做完了, 别让
+    客户端对着一个永远不会被补的 ``pending`` 无限轮询。
+    """
+    mission = doc.get("mission")
+    if not isinstance(mission, dict) or not mission:
+        return None
+    if not [t for t in mission.get("turns") or [] if isinstance(t, dict)]:
+        return None
+    return str(_grading_pointer(mission)["status"])
+
+
+def spawn_mission_grading_job(session_id: str) -> bool:
+    """派生判分作业 (必须在 ``_save_doc`` **之后**); 返回**是否真的派生了**.
+
+    幂等门是 :data:`_GRADING_IN_FLIGHT` (同 :func:`spawn_review_copy_job`): 同一会话在途
+    只允许一个作业。作业自己还会在事务里复读并检查每一轮的 ``grading`` 态 —— 那才是跨重派
+    /跨进程的门, 这里的集合只是省掉一次注定白跑的 LLM 调用。
+
+    测试把本函数换成 no-op 后直接 ``await run_mission_grading_job(sid)`` 驱动作业
+    (同 ``run_review_copy_job`` 的口径; 全局替身见 ``tests/conftest.py``)。
+    """
+    if session_id in _GRADING_IN_FLIGHT:
+        return False
+
+    def _finish(task: asyncio.Task[None]) -> None:
+        _GRADING_JOBS.discard(task)
+        _GRADING_IN_FLIGHT.discard(session_id)
+
+    _GRADING_IN_FLIGHT.add(session_id)
+    task = asyncio.create_task(run_mission_grading_job(session_id))
+    _GRADING_JOBS.add(task)
+    task.add_done_callback(_finish)
+    return True
+
+
+async def run_mission_grading_job(session_id: str) -> None:
+    """后台把实战轮的**判分**补进快照与 step 行 (§A3): 润色 + 语法/词汇 + 任务重判.
+
+    三条出口 (与总评作业同一纪律):
+
+    * LLM 判分成功 -> 该轮 ``grading.status="ready"``, 润色/分数/任务合并落库, 画像证据
+      写一次 (CAS 门);
+    * LLM 不可用 / 超预算 / 两次都不合规 -> :func:`mission_engine.judge_turn` 自己降级成
+      词面快判 -> 该轮 ``grading.status="failed"`` (没有润色也没有分数, 但**这一轮存在**),
+      静默: 不 500、不打扰学员, GET 过一个预算周期后还能重派它再试一次;
+    * 预期外异常 (代码 bug / 快照坏了 / 数据库抖动) -> 尽力把待判轮次收敛成 ``failed`` +
+      全栈日志, 绝不留 ``pending``。
+
+    ``GRADING_JOB_BUDGET_S`` (45s) 是这堵墙: 作业在请求之外跑 (台词那 202 早返回了), 它
+    不替 30s 读超时交差, 只保证一条挂死的 LLM 不会把轮次永远停在 ``pending``。
+    """
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as db:
+        try:
+            await _run_grading_job(db, session_id)
+        except Exception as exc:
+            logger.exception("mission grading job crashed | session={}", session_id)
+            await _fail_grading(db, session_id, exc)
+
+
+async def _run_grading_job(db: AsyncSession, session_id: str) -> None:
+    """作业主体 (与 :func:`run_mission_grading_job` 分开: 兜底要能接住这里任何一步的抛错)."""
+    doc = await load_session_snapshot(db, session_id)
+    if doc is None:
+        logger.warning(
+            "mission grading job skipped | session={} reason=session row gone", session_id
+        )
+        return
+    mission = _sub_doc(doc, "mission")
+    if not mission:
+        logger.info("mission grading job skipped | session={} reason=no mission", session_id)
+        return
+    todo = _pending_grading_turns(mission)
+    if not todo:
+        # 崩在"请求落库"与"派生作业"之间时, 顶层指针可能还没落: 就地补一次, 免得 GET
+        # 因为指针与逐轮状态对不上而反复重派。
+        if mission.get("grading") != _grading_pointer(mission):
+            mission["grading"] = _grading_pointer(mission)
+            await _commit_grading(db, session_id, doc)
+        logger.info(
+            "mission grading job skipped | session={} reason=every turn is terminal", session_id
+        )
+        return
+    course = _course_of(doc)
+    for entry in todo:
+        turn_index = _as_int(entry.get("index"))
+        # 判分只吃"最后一句 + 任务块" (§6): 不带整段对话, 也不带客户端选的模型 ——
+        # ``judge_turn`` 恒走服务端默认模型 (D2)。
+        judgement, source, llm_source = await mission_engine.judge_turn(
+            course,
+            cast("list[dict[str, Any]]", mission.get("tasks") or []),
+            str(entry.get("user_text") or ""),
+            hard_timeout_s=GRADING_JOB_BUDGET_S,
+        )
+        if not await _publish_grading(
+            db, session_id, course, turn_index, judgement, source, llm_source
+        ):
+            # 行没了 / 反复输掉乐观锁: 交给 GET 的水位重派 (下一次判分仍在预算内)。
+            break
+
+
+async def _publish_grading(
+    db: AsyncSession,
+    session_id: str,
+    course: SceneCourse,
+    turn_index: int,
+    judgement: mission_engine.MissionTurnJudgement,
+    source: GradeSource,
+    llm_source: str | None,
+    *,
+    attempts: int = _GRADING_WRITE_ATTEMPTS,
+) -> bool:
+    """把一轮的判分写回快照 + step 行 + 画像证据; 返回是否真的写了 (§A3 的终态 CAS 门).
+
+    判分重放**不幂等** (``record_step_evidence`` 只 add, 画像 EWMA 会重复计入), 所以这一
+    轮只许写一次。这里没有独立的列可以写 ``WHERE status='pending'`` (状态住在 JSON 列里),
+    于是 CAS 由三件事合成, 语义与 ``assessment.py`` 的 ``UPDATE … WHERE status='judging'``
+    一致:
+
+    1. **事务内复读** (``populate_existing``, 绕过身份映射里的旧快照);
+    2. **谓词检查**: 这一轮的 ``grading.status`` 仍是 ``pending``/``failed`` 才写 —— 已
+       ``ready`` 的轮次直接跳过, 重放 / 并发的第二个作业都不许再落一次;
+    3. **同一事务**: 证据行与快照一起由 :func:`_save_doc` 提交, 输掉乐观锁
+       (``StaleDataError`` -> 409) 时刚 ``add`` 的证据行随事务一起回滚 —— 谁输谁作废。
+
+    判分本身已在事务外算完, 所以输掉竞争**不必重烧** LLM: 复读-重放即可 (最多
+    ``attempts`` 次)。
+    """
+    for _ in range(attempts):
+        row = await _job_row(db, session_id)
+        if row is None:
+            logger.warning(
+                "mission grading write skipped | session={} reason=session row gone", session_id
+            )
+            return False
+        doc = _snapshot_copy(row)
+        mission = _sub_doc(doc, "mission")
+        if not mission:
+            return False
+        entry = next(
+            (
+                t
+                for t in mission.get("turns") or []
+                if isinstance(t, dict) and _as_int(t.get("index")) == turn_index
+            ),
+            None,
+        )
+        if entry is None:
+            logger.warning(
+                "mission grading turn vanished | session={} turn={}", session_id, turn_index
+            )
+            return False
+        if _turn_grading_status(entry) not in _GRADING_RESUME_STATUSES:
+            # 谓词不成立 = 别人已经写完了 (重放 / 并发作业 / 重派来的第二个)。到此为止。
+            logger.info(
+                "mission grading skipped (turn already terminal) | session={} turn={} status={}",
+                session_id,
+                turn_index,
+                _turn_grading_status(entry),
+            )
+            return False
+
+        tasks_state = cast("list[dict[str, Any]]", mission.get("tasks") or [])
+        newly = mission_engine.merge_task_progress(
+            tasks_state, judgement.task_progress, turn_index=turn_index
+        )
+        sub = dict(cast("dict[str, Any]", entry.get("sub_scores") or {}))
+        sub["grammar"] = judgement.grammar_score
+        sub["vocabulary"] = judgement.vocabulary_score
+        entry["sub_scores"] = sub
+        entry["grammar_score"] = judgement.grammar_score
+        entry["vocabulary_score"] = judgement.vocabulary_score
+        entry["polish"] = judgement.polish.model_dump(mode="json") if judgement.polish else None
+        entry["newly_done"] = _extend_newly_done(entry.get("newly_done"), newly)
+        entry["tasks_done"] = [str(t["id"]) for t in tasks_state if t.get("done")]
+        entry["source"] = source
+        entry["llm_source"] = llm_source
+        # ``ready`` = 判分落定; ``failed`` = LLM 不可用 (降级成词面快判, 没有润色/分数)。
+        # 两者都**是终态** —— 客户端不必再等这一轮。
+        entry["grading"] = {
+            "status": "ready" if source == "llm" else "failed",
+            "at": _iso(_now()),
+        }
+        mission["cleared"] = mission_engine.all_required_done(tasks_state)
+        mission["grading"] = _grading_pointer(mission)
+        doc["mission"] = mission
+
+        user_id = str(row.user_id)
+        await _update_mission_step_row(
+            db, session_id=session_id, user_id=user_id, entry=entry, turn_index=turn_index
+        )
+        if judgement.polish is not None and source == "llm":
+            mission_engine.record_annotated_diff(
+                db,
+                user_id,
+                polish=judgement.polish,
+                origin="mission",
+                session_id=session_id,
+                step_id=f"m{turn_index}",
+                scene_id=course.id,
+                llm_source=llm_source,
+            )
+        # 只有 grammar/vocabulary 那半边 (``anchored=None``): 发音/流利证据在请求里就落好了
+        # (§A5/§5.6), 这里再落一次就是同一轮的双计。
+        await record_step_evidence(
+            db,
+            user_id=user_id,
+            session_id=session_id,
+            step_id=f"m{turn_index}",
+            evidence=mission_engine.turn_ability_events(judgement, None, score_source=source),
+        )
+        if await _commit_grading(db, session_id, doc):
+            logger.info(
+                "mission turn graded | session={} turn={} source={} llm={} newly_done={}",
+                session_id,
+                turn_index,
+                source,
+                llm_source,
+                len(newly),
+            )
+            return True
+        # 输掉乐观锁: 上面这一刀 (含证据行) 已随事务回滚, 复读一次重放。
+    logger.warning(
+        "mission grading gave up after repeated optimistic races | session={} turn={}",
+        session_id,
+        turn_index,
+    )
+    return False
+
+
+def _extend_newly_done(existing: Any, added: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把判分新判定出来的"本轮新完成"追加进 turn_entry (请求里的词面快判结果保留).
+
+    两条来源各管一段: 请求内的快判先勾一次 (学员立刻看到), 判分作业回写时补上它多认出来
+    的那些。按 id 去重, 顺序保持"先到的在前"—— 它是 checklist 弹勾动画的原料, 不是账本。
+    """
+    current = (
+        [dict(item) for item in existing if isinstance(item, dict)]
+        if isinstance(existing, list)
+        else []
+    )
+    known = {str(item.get("id")) for item in current}
+    current.extend(item for item in added if str(item.get("id")) not in known)
+    return current
+
+
+async def _commit_grading(db: AsyncSession, session_id: str, doc: dict[str, Any]) -> bool:
+    """写回快照 (整体换新 + 乐观锁 + 立即 commit); 输掉竞争返回 ``False`` (调用方复读重放).
+
+    复用 :func:`_save_doc` 而不是另写一份: JSON 列整体换新、commit 后别读 ORM 属性、
+    ``StaleDataError`` -> 409 的翻译 —— 三条坑一行都不该在这里重新发明。
+    """
+    row = await _job_row(db, session_id)
+    if row is None:
+        logger.warning(
+            "mission grading write skipped | session={} reason=session row gone", session_id
+        )
+        return False
+    try:
+        revision = await _save_doc(db, row, doc)
+    except AppError as exc:
+        if exc.code != "SESSION_CONCURRENT_UPDATE":
+            raise
+        # 谁赢谁的话: 另一个写者 (多半是重派来的第二个作业, 或同一条路上的总评作业) 已经把
+        # 同一份 doc 落库了。我们复读一次重放 (判分不必重烧), 多次失败就交给 GET 重派。
+        logger.warning(
+            "mission grading write lost the race | session={} err={}", session_id, exc.message
+        )
+        return False
+    logger.debug("mission grading state committed | session={} revision={}", session_id, revision)
+    return True
+
+
+async def _fail_grading(db: AsyncSession, session_id: str, exc: Exception) -> None:
+    """作业崩了也要收敛 (§A3「作业失败必须静默」的兜底): 把还没落的轮次标 ``failed``.
+
+    为什么不留 ``pending``: 客户端拿 ``pending`` 当"继续轮询"的键, 永远不落终态就是无限
+    轮询一个不会再有人推的作业。``failed`` 是终态 (没有润色/分数, 但**这一轮存在**), 而且
+    GET 过一个预算周期后还能重派它再试一次 —— 比"无声死去"至少多一条线索。
+    """
+    try:
+        await db.rollback()
+        row = await _job_row(db, session_id)
+        if row is None:
+            return
+        doc = _snapshot_copy(row)
+        mission = _sub_doc(doc, "mission")
+        if not mission:
+            return
+        pending = _pending_grading_turns(mission)
+        if not pending:
+            return  # 已经有终态了, 别把 ready 改回 failed
+        for entry in pending:
+            entry["grading"] = {"status": "failed", "at": _iso(_now())}
+        mission["grading"] = _grading_pointer(mission)
+        doc["mission"] = mission
+        if not await _commit_grading(db, session_id, doc):
+            logger.warning(
+                "mission grading failed-state write lost the race | session={} "
+                "(快照会停在 pending, 由 GET 的水位重派)",
+                session_id,
+            )
+            return
+        logger.warning(
+            "mission grading job marked failed | session={} reason={} "
+            "(这一轮没有润色与分数, 但轮次本身还在)",
+            session_id,
+            _truncate(str(exc)),
+        )
+    except Exception:  # pragma: no cover - 只剩日志可依赖的角落
+        logger.exception("mission grading failed-state write itself died | session={}", session_id)
 
 
 def _doc_updated_at(doc: dict[str, Any]) -> datetime | None:
@@ -1945,6 +2509,55 @@ def resume_stranded_review_copy(session_id: str, doc: dict[str, Any]) -> bool:
         "review copy job re-dispatched from GET | session={} status={}",
         session_id,
         doc.get("review_status"),
+    )
+    return True
+
+
+def mission_grading_is_stranded(doc: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """这份快照的判分作业是不是**没人管了** (§A3 的重派水位; 纯函数, 便于单测).
+
+    与 :func:`review_copy_is_stranded` 同构 (水位算法一字不差), 判据落在**逐轮状态**上:
+    计划 §5 的原话是"重派只发生在 ``turn_count > 已落终态的轮次`` 的情况", 而那件事等价于
+    "存在 ``pending``/``failed`` 的轮次" —— 新的一轮请求只要落了 doc, 它那一轮的 ``grading``
+    就是 ``pending`` (崩在 ``_save_doc`` 与派生作业之间也留着这个值, 那正是重启兜底要救的
+    形状)。反过来, 老会话 (逐轮没有 ``grading`` 键, 判分早在请求里同步做完) 天然不会被重派
+    —— 重评一次就是画像双计。
+
+    ``pending`` 要求老过 **2 倍作业预算** (活着的作业可能跑满一整个周期), ``failed`` 只需
+    一个周期 (§A3: 判分失败 = 没有润色, 学员不该等下一次重启才看到润色)。
+    """
+    mission = _sub_doc(doc, "mission")
+    if not mission:
+        return False
+    pending = _pending_grading_turns(mission)
+    if not pending:
+        return False
+    status = "failed" if all(_turn_grading_status(t) == "failed" for t in pending) else "pending"
+    threshold = GRADING_JOB_BUDGET_S if status == "failed" else GRADING_REDISPATCH_AFTER_S
+    updated_at = _doc_updated_at(doc)
+    if updated_at is None:
+        return True
+    reference = now or _now()
+    return (reference.astimezone(UTC) - updated_at.astimezone(UTC)).total_seconds() >= threshold
+
+
+def resume_stranded_grading(session_id: str, doc: dict[str, Any]) -> bool:
+    """§A3 的重启兜底: 有轮次停在 ``pending``/``failed`` 且已过水位 -> 就地重派. 返回是否派生.
+
+    允许 GET 有副作用的理由与 :func:`resume_stranded_review_copy` 一模一样 (本端点 §P6 之前
+    就会在投影漂移时写库, "把不合法的中间态推回合法"是它既有的职责)。代价更低: 这里**一个
+    字都不写**, 只是 :func:`spawn_mission_grading_job` 一下; 幂等由三层守着 (在途集合 +
+    作业事务里的复读谓词 + ``_save_doc`` 的乐观锁), 而且重派最坏也只是"润色晚一点到", 台词、
+    任务勾与发音证据都已经在快照里了。
+    """
+    if not mission_grading_is_stranded(doc):
+        return False
+    if not spawn_mission_grading_job(session_id):
+        return False  # 本进程已经在跑了 (两个 GET 同时到达)
+    logger.warning(
+        "mission grading job re-dispatched from GET | session={} pending_turns={}",
+        session_id,
+        len(_pending_grading_turns(_sub_doc(doc, "mission"))),
     )
     return True
 

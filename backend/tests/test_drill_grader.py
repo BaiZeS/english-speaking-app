@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any, ClassVar
 
 import pytest
@@ -166,7 +166,7 @@ class _FakeCompletions:
 
     async def create(self, **kwargs: Any) -> Any:
         self._client.requests.append(kwargs)
-        reply = self._client.next_reply()
+        reply = self._client.next_reply(kwargs)
         if isinstance(reply, Exception):
             raise reply
 
@@ -196,15 +196,63 @@ class _FakeChat:
         self.completions = _FakeCompletions(client)
 
 
-class _FakeOpenAI:
-    """替掉 ``llm_provider.AsyncOpenAI``: 按脚本吐 content, 并记下每次请求."""
+#: prompt 里的**形状标记**: §A1 之后一轮有两次调用 (生成侧 / 判分侧) 外加收工时的总评文案,
+#: 各自的 JSON 形状里有对方没有的键 —— 用它们路由, 用例就不必猜"谁先被调到"。
+_GENERATION_SHAPE_MARKER = '"reply_cn"'
+_GRADING_SHAPE_MARKER = '"polish"'
+_REVIEW_SHAPE_MARKER = '"highlights"'
 
-    def __init__(self, replies: list[Any]) -> None:
+
+def _prompt_text(kwargs: Mapping[str, Any]) -> str:
+    """请求里的 prompt 全文 (provider 把 ``LlmMessage`` 转成了 ``{"role","content"}`` 字典)."""
+    messages = kwargs.get("messages") or []
+    parts: list[str] = []
+    for message in messages:
+        if isinstance(message, Mapping):
+            parts.append(str(message.get("content") or ""))
+        else:
+            parts.append(str(getattr(message, "content", "")))
+    return "\n".join(parts)
+
+
+class _FakeOpenAI:
+    """替掉 ``llm_provider.AsyncOpenAI``: 按 prompt 形状路由, 再退回脚本.
+
+    路由存在的理由 (§A1 拆调用之后): 一轮实战 = 请求内的 ``generate_turn`` +
+    后台作业里的 ``judge_turn``, 两条路的先后**在测试里不稳定** (作业由用例自己 await
+    驱动, 也可能根本没跑)。按 prompt 里的形状标记各给一份料, 断言就不依赖调用顺序。
+
+    ``replies`` 是**旧口径**的脚本 (按顺序吐, 最后一条无限重复), 保留它是因为大多数用例
+    只调一条路; 形状队列 (``generation`` / ``grading``) 命中时优先。
+    """
+
+    def __init__(
+        self,
+        replies: list[Any],
+        *,
+        generation: list[Any] | None = None,
+        grading: list[Any] | None = None,
+        review: list[Any] | None = None,
+    ) -> None:
         self._replies = list(replies)
+        self._generation = list(generation or [])
+        self._grading = list(grading or [])
+        self._review = list(review or [])
         self.requests: list[dict[str, Any]] = []
         self.chat = _FakeChat(self)
 
-    def next_reply(self) -> Any:
+    def next_reply(self, kwargs: Mapping[str, Any]) -> Any:
+        prompt = _prompt_text(kwargs)
+        if _GENERATION_SHAPE_MARKER in prompt:
+            shaped = self._generation
+        elif _GRADING_SHAPE_MARKER in prompt:
+            shaped = self._grading
+        elif _REVIEW_SHAPE_MARKER in prompt:
+            shaped = self._review
+        else:
+            shaped = []
+        if shaped:
+            return shaped.pop(0) if len(shaped) > 1 else shaped[0]
         if len(self._replies) > 1:
             return self._replies.pop(0)
         return self._replies[0] if self._replies else RuntimeError("no canned reply")
@@ -214,14 +262,25 @@ class _FakeOpenAI:
         return self
 
 
-def install_llm(monkeypatch: pytest.MonkeyPatch, replies: list[Any]) -> _FakeOpenAI:
-    """配好"有 LLM 凭据"的环境并把客户端换成假的 (与 test_llm_endpoints 同套路)."""
+def install_llm(
+    monkeypatch: pytest.MonkeyPatch,
+    replies: list[Any] | None = None,
+    *,
+    generation: list[Any] | None = None,
+    grading: list[Any] | None = None,
+    review: list[Any] | None = None,
+) -> _FakeOpenAI:
+    """配好"有 LLM 凭据"的环境并把客户端换成假的 (与 test_llm_endpoints 同套路).
+
+    ``generation`` / ``grading`` / ``review`` 按 prompt 形状路由 (见 :class:`_FakeOpenAI`);
+    ``replies`` 是给只调一条路的用例的旧脚本口径。
+    """
     from app.config import settings
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_base_url", "https://example.test/v1")
     monkeypatch.setattr(settings, "llm_default_model", "qwen3.8-max")
-    client = _FakeOpenAI(replies)
+    client = _FakeOpenAI(replies or [], generation=generation, grading=grading, review=review)
     monkeypatch.setattr(llm_provider, "AsyncOpenAI", lambda **kwargs: client)
     llm_provider.reset_llm_provider_for_tests()
     return client
