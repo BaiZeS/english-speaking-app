@@ -17,6 +17,8 @@ LLM **不进这条请求** (§3 C3 "不加同步 LLM 路径"): 同步校验只�
 
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import APIRouter, Depends
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -50,18 +52,17 @@ class CustomSceneAccepted(BaseModel):
 
 
 async def _require_identity(db: AsyncSession, device_id: str | None, user_id: str | None) -> User:
-    """写侧身份: device 找/建, 未知 user_id 404; 两个都没给 400."""
+    """写侧身份: device 找/建, 未知 user_id 404; 两个都没给 400.
+
+    ``create=True`` 自己保证有值: 未知 ``user_id`` 在 :func:`users.lookup_user` 内部当场
+    404 (不返回 ``None``), ``device_id`` 走 get-or-create 必返回行 —— 所以这里没有"返回
+    ``None``"的分支可兜 (``cast`` 只是把那份保证写给 mypy).
+    """
     if user_id:
-        user = await users.lookup_user(db, user_id=user_id, create=True)
-        if user is None:  # pragma: no cover —— create=True 对 user_id 走 404 分支
-            raise AppError(404, f"unknown user_id: {user_id}", "USER_NOT_FOUND")
-        return user
+        return cast("User", await users.lookup_user(db, user_id=user_id, create=True))
     if not device_id:
         raise AppError(400, "device_id or user_id is required", "IDENTITY_REQUIRED")
-    user = await users.lookup_user(db, device_id=device_id, create=True)
-    if user is None:  # pragma: no cover —— create=True 的 device 路径必返回行
-        raise AppError(400, "device_id or user_id is required", "IDENTITY_REQUIRED")
-    return user
+    return cast("User", await users.lookup_user(db, device_id=device_id, create=True))
 
 
 @router.post("/dialogue/scenes/custom", status_code=202, response_model=CustomSceneAccepted)

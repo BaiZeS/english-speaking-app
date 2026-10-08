@@ -167,6 +167,16 @@ async def test_list_dialogue_scenes_merges_ready_custom_only_for_owner(
     customs = [s for s in mine["scenes"] if s["kind"] == "custom"]
     assert [s["id"] for s in customs] == [scene_id]
     assert customs[0]["title"] == "我的周末局"
+    # 英文出口 (I-2): 两个分支走同一份 DTO, 键都在; 目录行有 B6 的英文对, 自定义行**故意**
+    # 为空 —— 学员自己写的中文描述没有英文对, 空串 = 那一行不渲染 (D5, 绝不机翻占位)。
+    for scene in mine["scenes"]:
+        assert "title_en" in scene and "description_en" in scene, scene["id"]
+    assert all(
+        s["title_en"].strip() and s["description_en"].strip()
+        for s in mine["scenes"]
+        if s["kind"] == "catalog"
+    )
+    assert customs[0]["title_en"] == "" and customs[0]["description_en"] == ""
 
     theirs = (await client.get("/api/v1/dialogue/scenes", params={"device_id": OTHER})).json()
     assert [s for s in theirs["scenes"] if s["kind"] == "custom"] == []

@@ -93,6 +93,11 @@ class DialogueSceneDto(BaseModel):
     id: str
     title: str
     description: str
+    #: add-only (§4 场景选择器 / D4): 卡片按「中文 + 英文并列」渲染时用的英文展示对。
+    #: 目录场景取 B6 素材 (9 个场景全员已填); 自定义场景是学员自己写的中文描述, 没有
+    #: 英文对 -> 空串 = 那一行不渲染 (D5 缺字段纪律, 绝不机翻占位)。
+    title_en: str = ""
+    description_en: str = ""
     #: add-only (§3 C3b): ``catalog`` = 内置目录, ``custom`` = 学员自己描的场景 (仅归属者可见).
     #: 旧客户端 ``ignoreUnknownKeys``, 多出来的键不炸解析。
     kind: str = "catalog"
@@ -185,16 +190,29 @@ async def list_dialogue_scenes(
     **不新增轮询端点**。不认识的身份读到的是纯目录 (读侧不建行, 别人的行不可见)。
     """
     catalog = list_scenes()
-    payload = [DialogueSceneDto(id=s.id, title=s.title, description=s.description) for s in catalog]
+    payload = [
+        DialogueSceneDto(
+            id=s.id,
+            title=s.title,
+            description=s.description,
+            title_en=s.title_en,
+            description_en=s.description_en,
+        )
+        for s in catalog
+    ]
     by_id = {dto.id: dto for dto in payload}
     if device_id or user_id:
         user = await users.lookup_user(db, device_id=device_id, user_id=user_id)
         if user is not None:
+            # 两个分支走**同一份** DialogueScene 形状 (目录/自定义的解析接缝在 _resolve_scene),
+            # 所以英文出口也只在这一处填: 自定义场景的那两格恒为空 (上面 DTO 的说明)。
             for scene in await scene_spec_generator.list_ready_custom_scenes(db, user.id):
                 by_id[scene.id] = DialogueSceneDto(
                     id=scene.id,
                     title=scene.title,
                     description=scene.description,
+                    title_en=scene.title_en,
+                    description_en=scene.description_en,
                     kind="custom",
                 )
     return DialogueScenesResponse(
@@ -221,6 +239,11 @@ async def generate(
     # 身份先行 (自定义场景按归属解行; 未知 user_id 404 的语义与 /dialogue/turn 一致)。
     user = await _identity_user(db, req)
     scene = await _resolve_scene(db, req.scene, user)
+    # 注册落库: ``get_db`` 的会话**不自动 commit** —— 不显式 commit 的话,
+    # ``_identity_user`` flush 出来的新 User 行随请求结束回滚, 这条路由承诺的
+    # "新 device 就注册"就是空的 (写侧先例 ``POST /history``: 建行路由自己 commit)。
+    # 位置在场景解析**之后**: 未知场景 404 时不该先把陌生 device 注册进来。
+    await db.commit()
     provider = get_llm_provider()
     if cast(bool, getattr(provider, "is_configured", False)):
         try:
@@ -467,7 +490,8 @@ async def _resolve_scene(db: AsyncSession, scene_id: str, user: User | None) -> 
 #: ``AbilityEvent.step_id`` 的列宽 (varchar(32)): **PG 强校验、sqlite 宽容** —— 截断是
 #: 跨方言纪律而非可选优化: 自定义场景的 ``custom_<uuid>`` 共 43 字符, 带音频的语音轮
 #: 在生产 PG 上直写会 ``StringDataRightTruncation`` -> 500 (台词都已生成后炸掉整轮)。
-#: 目录 id 最长 18 字符不受影响; 截过的 uuid 前缀仍可回溯到行。
+#: 目录 id 最长 18 字符不受影响; 截过的 uuid 前缀**需前缀匹配才可回溯**到行
+#: (``LIKE 'custom_<前缀>%'``) —— 等值反查没有, 完整 id 在别处 (job/行本身)。
 _ABILITY_STEP_ID_MAX = 32
 
 
@@ -553,6 +577,14 @@ def _resolve_model(model_id: str | None) -> str:
     return resolve_roleplay_model(model_id)
 
 
+#: 两条 prompt (开场白 ``_opening_prompt`` / 台词 ``_scene_messages``) 共用的教练人设首句:
+#: 两处各抄一遍就会慢慢漂成两位教练, 抽出来**只搬字不改字** (各自后面接的句子不同:
+#: 开场白多一条"美式英语 + 1-2 句", 台词多一条场景/学员水平说明)。
+_COACH_PREAMBLE = (
+    "You are a friendly English-speaking coach helping a learner practice everyday conversation."
+)
+
+
 def _opening_prompt(scene: DialogueScene) -> list[LlmMessage]:
     """开场白 prompt (``POST /dialogue/generate``).
 
@@ -561,8 +593,7 @@ def _opening_prompt(scene: DialogueScene) -> list[LlmMessage]:
     给语气, **不是**让模型照抄的台本 (兜底路径在 T3 已删死, 这里也不许把它接回来)。
     """
     system = (
-        "You are a friendly English-speaking coach helping a learner practice "
-        "everyday conversation. Reply in natural, simple American English "
+        f"{_COACH_PREAMBLE} Reply in natural, simple American English "
         "(CEFR A2-B1). Keep each turn to 1-2 short sentences. Never break character."
     )
     blocks = [f"Practice scene: 「{scene.title}」 —— {scene.description}。"]
@@ -684,8 +715,7 @@ def _scene_messages(
     # ``context`` 是自定义场景的情境行 (目录场景的情境已含在 description 里, 留空不渲染)。
     context_block = f"情境: {scene.context}。" if scene.context else ""
     system = (
-        "You are a friendly English-speaking coach helping a learner practice "
-        "everyday conversation. Never break character. "
+        f"{_COACH_PREAMBLE} Never break character. "
         f"场景: 「{scene.title}」 —— {scene.description}。"
         f"{role_block}{context_block}"
         "学员是中文母语、能读写但开口少的英语初学者 (CEFR A2-B1)。"

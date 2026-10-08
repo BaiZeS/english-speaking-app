@@ -163,7 +163,11 @@ class DialogueSceneRow(Base):
     scene_key: Mapped[str] = mapped_column(String(64), default="")
     #: :class:`app.models.scene_spec.CustomDialogueScene` 的完整 dump.
     doc: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    #: generating | ready | failed
+    #: generating | ready | failed。默认值 ``generating`` 是**历史 DDL 的一部分** (迁移
+    #: ``c3b7e5a91d24`` 的 ``server_default``, 改它 = 又一次迁移, 不值当): 生产唯一的建行点
+    #: (``scene_spec_generator._persist_scene``) 只写 ``ready`` —— "未就绪"这个态活在
+    #: ``generation_jobs`` 那张表里 (轮询面), 这张表里根本没有生成中的行。读侧别拿这个
+    #: 默认值当契约 (目录只放 ``ready`` 才是契约)。
     status: Mapped[str] = mapped_column(String(16), default="generating", index=True)
     #: generated = LLM 按 brief 生成的骨架 (预留给将来的手写/导入).
     source: Mapped[str] = mapped_column(String(16), default="generated")
