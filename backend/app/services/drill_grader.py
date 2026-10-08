@@ -376,6 +376,25 @@ class LlmUnavailableError(Exception):
         return "LLM 未配置:" if self.not_configured else "LLM 判分失败:"
 
 
+#: 台词生成不可用的错误码 (§A6/D5). 两个对话端点 (实战轮 / 自由对话轮) 共用它。
+TURN_GENERATION_UNAVAILABLE_CODE = "TURN_GENERATION_UNAVAILABLE"
+
+#: 学员看到的那句话 (§A6)。**一份**, 因为线上 APK 侧的码表按 code 命中这条中文:
+#: 两处各写一遍就会漂 (一处改了另一处不变 = 同一种故障两种说法)。
+_TURN_GENERATION_UNAVAILABLE_CN = "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试"  # noqa: RUF001
+
+
+def turn_generation_unavailable() -> AppError:
+    """台词生成不可用 -> 503 (§A6 的**唯一**收口: 实战轮与自由对话轮共用).
+
+    为什么要有这个工厂而不是各写一遍 ``AppError(503, …)``: 文案里那句中文与码是客户端码表的
+    键 (``BackendErrorText.sessionErrorCodeText``), 抄两份就一定会漂。照仓内既有风格放在
+    :class:`LlmUnavailableError` 旁边 —— 它正是这条 503 的**因**, 而且两个调用点都从这个模块
+    引东西, 不新增任何模块依赖。
+    """
+    return AppError(503, _TURN_GENERATION_UNAVAILABLE_CN, TURN_GENERATION_UNAVAILABLE_CODE)
+
+
 # ====== 1) read_along: 复用 /score 的 ISE 管线 ======
 
 

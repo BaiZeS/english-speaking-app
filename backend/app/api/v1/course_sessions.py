@@ -75,6 +75,7 @@ from app.services.drill_grader import (
     ability_evidence,
     grade_step,
     transcribe_audio,
+    turn_generation_unavailable,
 )
 from app.services.mission_engine import MissionTaskView, Polish, ReviewReport
 
@@ -1603,12 +1604,9 @@ async def submit_mission_turn(
             exc,
         )
         # D5: 报错不前进 —— 不落 turn、不推进任务、不写 step 行, 也**不**回放剧本。
-        raise AppError(
-            503,
-            # 面向学员的中文文案 (全角标点是刻意的, 见 A6 的码表口径)。
-            "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试",  # noqa: RUF001
-            "TURN_GENERATION_UNAVAILABLE",
-        ) from exc
+        # 503 的码与文案收在 ``drill_grader.turn_generation_unavailable`` (自由对话那条
+        # 路由共用同一份, 免得码表两处漂移)。
+        raise turn_generation_unavailable() from exc
     except Exception:
         await _drain(ise_task)
         raise
@@ -2086,12 +2084,20 @@ _GRADING_JOBS: set[asyncio.Task[None]] = set()
 #: **本进程内**已经在跑的会话: 幂等门 (跨进程靠作业事务里的复读谓词 + 乐观锁收敛)。
 _GRADING_IN_FLIGHT: set[str] = set()
 
-#: 可以被"救回来"的逐轮判分态: ``pending`` (在途或已随进程死掉) / ``failed`` (判分没落)。
-#: ``ready`` 不在其内 —— 评完的轮次绝不能被重评 (那会重复计入画像)。
-_GRADING_RESUME_STATUSES: tuple[str, ...] = ("pending", "failed")
+#: 可以被"救回来"的逐轮判分态 —— **两份语义分开取名字**(值暂同, 但改一处不会误伤另一处):
+#:   ``_GRADING_RESUMABLE`` = GET 的重派水位读它 ("这条会话的判分是不是没人管了");
+#:   ``_GRADING_WRITABLE``  = 作业的 CAS 谓词读它 ("这一轮现在还能不能写").
+#:   ``ready`` 两份都不在内 —— 评完的轮次绝不能被重评 (那会重复计入画像)。
+_GRADING_RESUMABLE: tuple[str, ...] = ("pending", "failed")
+_GRADING_WRITABLE: tuple[str, ...] = ("pending", "failed")
 
 #: 判分整体的重试次数 (判分**算完**之后写库输掉乐观锁时复读重放; 不必重烧 LLM)。
 _GRADING_WRITE_ATTEMPTS = 3
+
+#: 一次作业最多复读 todo 几轮。作业在途时新落的轮次不会被"派生"进来 (§P6 继承下来的会话级
+#: 在途门挡着), 所以每跑完一轮就复读一次; 上限只是兜住"学员一直说话"的极端情形 —— 剩下的
+#: 交给 GET 的水位重派。
+_GRADING_MAX_ROUNDS = 3
 
 
 def _turn_grading_status(entry: dict[str, Any]) -> str:
@@ -2111,7 +2117,7 @@ def _turn_grading_status(entry: dict[str, Any]) -> str:
 def _pending_grading_turns(mission: dict[str, Any]) -> list[dict[str, Any]]:
     """还没落终态的轮次 (按 ``index`` 升序) —— 作业的待办清单 / GET 重派的判据."""
     turns = [t for t in mission.get("turns") or [] if isinstance(t, dict)]
-    todo = [t for t in turns if _turn_grading_status(t) in _GRADING_RESUME_STATUSES]
+    todo = [t for t in turns if _turn_grading_status(t) in _GRADING_RESUMABLE]
     return sorted(todo, key=lambda t: _as_int(t.get("index")))
 
 
@@ -2204,44 +2210,64 @@ async def run_mission_grading_job(session_id: str) -> None:
 
 
 async def _run_grading_job(db: AsyncSession, session_id: str) -> None:
-    """作业主体 (与 :func:`run_mission_grading_job` 分开: 兜底要能接住这里任何一步的抛错)."""
-    doc = await load_session_snapshot(db, session_id)
-    if doc is None:
-        logger.warning(
-            "mission grading job skipped | session={} reason=session row gone", session_id
-        )
-        return
-    mission = _sub_doc(doc, "mission")
-    if not mission:
-        logger.info("mission grading job skipped | session={} reason=no mission", session_id)
-        return
-    todo = _pending_grading_turns(mission)
-    if not todo:
-        # 崩在"请求落库"与"派生作业"之间时, 顶层指针可能还没落: 就地补一次, 免得 GET
-        # 因为指针与逐轮状态对不上而反复重派。
-        if mission.get("grading") != _grading_pointer(mission):
-            mission["grading"] = _grading_pointer(mission)
-            await _commit_grading(db, session_id, doc)
-        logger.info(
-            "mission grading job skipped | session={} reason=every turn is terminal", session_id
-        )
-        return
-    course = _course_of(doc)
-    for entry in todo:
-        turn_index = _as_int(entry.get("index"))
-        # 判分只吃"最后一句 + 任务块" (§6): 不带整段对话, 也不带客户端选的模型 ——
-        # ``judge_turn`` 恒走服务端默认模型 (D2)。
-        judgement, source, llm_source = await mission_engine.judge_turn(
-            course,
-            cast("list[dict[str, Any]]", mission.get("tasks") or []),
-            str(entry.get("user_text") or ""),
-            hard_timeout_s=GRADING_JOB_BUDGET_S,
-        )
-        if not await _publish_grading(
-            db, session_id, course, turn_index, judgement, source, llm_source
-        ):
-            # 行没了 / 反复输掉乐观锁: 交给 GET 的水位重派 (下一次判分仍在预算内)。
-            break
+    """作业主体 (与 :func:`run_mission_grading_job` 分开: 兜底要能接住这里任何一步的抛错).
+
+    **为什么是循环而不是取一份 todo 清单**: §P6 的派生门是**会话级**的
+    (:data:`_GRADING_IN_FLIGHT`), 而这里的进度是**逐轮**的 —— 作业在途时新落的轮次调
+    :func:`spawn_mission_grading_job` 会被在途门挡掉 (作业自己更不可能再派: 那个 id 还在
+    集合里)。所以每跑完一轮就**复读一次 todo**, 让"作业跑着的时候学员又说了下一句"在本次
+    作业里就被判掉, 不必等 :data:`GRADING_REDISPATCH_AFTER_S` 的水位。
+    """
+    graded_any = False
+    for round_index in range(_GRADING_MAX_ROUNDS):
+        doc = await load_session_snapshot(db, session_id)
+        if doc is None:
+            logger.warning(
+                "mission grading job skipped | session={} reason=session row gone", session_id
+            )
+            return
+        mission = _sub_doc(doc, "mission")
+        if not mission:
+            logger.info("mission grading job skipped | session={} reason=no mission", session_id)
+            return
+        todo = _pending_grading_turns(mission)
+        if not todo:
+            if not graded_any:
+                # 崩在"请求落库"与"派生作业"之间时, 顶层指针可能还没落: 就地补一次, 免得 GET
+                # 因为指针与逐轮状态对不上而反复重派。
+                if mission.get("grading") != _grading_pointer(mission):
+                    mission["grading"] = _grading_pointer(mission)
+                    await _commit_grading(db, session_id, doc)
+                logger.info(
+                    "mission grading job skipped | session={} reason=every turn is terminal",
+                    session_id,
+                )
+            else:
+                logger.info(
+                    "mission grading job done | session={} rounds={}", session_id, round_index
+                )
+            return
+        course = _course_of(doc)
+        for entry in todo:
+            turn_index = _as_int(entry.get("index"))
+            # 判分只吃"最后一句 + 任务块" (§6): 不带整段对话, 也不带客户端选的模型 ——
+            # ``judge_turn`` 恒走服务端默认模型 (D2)。
+            judgement, source, llm_source = await mission_engine.judge_turn(
+                course,
+                cast("list[dict[str, Any]]", mission.get("tasks") or []),
+                str(entry.get("user_text") or ""),
+                hard_timeout_s=GRADING_JOB_BUDGET_S,
+            )
+            if not await _publish_grading(
+                db, session_id, course, turn_index, judgement, source, llm_source
+            ):
+                # 行没了 / 反复输掉乐观锁: 交给 GET 的水位重派 (下一次判分仍在预算内)。
+                return
+        graded_any = True
+    logger.warning(
+        "mission grading job hit its round cap | session={} (剩下的轮次交给 GET 的水位重派)",
+        session_id,
+    )
 
 
 async def _publish_grading(
@@ -2257,14 +2283,15 @@ async def _publish_grading(
 ) -> bool:
     """把一轮的判分写回快照 + step 行 + 画像证据; 返回是否真的写了 (§A3 的终态 CAS 门).
 
-    判分重放**不幂等** (``record_step_evidence`` 只 add, 画像 EWMA 会重复计入), 所以这一
-    轮只许写一次。这里没有独立的列可以写 ``WHERE status='pending'`` (状态住在 JSON 列里),
-    于是 CAS 由三件事合成, 语义与 ``assessment.py`` 的 ``UPDATE … WHERE status='judging'``
-    一致:
+    **只许写一次画像证据**: ``record_step_evidence`` 只 add、画像 EWMA 会重复计入, 所以
+    "同一轮不许落第二份证据"是硬门 —— 判分重放 / 并发作业 / 重派来的第二个都只能在**这一轮
+    还是** ``pending`` 或 ``failed`` 时写 (``failed`` 轮**没有**分数与润色, 因此允许再试一次
+    把它补成 ``ready``; 而 ``ready`` 轮一律跳过)。这里没有独立的列可以写
+    ``WHERE status='pending'`` (状态住在 JSON 列里), 于是 CAS 由三件事合成, 语义与
+    ``assessment.py`` 的 ``UPDATE … WHERE status='judging'`` 一致:
 
     1. **事务内复读** (``populate_existing``, 绕过身份映射里的旧快照);
-    2. **谓词检查**: 这一轮的 ``grading.status`` 仍是 ``pending``/``failed`` 才写 —— 已
-       ``ready`` 的轮次直接跳过, 重放 / 并发的第二个作业都不许再落一次;
+    2. **谓词检查**: 这一轮的 ``grading.status`` 仍在 :data:`_GRADING_WRITABLE` 里才写;
     3. **同一事务**: 证据行与快照一起由 :func:`_save_doc` 提交, 输掉乐观锁
        (``StaleDataError`` -> 409) 时刚 ``add`` 的证据行随事务一起回滚 —— 谁输谁作废。
 
@@ -2295,7 +2322,7 @@ async def _publish_grading(
                 "mission grading turn vanished | session={} turn={}", session_id, turn_index
             )
             return False
-        if _turn_grading_status(entry) not in _GRADING_RESUME_STATUSES:
+        if _turn_grading_status(entry) not in _GRADING_WRITABLE:
             # 谓词不成立 = 别人已经写完了 (重放 / 并发作业 / 重派来的第二个)。到此为止。
             logger.info(
                 "mission grading skipped (turn already terminal) | session={} turn={} status={}",

@@ -22,7 +22,7 @@ v2.0 P3 扩展 (§5.5-4 / §5.6 / §5.7 / §四 魔法字符串):
 现成的 ``POST /polish`` (纯文本工具, 不进画像)。
 
 拿不到台词 -> ``503 TURN_GENERATION_UNAVAILABLE`` (D5: 报错不前进)。**不再**有
-"降级到目录里的下一句"那条路 (``scene.fallback_reply`` / 写死的那两句): 它们正是
+"降级到目录里的下一句"那条路 —— 它连同 ``DialogueScene`` 上的两个兜底字段一起删了: 它们正是
 "两轮之后永远同一句"的根因, 而且冒充了一次不存在的生成。
 """
 
@@ -46,7 +46,11 @@ from app.models.db import User
 from app.services import mission_engine, users
 from app.services.ability_engine import record_step_evidence as ability_record
 from app.services.dialogue_scenes import DialogueScene, get_scene, list_scenes
-from app.services.drill_grader import AbilityEvidence, LlmUnavailableError
+from app.services.drill_grader import (
+    AbilityEvidence,
+    LlmUnavailableError,
+    turn_generation_unavailable,
+)
 from app.services.llm_provider import (
     LlmMessage,
     get_llm_provider,
@@ -280,12 +284,8 @@ async def turn(
         if anchored_task is not None and not anchored_task.done():
             anchored_task.cancel()  # 本轮作废时不再要发音证据
         logger.warning("dialogue turn generation unavailable | scene={} err={}", req.scene_id, exc)
-        raise AppError(
-            503,
-            # 面向学员的中文文案 (全角标点是刻意的; 码表在客户端 T5)。
-            "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试",  # noqa: RUF001
-            "TURN_GENERATION_UNAVAILABLE",
-        ) from exc
+        # 503 的码与文案与实战轮**同一份** (``drill_grader``), 免得同一种故障两种说法。
+        raise turn_generation_unavailable() from exc
     except Exception:
         if anchored_task is not None and not anchored_task.done():
             anchored_task.cancel()

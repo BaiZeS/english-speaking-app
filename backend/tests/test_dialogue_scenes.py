@@ -44,8 +44,9 @@ def test_get_scene_known_returns_matching_scene() -> None:
     assert scene.id == "ordering_coffee"
     assert scene.opening
     assert scene.suggestion
-    assert scene.next_suggestion
-    assert scene.fallback_reply
+    # §A4/D5: 那两个"LLM 拿不到就照本宣科"的兜底字段已删 (拿不到就是 503), 这里钉住
+    # 它们**没被加回来** —— 加回来就等于把"每轮同一句"重新引进来。
+    assert not hasattr(scene, "next_suggestion") and not hasattr(scene, "fallback_reply")
 
 
 def test_get_scene_unknown_falls_back_to_first() -> None:

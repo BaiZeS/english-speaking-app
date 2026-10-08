@@ -30,7 +30,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
@@ -169,6 +169,90 @@ async def _events_of(db: AsyncSession, sid: str, step_id: str) -> list[AbilityEv
 
 
 # ==================================================== 1) 正常路: 判分回填 + 只落一次证据
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_lands_while_the_job_runs_is_graded_in_the_same_pass(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**活性** (§A3): 作业在途时新落的轮次在**本次**作业里就被判掉, 不等 90s 水位.
+
+    派生门是**会话级**的 (``_GRADING_IN_FLIGHT``), 而进度是**逐轮**的 —— 作业跑着的时候学员
+    又说了下一句, 那个请求的 ``spawn_mission_grading_job`` 会被在途门挡成 ``False`` (作业
+    自己更不可能再派: 它的 id 还在集合里)。所以作业每跑完一轮都**复读 todo**, 否则这一轮会
+    静默停在 ``pending``, 直到 GET 过水位 (90s) 才有人管它 —— 学员看到的是"下一句的润色
+    迟迟不来"。
+
+    注入手法: 包一层 ``_publish_grading``, 在它**刚 commit 完第一轮**之后用**作业自己的
+    session** 追加一轮 (与"另一个请求刚落库"等价; 用同一个 session 是为了不把测试拖进 sqlite
+    StaticPool 的跨会话竞态 —— 那测的是 sqlite, 不是本作业)。
+    """
+    sid = await _ready_sid(client)
+    install_llm(monkeypatch, generation=[generation_json()], grading=[_GRADE_T1])
+    await _mission(client, sid, {"text": "How much money?"})
+
+    original_publish = cs._publish_grading
+    injected = {"done": False}
+
+    async def _publish_then_a_new_turn(*args: Any, **kwargs: Any) -> bool:
+        written = await original_publish(*args, **kwargs)
+        job_db = cast(AsyncSession, args[0])
+        if not written or injected["done"]:
+            return written
+        injected["done"] = True
+        doc = await _read_doc(job_db, sid)
+        doc["mission"]["turns"].append(
+            {
+                "index": 2,
+                "at": "2026-10-08T00:00:01+00:00",
+                "user_text": "How much is that?",
+                "reply": "It comes to three dollars.",
+                "sub_scores": {},
+                "source": "pending",
+                "newly_done": [],
+                "grading": {"status": "pending", "at": "2026-10-08T00:00:01+00:00"},
+            }
+        )
+        doc["mission"]["turn_count"] = 2
+        doc["mission"]["grading"] = {"status": "pending", "turn": 2}
+        rows = (
+            (await job_db.execute(select(PracticeSession).where(PracticeSession.id == sid)))
+            .scalars()
+            .one()
+        )
+        rows.doc = copy.deepcopy(doc)
+        job_db.add(
+            cs.PracticeStep(
+                **cs._mission_step_values(
+                    doc["mission"]["turns"][1],
+                    session_id=sid,
+                    user_id=str(rows.user_id),
+                    turn_index=2,
+                )
+            )
+        )
+        await job_db.commit()
+        return written
+
+    monkeypatch.setattr(cs, "_publish_grading", _publish_then_a_new_turn)
+    await cs.run_mission_grading_job(sid)
+    assert injected["done"], "第一轮没判成功 -> 这条用例什么都没测"
+
+    snapshot = await _snapshot(client, sid)
+    entries = {entry["index"]: entry for entry in snapshot["mission"]["turns"]}
+    assert entries[2]["grading"]["status"] == "ready", (
+        "作业在途时落库的那一轮被静默漏掉了 -> 学员要等 90s 水位才有润色"
+    )
+    assert entries[2]["sub_scores"]["grammar"] == pytest.approx(66.0)
+    assert snapshot["grading_status"] == "ready"  # 顶层指针跟着落终态
+    step2 = (
+        await db.execute(
+            select(cs.PracticeStep)
+            .where(cs.PracticeStep.session_id == sid, cs.PracticeStep.step_id == "m2")
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert step2.score_grammar == pytest.approx(66.0)  # 回填也到位
 
 
 @pytest.mark.asyncio

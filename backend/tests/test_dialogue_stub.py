@@ -17,6 +17,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.services import drill_grader as dg
 from app.services import llm_provider
 from tests.test_drill_grader import install_llm
 from tests.test_mission import generation_json
@@ -54,7 +55,10 @@ async def test_dialogue_turn_without_credentials_is_a_503() -> None:
         r = await c.post("/api/v1/dialogue/turn", json=payload)
     assert r.status_code == 503, r.text
     body = r.json()
-    assert body["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
+    # 码与文案收在 ``drill_grader.turn_generation_unavailable`` 一份 (两个端点共用):
+    # 抄两份的话改一处就会漏一处, 客户端码表 (按 code 命中中文) 也跟着前后不一致。
+    assert body["error"]["code"] == dg.TURN_GENERATION_UNAVAILABLE_CODE
+    assert body["error"]["message"] == dg.turn_generation_unavailable().message
     assert "reply_text" not in body  # 没有伪造的气泡
 
 

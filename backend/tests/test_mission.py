@@ -530,6 +530,8 @@ async def test_second_bad_output_is_a_503_without_side_effects(
     assert res.status_code == 503
     err = res.json()["error"]
     assert err["code"] == "TURN_GENERATION_UNAVAILABLE" and "没有发生" in err["message"]
+    # 与自由对话那条路由**同一份**码与文案 (工厂在 ``drill_grader``)。
+    assert err["message"] == dg.turn_generation_unavailable().message
     assert len(fake.requests) == 2  # 只重试一次, 不做第三次
 
     snapshot = await _snapshot(client, sid)

@@ -621,10 +621,23 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
     §A(D1) 拆调用之后两条对话路径都重写了:
 
     * ``mission 单轮``: 请求内只剩 IAT + **台词** (``GEN_TURN_BUDGET_S``) —— 判分移出请求,
-      所以不再与台词取 ``max``; 锚定 ISE 仍与生成并行, 但它 8s < GEN 14s, 天然被包含。
-    * ``dialogue 单轮``: 同一形状 (IAT 8 + max(ISE 8.5, GEN 14)), 而且它**第一次进这张
-      表** —— 之前它自己手搓 ``provider.chat`` 且不在求和里 (§A4 顺手请进时延门)。
+      所以不再与台词取 ``max``; 锚定 ISE 仍与生成并行, 它被 ``max`` 吃掉 (见下面的假设断言)。
+    * ``dialogue 单轮``: 同一形状 ``IAT 8.0 + max(ISE 8.5, GEN 14.0) = 22.0``, 而且它
+      **第一次进这张表** —— 之前它自己手搓 ``provider.chat`` 且不在求和里 (§A4 顺手请进
+      时延门)。
     """
+    # **不要**把"ISE 恒 ≤ GEN 墙"当散文假设: 真正给 ISE 封顶的是讯飞服务层自己的
+    # ``xunfei_ise_timeout_s`` (调用点那 8/8.5s 只是外层再包一层), 所以这里断言
+    # "ISE 的真实最坏 + 余量 ≤ 台词的墙" —— mission 单轮与 dialogue 单轮都靠它把 ISE
+    # 折进 ``max(...)`` 而不额外加时。改任何一个数都会在这里红, 而不是在生产上变成
+    # "请求凭空多了 8 秒"。
+    ise_service_worst_s = float(settings.xunfei_ise_timeout_s)
+    assert ise_service_worst_s + MARGIN_S <= dg.GEN_TURN_BUDGET_S, (
+        "讯飞 ISE 的服务层最坏超时已越过台词墙 -> 两条对话路径的求和都不再成立 "
+        "(ISE 会额外加时而不是被 max 吃掉)"
+    )
+    assert ise_service_worst_s <= cs.ISE_TURN_BUDGET_S  # 外层包装不该短于服务层自己的上限
+    assert ise_service_worst_s <= dialogue._ISE_TASK_BUDGET_S
     # 音频步的 IAT 只有服务层自己的 8s + ws open_timeout 5s (调用点没包预算)。
     iat_service_worst_s = float(settings.xunfei_iat_timeout_s) + 5.0
     mission_turn_s = cs.IAT_TURN_BUDGET_S + dg.GEN_TURN_BUDGET_S
