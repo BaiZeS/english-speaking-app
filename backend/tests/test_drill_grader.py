@@ -198,9 +198,12 @@ class _FakeChat:
 
 #: prompt 里的**形状标记**: §A1 之后一轮有两次调用 (生成侧 / 判分侧) 外加收工时的总评文案,
 #: 各自的 JSON 形状里有对方没有的键 —— 用它们路由, 用例就不必猜"谁先被调到"。
+#: ``scene`` (§3 C2) 是第四条: 自定义场景骨架作业, 形状里独有的 ``"opener_cn"`` 键
+#: 与上面三个互斥 (整课骨架用 ``opening_a_cn``, 不会撞)。
 _GENERATION_SHAPE_MARKER = '"reply_cn"'
 _GRADING_SHAPE_MARKER = '"polish"'
 _REVIEW_SHAPE_MARKER = '"highlights"'
+_SCENE_SHAPE_MARKER = '"opener_cn"'
 
 
 def _prompt_text(kwargs: Mapping[str, Any]) -> str:
@@ -233,11 +236,13 @@ class _FakeOpenAI:
         generation: list[Any] | None = None,
         grading: list[Any] | None = None,
         review: list[Any] | None = None,
+        scene: list[Any] | None = None,
     ) -> None:
         self._replies = list(replies)
         self._generation = list(generation or [])
         self._grading = list(grading or [])
         self._review = list(review or [])
+        self._scene = list(scene or [])
         self.requests: list[dict[str, Any]] = []
         self.chat = _FakeChat(self)
 
@@ -249,6 +254,8 @@ class _FakeOpenAI:
             shaped = self._grading
         elif _REVIEW_SHAPE_MARKER in prompt:
             shaped = self._review
+        elif _SCENE_SHAPE_MARKER in prompt:
+            shaped = self._scene
         else:
             shaped = []
         if shaped:
@@ -269,18 +276,25 @@ def install_llm(
     generation: list[Any] | None = None,
     grading: list[Any] | None = None,
     review: list[Any] | None = None,
+    scene: list[Any] | None = None,
 ) -> _FakeOpenAI:
     """配好"有 LLM 凭据"的环境并把客户端换成假的 (与 test_llm_endpoints 同套路).
 
-    ``generation`` / ``grading`` / ``review`` 按 prompt 形状路由 (见 :class:`_FakeOpenAI`);
-    ``replies`` 是给只调一条路的用例的旧脚本口径。
+    ``generation`` / ``grading`` / ``review`` / ``scene`` 按 prompt 形状路由 (见
+    :class:`_FakeOpenAI`); ``replies`` 是给只调一条路的用例的旧脚本口径。
     """
     from app.config import settings
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
     monkeypatch.setattr(settings, "llm_base_url", "https://example.test/v1")
     monkeypatch.setattr(settings, "llm_default_model", "qwen3.8-max")
-    client = _FakeOpenAI(replies or [], generation=generation, grading=grading, review=review)
+    client = _FakeOpenAI(
+        replies or [],
+        generation=generation,
+        grading=grading,
+        review=review,
+        scene=scene,
+    )
     monkeypatch.setattr(llm_provider, "AsyncOpenAI", lambda **kwargs: client)
     llm_provider.reset_llm_provider_for_tests()
     return client

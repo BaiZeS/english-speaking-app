@@ -103,6 +103,19 @@ def _no_detached_judge_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(assessment, "spawn_assessment_judge_job", lambda attempt_id: False)
 
 
+@pytest.fixture(autouse=True)
+def _no_detached_scene_brief_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """自定义场景骨架作业 (§3 C3) 同理不真的 ``create_task`` 派生 —— 口径与上面三个替身完全一致.
+
+    * 断言"202 派生了场景作业"的用例: 自己 monkeypatch 记调用;
+    * 断言作业终态的用例: 直接 ``await scene_spec_generator.run_scene_brief_job(job_id)``
+      —— 同 ``test_grading_async`` / ``test_course_generator`` 的手法。
+    """
+    from app.services import scene_spec_generator
+
+    monkeypatch.setattr(scene_spec_generator, "spawn_scene_brief_job", lambda job_id: None)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _init_db() -> AsyncIterator[None]:
     """Create all tables in fresh in-memory sqlite for each test."""

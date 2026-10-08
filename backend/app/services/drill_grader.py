@@ -170,6 +170,15 @@ GRADING_TURN_BUDGET_S = 45.0
 #: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。
 POLISH_BUDGET_S = 10.0
 
+#: 自定义场景骨架**后台作业** (:func:`app.services.scene_spec_generator.run_scene_brief_job`)
+#: 的墙钟 (§3 C2/C3): 与 ``REVIEW_COPY_JOB_BUDGET_S`` / ``GRADING_*`` 同一族 —— 它在请求
+#: 之外跑 (202 + 轮询), 30s 契约对它不成立, 但**必须封顶**: 挂死的 LLM 不能把 job 永远
+#: 留在 ``running``, 否则轮询端 (``GET /scenes/jobs/{id}``) 等不到终态。
+#: 单次 socket 沿用 ``_judge`` 默认的 ``LLM_TIMEOUT_S`` (20s): 关闭思考后骨架 JSON 远小于
+#: 整课, 两级之比与 REVIEW_*/GRADING_* 取同一口径 (墙 > 2x socket, 坏 JSON 的回喂重试
+#: 真跑得完)。AST 门只豁免 ``course_generator.py``, 所以调用点**显式**传它。
+SCENE_BRIEF_JOB_BUDGET_S = 45.0
+
 #: CEFR 判级 (``POST /assessment/{id}/complete``; 一次批量 7 题, 600 token) 的硬预算。
 #: 逐题判会被 "7 题 x 20s" 拖爆, 本来就是一次批量调用; 超时 = 诚实空态 (cefr=null,
 #: 零画像写入), 不是 500。仅对**不传 ``async_judge`` 的老客户端**同步路径生效 ——

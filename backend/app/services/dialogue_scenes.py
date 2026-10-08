@@ -12,13 +12,25 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DialogueScene:
-    """一个场景的**静态素材**: 标题/描述 (选择器卡片) + 开场白 + 一句参考句.
+    """一个场景的**静态素材**: 卡片展示 (中/英) + 人设/议程/开场与示范素材.
 
     ``opening`` 与 ``suggestion`` 仍然有消费者 (``/dialogue/generate`` 的确定性开场 +
     客户端的参考回答卡), 所以留着。而 ``next_suggestion`` / ``fallback_reply`` 这对
     "LLM 拿不到时照本宣科" 的兜底字段在 §A4/D5 之后**没有任何读者** (拿不到台词就是 503,
     不再回放目录), 已删 —— 别再把它们加回来: 一个场景只有一句兜底句, 用两轮就会重复
     (那正是学员报的"AI 反复问同一句")。
+
+    §A5/B6 扩容 (§3 C2 的自定义场景投影也走同一形状, 见
+    ``scene_spec_generator.dialogue_scene_view``):
+
+    * ``title_en``/``description_en`` —— 计划 D4 的「建议英文」展示面 (§4 场景选择器);
+    * ``persona``/``user_role`` —— 这场里 AI 演谁 / 学员演谁 (中文人设, 进台词 prompt);
+    * ``beats`` —— 议程: 对话按什么方向推进 (§A5「议程推进」的素材本体);
+    * ``openings`` —— **≥2 条**开场候补: 只有一句开场 = 每次进来同一句 (§0 同族缺陷);
+    * ``suggestions`` —— 学员侧示范句素材 (≥2; **只供进 prompt 取材, 不许当兜底句回显**)。
+
+    ⚠ 本模块刻意**不知道** job 表与场景骨架长什么样 (静态素材, 无 DB 形状), 这样
+    ``dialogue_scenes`` 与 ``scene_courses`` 两条生成管线解耦的边界才有形状可守。
     """
 
     id: str
@@ -26,6 +38,23 @@ class DialogueScene:
     description: str
     opening: str
     suggestion: str
+    #: 英文卡片标题 (自定义场景没有, 空 = 那一行不渲染, D5/§4 选择器).
+    title_en: str = ""
+    #: 英文卡片描述.
+    description_en: str = ""
+    #: AI 扮演的角色 (中文人设, prompt 素材).
+    persona: str = ""
+    #: 学员扮演的角色 (中文).
+    user_role: str = ""
+    #: 议程推进方向 (3-6 条, 中文; 空 = 沿用旧版通用议程指令).
+    beats: tuple[str, ...] = ()
+    #: 开场候补 (≥2 句英文; 与 ``opening`` 分开是因为选择器只播第一句).
+    openings: tuple[str, ...] = ()
+    #: 学员示范句素材 (≥2 句英文, **只进 prompt**, 不得当 fallback 回显).
+    suggestions: tuple[str, ...] = ()
+    #: 细粒度情境 (自定义场景的 context_cn 落点: 卡片展示走 ``description``,
+    #: prompt 素材走这里; 静态目录的描述本身已含情境, 故这一格允许留空).
+    context: str = ""
 
 
 _DEFAULT_SCENES: tuple[DialogueScene, ...] = (
