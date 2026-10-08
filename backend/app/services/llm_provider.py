@@ -312,7 +312,7 @@ class BailianOpenAIProvider:
         if extra_body is not None:
             kwargs["extra_body"] = dict(extra_body)
         response = await self._client.with_options(timeout=timeout).chat.completions.create(
-            **kwargs  # type: ignore[arg-type]
+            **kwargs
         )
         content = _extract_content(response)
         return LlmCompletion(content=content, model=getattr(response, "model", model))

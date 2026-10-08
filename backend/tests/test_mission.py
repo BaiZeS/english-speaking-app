@@ -652,7 +652,10 @@ async def test_hint_and_checklist_expose_library_chinese(
         for i, task in enumerate(course["mission"]["tasks"], 1)
     ]
     write_course(
-        scene_root, "scene_alpha", "daily", briefing=BRIEFING6,
+        scene_root,
+        "scene_alpha",
+        "daily",
+        briefing=BRIEFING6,
         mission={**course["mission"], "tasks": tasks},
     )
     scene_store.invalidate_cache()

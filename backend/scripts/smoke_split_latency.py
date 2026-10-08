@@ -55,7 +55,10 @@ _TASKS = (
 )
 
 _TURNS = (
-    ("We have finished the first phase, and we are on schedule.", "Great. What is the main risk right now?"),
+    (
+        "We have finished the first phase, and we are on schedule.",
+        "Great. What is the main risk right now?",
+    ),
     ("The main risk is late vendor feedback.", "Thanks. When do you expect an answer?"),
     ("I am not sure yet. Maybe Friday.", "Okay. Who will follow up with the vendor?"),
     ("I will ask Tom to call them today.", "Got it. Anything else for today?"),
@@ -174,7 +177,9 @@ def _pct(values: list[float], q: float) -> float:
     return ordered[idx]
 
 
-async def one_run(mode: str, model: str, timeout_s: float, no_think: bool = False) -> dict[str, Any]:
+async def one_run(
+    mode: str, model: str, timeout_s: float, no_think: bool = False
+) -> dict[str, Any]:
     provider = get_llm_provider()
     messages, max_tokens = build_messages(mode)
     if no_think:
@@ -215,13 +220,20 @@ async def one_run(mode: str, model: str, timeout_s: float, no_think: bool = Fals
 
 
 async def _one_run_raw(
-    messages: list[LlmMessage], model: str, max_tokens: int, timeout_s: float, mode: str,
+    messages: list[LlmMessage],
+    model: str,
+    max_tokens: int,
+    timeout_s: float,
+    mode: str,
     no_think: bool,
 ) -> dict[str, Any]:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
-        api_key=settings.llm_api_key, base_url=settings.llm_base_url, timeout=timeout_s, max_retries=0
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        timeout=timeout_s,
+        max_retries=0,
     )
     payload = [{"role": m.role, "content": m.content} for m in messages]
     loop = asyncio.get_running_loop()
@@ -243,7 +255,11 @@ async def _one_run_raw(
                 "ms": round((loop.time() - t0) * 1000),
                 "chars": len(content),
                 "completion_tokens": getattr(usage, "completion_tokens", None),
-                "reasoning_tokens": (getattr(getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None)),
+                "reasoning_tokens": (
+                    getattr(
+                        getattr(usage, "completion_tokens_details", None), "reasoning_tokens", None
+                    )
+                ),
                 "json_ok": _looks_like_json(content),
             }
         )
@@ -272,12 +288,16 @@ def _looks_like_json(content: str) -> bool:
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--modes", default="combined,generate,grade", help="逗号分隔: combined|generate|grade")
+    ap.add_argument(
+        "--modes", default="combined,generate,grade", help="逗号分隔: combined|generate|grade"
+    )
     ap.add_argument("--runs", type=int, default=5, help="每种模式跑几次")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--model", default=None, help="默认用 LLM_DEFAULT_MODEL / 白名单首项")
     ap.add_argument("--dump-dir", type=Path, default=None)
-    ap.add_argument("--no-think", action="store_true", help="带 extra_body={enable_thinking: False} 重测")
+    ap.add_argument(
+        "--no-think", action="store_true", help="带 extra_body={enable_thinking: False} 重测"
+    )
     args = ap.parse_args()
 
     if not (settings.llm_api_key and settings.llm_base_url):
@@ -291,7 +311,9 @@ async def main() -> int:
         allowed = allowed_model_ids()
         model = allowed[0] if allowed else ""
     if not model:
-        print("FATAL: 解析不出模型 id (LLM_DEFAULT_MODEL 与 LLM_ALLOWED_MODELS 都空)", file=sys.stderr)
+        print(
+            "FATAL: 解析不出模型 id (LLM_DEFAULT_MODEL 与 LLM_ALLOWED_MODELS 都空)", file=sys.stderr
+        )
         return 2
 
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
