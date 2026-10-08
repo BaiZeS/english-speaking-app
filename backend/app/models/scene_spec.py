@@ -2,7 +2,7 @@
 
 与 ``SceneCourse`` (整门情景课) 是**两个东西**: 这是学员自己描场景补出来的**轻量
 骨架** —— 人设 (AI 演谁 / 学员演谁) + 情境 + 议程 (beats) + 开场白, 正好是自由对话
-实时生成 (:func:`app.services.dialogue._scene_messages`) 缺的那几样场景素材。
+实时生成 (:func:`app.api.v1.dialogue._scene_messages`) 缺的那几样场景素材。
 词表 / 打基础 / 剧本属于 scene_courses 的整课管线, 与这张表解耦 (已批准裁决)。
 
 字段清单按 §3 C2 原文: ``title / description / persona_cn / user_role_cn /
