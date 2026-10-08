@@ -43,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 from loguru import logger
@@ -101,7 +101,9 @@ LLM_MAX_TOKENS = 400
 # tests/test_latency_budget.py 钉死这张表):
 #   POST /sessions/{id}/step      文本回答: 0          + STEP 20           = 20
 #   POST /sessions/{id}/step      音频回答: IAT <=13 (服务层) + STEP 20    = 33  见 (*)
-#   POST /sessions/{id}/mission                  iat 8 + max(ise 8, llm 15) = 23
+#   POST /sessions/{id}/mission (拆调用后)         iat 8 + GEN 14              = 22
+#     (判分与发音逐词分**移出请求** -> ``GRADING_JOB_BUDGET_S`` 那对作业预算; 见 §P6 同款说明)
+#   POST /dialogue/turn (拆调用后)                 iat 8 + max(ise 8.5, GEN 14) = 22.5
 #   POST /sessions/{id}/finish-mission           DB + 数值骨架 (零 LLM)     = DB  见 (§P6)
 #   POST /mission 聊到轮次上限自动收工              23 + 数值骨架 (零 LLM)    = 23  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10
@@ -140,6 +142,20 @@ REVIEW_LLM_BUDGET_S = 20.0
 #: 挂死的 LLM 会留下一条永远停在 ``generating`` 的会话; 封顶 = 最坏 45s 后必落终态,
 #: 轮询与重启兜底 (``course_sessions.REVIEW_REDISPATCH_AFTER_S``) 才有确定的口径。
 REVIEW_COPY_JOB_BUDGET_S = 45.0
+
+#: **对话生成路** (实战轮 / 自由对话轮请求内唯一的那次 LLM) 的两级超时:
+#: 墙钟 14s + 单次 socket 10s。取这组数用的是实测 (scripts/smoke_split_latency.py,
+#: qwen3.8-flash, 关掉隐藏思考): 生成路 p50 3.0s / p95 3.8s —— 墙钟给到 14s 是 3.7 倍
+#: 余量, 而 socket 10s 保证「单次尝试先炸、坏 JSON 的快速重试仍落在墙钟里」
+#: (反例就是旧形状: socket 20s > 墙钟 15s, 一次尝试就能吃穿整轮, 见 CHANGELOG §2.6 T4)。
+#: 判分**不再占这堵墙** (走 ``GRADING_JOB_*``), 所以台词路第一次有了从容的预算。
+GEN_LLM_TIMEOUT_S = 10.0
+GEN_TURN_BUDGET_S = 14.0
+
+#: 实战轮**判分**的后台作业预算 (润色/语法/词汇/任务判定/逐词分): 与 ``REVIEW_*`` 那对
+#: 同理 —— 它在请求之外跑, 不受 30s 契约约束, 但必须封顶, 否则挂死的 LLM 会把 turn 永远
+#: 停在 ``grading=pending``。socket 沿用 ``LLM_TIMEOUT_S`` (关闭思考后实测 6.6s, 绰绰有余)。
+GRADING_JOB_BUDGET_S = 45.0
 
 #: 独立润色 (``POST /polish``; 单句 + 300 token) 的硬预算: 输出最短, 等待也该最短。
 #: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。
@@ -498,6 +514,7 @@ async def _judge(
     timeout: float = LLM_TIMEOUT_S,
     temperature: float = 0.2,
     hard_budget_s: float | None = None,
+    extra_body: Mapping[str, Any] | None = None,
 ) -> _J:
     """一次 LLM 判分 + 容错解析; 输出不合规则**回喂校验错误重试 1 次**.
 
@@ -539,6 +556,7 @@ async def _judge(
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            extra_body=extra_body,
         )
         return completion.content
 

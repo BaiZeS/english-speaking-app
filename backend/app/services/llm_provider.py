@@ -12,7 +12,7 @@ deterministic fallback, 与改动前的行为兼容.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -51,7 +51,19 @@ class LlmProvider(Protocol):
         temperature: float = 0.7,
         max_tokens: int = 512,
         timeout: float = 30.0,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> LlmCompletion: ...
+
+
+def no_thinking_body() -> dict[str, Any] | None:
+    """按部署开关给出"关掉隐藏思考 token"的 body 参数, 没开就 ``None``.
+
+    实测依据见 ``Settings.llm_disable_thinking``: Qwen3 系默认把一半墙钟烧在学员看不见的
+    推理 token 上, 而对话链路的预算是按"看得见的输出"算的。未知参数会有一些网关直接 400,
+    所以这个开关**默认关**, 由 ``LLM_DISABLE_THINKING`` 显式打开 —— 只有新代码路径读它,
+    drill/assessment 的既有调用不受影响。
+    """
+    return {"enable_thinking": False} if settings.llm_disable_thinking else None
 
 
 @dataclass(frozen=True)
@@ -283,15 +295,24 @@ class BailianOpenAIProvider:
         temperature: float = 0.7,
         max_tokens: int = 512,
         timeout: float = 30.0,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> LlmCompletion:
         if self._client is None:
             raise RuntimeError("LLM provider is not configured (missing LLM_API_KEY).")
         payload = [{"role": msg.role, "content": msg.content} for msg in messages]
+        # ``extra_body`` 只在显式给定 forwards —— 某些 OpenAI 兼容网关会把未知参数直接
+        # 打成 400 (实测: 同网关 ``thinking_budget=0`` 回 invalid_parameter_error),
+        # 所以不传就等于不存在, 老调用方零风险。
+        kwargs: dict[str, Any] = {
+            "model": model or self.default_model,
+            "messages": payload,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if extra_body is not None:
+            kwargs["extra_body"] = dict(extra_body)
         response = await self._client.with_options(timeout=timeout).chat.completions.create(
-            model=model or self.default_model,
-            messages=payload,  # type: ignore[arg-type]
-            temperature=temperature,
-            max_tokens=max_tokens,
+            **kwargs  # type: ignore[arg-type]
         )
         content = _extract_content(response)
         return LlmCompletion(content=content, model=getattr(response, "model", model))
