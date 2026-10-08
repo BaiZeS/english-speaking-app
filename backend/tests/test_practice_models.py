@@ -35,6 +35,7 @@ from app.models.db import (
     AssessmentAnswer,
     AssessmentAttempt,
     CourseProgressRow,
+    DialogueSceneRow,
     Expression,
     GenerationJob,
     PracticeSession,
@@ -51,6 +52,8 @@ M2_REVISION = "f3b8d0716c52"
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 # T5 的 M3 (生成任务 + 测评 + 通关进度) 续在 M2 后面 (contracts 在 test_m3_models.py).
 M3_REVISION = "9d2e4c6a8f01"
+#: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
+T4_REVISION = "c3b7e5a91d24"
 M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "app" / "db" / "migrations"
@@ -114,7 +117,7 @@ def test_practice_steps_score_columns_are_nullable() -> None:
 
 def test_json_columns_render_on_both_dialects() -> None:
     """JSON 列在 sqlite (测试) 与 PG16 (生产) 上都渲得出来 (§5.2 的硬要求)."""
-    for model in (PracticeSession, PracticeStep, SceneCourseRow):
+    for model in (PracticeSession, PracticeStep, SceneCourseRow, DialogueSceneRow):
         sqlite_ddl = str(CreateTable(model.__table__).compile(dialect=sqlite.dialect()))
         pg_ddl = str(CreateTable(model.__table__).compile(dialect=postgresql.dialect()))
         assert "JSON" in sqlite_ddl and "JSON" in pg_ddl, model.__tablename__
@@ -318,10 +321,10 @@ def test_m1_then_m2_upgrade_downgrade_on_sqlite(
     assert "ix_practice_sessions_user_status_recency" in indexes
     assert not set(M2_TABLES) & names  # M2 还没上来
 
-    command.upgrade(cfg, "head")  # M2 + (T5 的) M3 一起上来
+    command.upgrade(cfg, "head")  # M2 + (T5 的) M3 + (T4 的) 场景表 一起上来
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) | set(M3_TABLES) <= names
-    assert _version(url) == M3_REVISION
+    assert _version(url) == T4_REVISION
     assert "ix_ability_events_user_created" in indexes
     assert "ix_expressions_user_normalized" in indexes
 
@@ -369,6 +372,7 @@ def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         AssessmentAttempt,
         AssessmentAnswer,
         CourseProgressRow,
+        DialogueSceneRow,
     ):
         expected = {c.name for c in model.__table__.columns}
         assert expected == columns[model.__tablename__], (
@@ -377,9 +381,10 @@ def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_single_head_chains_m1_then_m2() -> None:
-    """单 head + 挂链正确: M3(T5) 修 M2(T4), M2 修 M1(T3), M1 修 P1-era head."""
+    """单 head + 挂链正确: T4 修 M3(T5), M3 修 M2(T4), M2 修 M1(T3), M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [M3_REVISION]
+    assert script.get_heads() == [T4_REVISION]
+    assert script.get_revision(T4_REVISION).down_revision == M3_REVISION
     assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == M1_REVISION
     assert script.get_revision(M1_REVISION).down_revision == PREVIOUS_REVISION

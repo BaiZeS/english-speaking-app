@@ -33,6 +33,8 @@ from app.services.course_progress import record_finished_session
 
 M2_REVISION = "f3b8d0716c52"
 M3_REVISION = "9d2e4c6a8f01"
+#: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
+T4_REVISION = "c3b7e5a91d24"
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
@@ -47,6 +49,7 @@ def test_generation_jobs_columns() -> None:
     assert {
         "id",
         "user_id",
+        "kind",
         "goal_text",
         "category",
         "level",
@@ -216,7 +219,7 @@ def _version(url: str) -> str:
 
 
 def test_m3_upgrade_downgrade_on_sqlite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """从 P1-era head 一次升到 M3, 再退回 M2 -> 表干净消失 -> 重放 (sqlite 段)."""
+    """从 P1-era head 一次升到链尾 (M3 + T4), 再退回 M2 -> 表干净消失 -> 重放 (sqlite 段)."""
     url = f"sqlite:///{tmp_path / 'm3.db'}"
     monkeypatch.setattr(settings, "database_url", url)
     cfg = _alembic_config()
@@ -226,14 +229,15 @@ def test_m3_upgrade_downgrade_on_sqlite(tmp_path: Path, monkeypatch: pytest.Monk
     command.upgrade(cfg, "head")
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) | set(M3_TABLES) <= names
-    assert _version(url) == M3_REVISION
+    assert _version(url) == T4_REVISION  # head = T4 (M3 之上还有一步)
     assert "ux_assessment_answers_attempt_question" in indexes
     assert "error" in columns["generation_jobs"]
     assert "estimated_seconds" in columns["course_progress"]
 
-    command.downgrade(cfg, M2_REVISION)  # 只退 M3
+    command.downgrade(cfg, M2_REVISION)  # 只退 M3 (+ 链尾一步)
     names_after, _, _ = _inspect(url)
     assert not set(M3_TABLES) & names_after
+    assert "dialogue_scenes" not in names_after
     assert set(M2_TABLES) <= names_after
     assert _version(url) == M2_REVISION
 
@@ -258,8 +262,9 @@ def test_m3_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def test_single_head_chains_m1_m2_m3() -> None:
-    """单 head + 挂链正确: M3(T5) 修 M2(T4), M2 修 M1, M1 修 P1-era head."""
+    """单 head + 挂链正确: T4 修 M3(T5), M3 修 M2(T4), M2 修 M1, M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [M3_REVISION]
+    assert script.get_heads() == [T4_REVISION]
+    assert script.get_revision(T4_REVISION).down_revision == M3_REVISION
     assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == "c9a1f4e7b208"

@@ -23,6 +23,10 @@ from app.config import settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+#: T4 新增的那个 revision (dialogue_scenes + generation_jobs.kind); 它必须接在
+#: T4 动手时的 head ``9d2e4c6a8f01`` 之后, 且是当前唯一 head。
+T4_REVISION = "c3b7e5a91d24"
+
 EXPECTED_TABLES = {
     "users",
     "lessons",
@@ -36,6 +40,7 @@ EXPECTED_TABLES = {
     "expressions",
     "annotated_diffs",
     "generation_jobs",
+    "dialogue_scenes",
     "assessment_attempts",
     "assessment_answers",
     "course_progress",
@@ -67,6 +72,75 @@ def _history_fks(db_path: Path) -> list[tuple[str, str]]:
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute("PRAGMA foreign_key_list('history')")
         return [(row[3], row[2]) for row in rows]
+
+
+def _table_columns(db_path: Path, table: str) -> dict[str, tuple[str, str]]:
+    """(列名 -> (类型, dflt_value)) —— PRAGMA table_info 的 name/type/dflt_value."""
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(f"PRAGMA table_info('{table}')")
+        return {str(row[1]): (str(row[2]), str(row[4] or "")) for row in rows}
+
+
+def _unique_indexes(db_path: Path, table: str) -> set[tuple[str, ...]]:
+    """该表上的唯一索引列组合 (sqlite_master 的 index SQL 里挑 unique 的那些)."""
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "select name, sql from sqlite_master where type='index' and tbl_name=?",
+            (table,),
+        )
+        unique: set[tuple[str, ...]] = set()
+        for name, sql in rows:
+            if not sql or "UNIQUE" not in str(sql).upper():
+                continue
+            cols: list[str] = []
+            for info in conn.execute(f"PRAGMA index_info('{name}')"):
+                cols.append(str(info[2]))
+            unique.add(tuple(cols))
+        return unique
+
+
+def test_alembic_head_is_the_t4_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """链条必须仍是**单线**, 且 T4 的 revision 挂在当时的 head 上 (§3 C1 的硬要求).
+
+    计划原文: ``down_revision = "9d2e4c6a8f01"`` (T4 动手时的 head)。这条不写死父节点
+    字符串去对, 而是问 ScriptDirectory 要真值: head 只要不是这一个 (有人插了分支 /
+    改了父节点 / 又叠了迁移却没改本用例) 就红 —— 顺便钉住"新 revision 真的接进去了"。
+    """
+    from alembic.script import ScriptDirectory
+
+    cfg = _alembic_config("sqlite://", monkeypatch)
+    script = ScriptDirectory.from_config(cfg)
+    assert script.get_heads() == [T4_REVISION], f"heads={script.get_heads()}"
+    assert script.get_revision(T4_REVISION).down_revision == "9d2e4c6a8f01"
+
+
+def test_sqlite_new_dialogue_scene_table_and_job_kind_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T4 这一个 revision 自己的升级/回退 (不依赖整链重建, 见上面那条的 edb6 注记).
+
+    * ``dialogue_scenes`` 建出来, ``(user_id, scene_key)`` 是唯一索引 (upsert 幂等的前提);
+    * ``generation_jobs.kind`` 加上来且有 ``server_default='course'`` (旧行回填的载体);
+    * 回退一步: 表没了、列没了 —— 双向可逆。
+    """
+    db = tmp_path / "t4.db"
+    cfg = _alembic_config(f"sqlite:///{db}", monkeypatch)
+    command.upgrade(cfg, "head")
+
+    assert "dialogue_scenes" in _table_names(db)
+    index_cols = _unique_indexes(db, "dialogue_scenes")
+    assert ("user_id", "scene_key") in index_cols, index_cols
+    kind = _table_columns(db, "generation_jobs").get("kind")
+    assert kind is not None and kind[0].upper() == "VARCHAR(32)"
+    assert "course" in kind[1], f"kind 的 server_default 丢了: {kind}"
+
+    command.downgrade(cfg, "-1")
+    assert "dialogue_scenes" not in _table_names(db)
+    assert "kind" not in _table_columns(db, "generation_jobs")
+
+    command.upgrade(cfg, "head")
+    assert "dialogue_scenes" in _table_names(db)
+    assert "kind" in _table_columns(db, "generation_jobs")
 
 
 def test_sqlite_fresh_database_upgrades_to_head(

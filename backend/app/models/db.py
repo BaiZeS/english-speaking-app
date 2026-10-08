@@ -136,6 +136,52 @@ class SceneCourseRow(Base):
         super().__init__(**kwargs)
 
 
+class DialogueSceneRow(Base):
+    """学员**自己描述**的自由对话场景 (计划 §3 C1, 数据进 DB).
+
+    与 :class:`SceneCourseRow` 同形同纪律, 但是**另一个东西**: 那张表的 ``doc`` 是一门
+    几十秒的情景课 (词汇/打基础/剧本), 这张表是自由对话的一页场景骨架
+    (:class:`app.models.scene_spec.CustomDialogueScene`)。自由对话没有会话表, 场景就是
+    它唯一的持久化对象。
+
+    * ``scene_key`` = brief 指纹 (归一化哈希, 见
+      :func:`app.services.scene_spec_generator.scene_key_for`): 同一个人同一段描述
+      upsert 成同一行, 所以对外 id ``custom_<row.id>`` 在"重生成"时保持稳定;
+    * ``status`` 三态 ``generating`` / ``ready`` / ``failed`` —— 目录列表只放 ``ready``
+      (同 ``scene_courses`` 的画廊纪律): 生成中的还没内容可聊, 失败的行**不冒充可用**;
+    * ``doc`` 是 ``sqlalchemy.JSON`` (**不是** PG 专属的 JSONB, 见本文件顶部那段):
+      sqlite 测试与 PG16 生产共用同一份 DDL。读要 deepcopy、写要整体换对象 (T3 钉的坑).
+
+    归属 = ``user_id``: 别人的行任何读写都当"不存在" (404, 不泄露存在性)。
+    """
+
+    __tablename__ = "dialogue_scenes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: brief 指纹 (同一个用户同一段描述只留一行).
+    scene_key: Mapped[str] = mapped_column(String(64), default="")
+    #: :class:`app.models.scene_spec.CustomDialogueScene` 的完整 dump.
+    doc: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: generating | ready | failed
+    status: Mapped[str] = mapped_column(String(16), default="generating", index=True)
+    #: generated = LLM 按 brief 生成的骨架 (预留给将来的手写/导入).
+    source: Mapped[str] = mapped_column(String(16), default="generated")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        # 同一个用户同一段描述只留一行 (重新生成走 upsert); 覆盖按 user_id 扫的单列用法.
+        Index("ix_dialogue_scenes_user_scene_key", "user_id", "scene_key", unique=True),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        super().__init__(**kwargs)
+
+
 class PracticeSession(Base):
     """通关会话状态机快照 (计划 §5.3「通关会话状态机」).
 
@@ -388,19 +434,27 @@ class Expression(Base):
 
 
 class GenerationJob(Base):
-    """课程生成任务 (计划 §5.2 M3 / §5.3 ``POST /scenes/generate``).
+    """后台生成任务 (计划 §5.2 M3 / §5.3 ``POST /scenes/generate``; §3 C3 起两个 kind).
 
     生成走 ``asyncio.create_task`` 后台任务, 客户端轮询本表的 ``progress`` /
     ``stage_text``; 两段式生成 (先骨架后细节, 见 ``app.services.course_generator``)
     每推进一段就更新一次行 —— 所以 job 行的每次状态变化都**立即 commit**, 不和
     别的写操作共享事务 (轮询读的是别的会话)。
+
+    §3 C3: 自定义自由对话场景的骨架生成 (``app.services.scene_spec_generator``) **复用
+    同一张表与同一个轮询端点**, 靠 ``kind`` 区分 —— 否则 ``GET /scenes/jobs/{id}`` 会把
+    两种任务混成一种 (客户端按 kind 选文案与后续动作)。``goal_text`` 对 scene_brief 任务
+    存的是学员那句场景描述 (列非空, 也是最自然的审计字段)。
     """
 
     __tablename__ = "generation_jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
-    #: 学习目标原文 (用户输入的那句话, 4..200 字).
+    #: course = 整课生成 (POST /scenes/generate) | scene_brief = 自定义对话场景
+    #: (POST /dialogue/scenes/custom)。两种任务共用本表, 但**不许混着读**.
+    kind: Mapped[str] = mapped_column(String(32), default="course")
+    #: 学习目标原文 (用户输入的那句话, 4..200 字); kind=scene_brief 时是场景描述.
     goal_text: Mapped[str] = mapped_column(Text)
     #: 请求里的可选约束; 空串 = 交给 LLM 按目标自选.
     category: Mapped[str] = mapped_column(String(16), default="")
