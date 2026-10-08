@@ -102,7 +102,7 @@ LLM_MAX_TOKENS = 400
 #   POST /sessions/{id}/step      文本回答: 0          + STEP 20           = 20
 #   POST /sessions/{id}/step      音频回答: IAT <=13 (服务层) + STEP 20    = 33  见 (*)
 #   POST /sessions/{id}/mission (§A 拆调用后)      iat 8 + max(ise 8, GEN 14)  = 22
-#     (判分**移出请求** -> ``GRADING_JOB_BUDGET_S`` 那对作业预算; 锚定 ISE 仍与生成并行 ——
+#     (判分**移出请求** -> ``GRADING_TURN_BUDGET_S`` 那个逐轮作业墙; 锚定 ISE 仍与生成并行 ——
 #      它 8s 短于台词的墙, **不吃额外墙钟**; 它也不能搬进作业: 音频不落库, 作业拿不到)
 #   POST /dialogue/turn (§A4 拆调用后)              iat 8 + max(ise 8.5, GEN 14) = 22.5
 #   POST /sessions/{id}/finish-mission           DB + 数值骨架 (零 LLM)     = DB  见 (§P6)
@@ -153,10 +153,18 @@ REVIEW_COPY_JOB_BUDGET_S = 45.0
 GEN_LLM_TIMEOUT_S = 10.0
 GEN_TURN_BUDGET_S = 14.0
 
-#: 实战轮**判分**的后台作业预算 (润色/语法/词汇/任务判定/逐词分): 与 ``REVIEW_*`` 那对
-#: 同理 —— 它在请求之外跑, 不受 30s 契约约束, 但必须封顶, 否则挂死的 LLM 会把 turn 永远
-#: 停在 ``grading=pending``。socket 沿用 ``LLM_TIMEOUT_S`` (关闭思考后实测 6.6s, 绰绰有余)。
-GRADING_JOB_BUDGET_S = 45.0
+#: 实战轮**每轮判分**的硬墙 (润色/语法/词汇/任务判定): 与 ``REVIEW_*`` 那对同理 ——
+#: 它在请求之外跑, 不受 30s 契约约束, 但必须封顶, 否则挂死的 LLM 会把这一轮永远停在
+#: ``grading=pending``。socket 沿用 ``LLM_TIMEOUT_S`` (关闭思考后实测 6.6s, 绰绰有余)。
+#:
+#: **单位是"一轮"**: ``course_sessions._run_grading_job`` 给每一轮都传它
+#: (``hard_timeout_s=GRADING_TURN_BUDGET_S``), 而一个作业最多连判
+#: ``_GRADING_MAX_ROUNDS`` 轮 —— 所以作业最坏时长是 **N x 这个数**, 不是 45s 封顶。
+#: 为什么**不**给作业整体再加一堵总墙 (评估过): 复读循环只是顺手把"作业在途时新落的轮次"
+#: 判掉 (兜底仍是 GET 的水位重派), 总墙会在剩余预算不足时把还没开始的轮次**烧成 failed**
+#: —— 那等于"没有润色", 比让它停在 ``pending`` 等重派更糟。真要加就得按"剩余不足就
+#: ``return`` 留 pending"实现, 别写成 ``min(剩余, TURN)`` 直接喂给 :func:`_judge`。
+GRADING_TURN_BUDGET_S = 45.0
 
 #: 独立润色 (``POST /polish``; 单句 + 300 token) 的硬预算: 输出最短, 等待也该最短。
 #: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。

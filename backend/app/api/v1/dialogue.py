@@ -487,8 +487,9 @@ def _opening_prompt(scene: str, title: str) -> list[LlmMessage]:
 
 #: 客户端 echo 回来的"已展示参考句"上限 (§A4/D5: add-only 的 list[str], 别让它无界).
 _SHOWN_SUGGESTIONS_MAX = 8
-#: 单条参考句/台词进 prompt 的字符上限 (与 ``MissionTurnGeneration`` 的 500 同量级).
-_LINE_MAX_CHARS = 200
+#: 单条参考句/台词进 prompt 的字符上限: **引 mission_engine 那一份** (实战侧的
+#: ``_recent_lines_block`` 用同一个数, 两处各写一个字面量就会漂)。
+_LINE_MAX_CHARS = mission_engine.LINE_MAX_CHARS
 #: 带进 prompt 的历史回合数 (最近 N 条; 更早的对话对"下一句"没有增量).
 _HISTORY_KEEP = 12
 
@@ -577,8 +578,7 @@ def _scene_messages(
     said = _repeat_block(history, shown_suggestions)
     learner_spoke = any(message.role == "user" for message in history_messages)
     tail = (
-        "## 已经说过的话 (**不得同义复写**: 换新信息、换角度、换句式 —— "
-        "同一句话换个说法再说一遍就是失败)\n"
+        f"## 已经说过的话\n{mission_engine.ANTI_REPEAT_RULES}\n"
         f"{said or '(还没有历史台词, 这是第一轮)'}\n\n"
         f"## 议程\n把「{scene.title}」这场聊下去: 追问一个**没问过**的细节, 给学员一个"
         "新的可接话点; 别提前结束, 也别把话题绕回你已经问过的地方。\n\n"

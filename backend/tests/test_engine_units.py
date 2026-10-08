@@ -49,8 +49,10 @@ def test_turn_generation_accepts_partial_payload() -> None:
     重试的前提)。
     """
     assert me.TurnGeneration.model_validate({}).reply == ""
+    # 判分侧的形状里**没有**台词字段了 (§A1): 只有 polish/两个分/任务判定, 全可缺省。
     blank = me.MissionTurnJudgement.model_validate({"polish": None})
-    assert blank.reply == "" and blank.task_progress == []  # 判分侧不产台词也能过校验
+    assert blank.task_progress == [] and blank.grammar_score is None
+    assert not hasattr(blank, "reply") and not hasattr(blank, "suggestion")
 
 
 def test_all_required_done_semantics() -> None:
@@ -104,6 +106,29 @@ def test_polish_schema_carries_the_bilingual_line() -> None:
         original="Bad.", polished="Better.", explanation_cn="x", polished_cn="好一点。"
     )
     assert full.polished_cn == "好一点。"
+
+
+def test_turn_prompt_carries_the_shared_anti_repeat_rules_and_caps_the_lines() -> None:
+    """§A5/#M3+#M4: 反重复措辞是**共用常量**, 且进 prompt 的历史台词按共用上限截断.
+
+    两页各写一份措辞会漂 (一处说"换句式"一处不说); 不截断则一条超长模型输出会把之后每一轮的
+    prompt 都撑大 (prefill 成本随历史线性涨)。
+    """
+    from app.models.course import SceneCourse
+
+    course = SceneCourse.model_validate(make_course_dict())
+    long_reply = "x" * 500
+    prompt = me.turn_prompt(
+        course,
+        [],
+        [{"reply": long_reply, "suggestion": "Short one."}],
+        "hi",
+    )
+    user = str(prompt[-1].content)
+    assert me.ANTI_REPEAT_RULES in user
+    assert long_reply not in user  # 500 字的台词被截到 LINE_MAX_CHARS
+    assert "x" * (me.LINE_MAX_CHARS - 1) + "…" in user
+    assert "Short one." in user
 
 
 def test_task_views_truncates_an_overlong_hint_cn() -> None:

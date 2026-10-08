@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.services import drill_grader as dg
 from app.services import llm_provider
+from app.services import mission_engine as me
 from tests.test_drill_grader import install_llm
 from tests.test_mission import generation_json
 
@@ -138,7 +139,7 @@ async def test_dialogue_turn_never_repeats_what_it_already_said(
     prompt = "\n".join(str(m["content"]) for m in fake.requests[0]["messages"])
     assert "How was your weekend?" in prompt  # 历史 assistant 回合 = 已说过的台词
     assert "I went to the park." in prompt  # 客户端 echo 的参考句
-    assert "不得同义复写" in prompt
+    assert me.ANTI_REPEAT_RULES in prompt  # 反重复硬要求 = 两页共用的那一份常量
     assert "ONE short follow-up question" not in prompt  # 旧 prompt 的固定句式已删
 
 

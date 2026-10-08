@@ -147,21 +147,15 @@ class TurnGeneration(BaseModel):
 class MissionTurnJudgement(BaseModel):
     """实战对话单轮的**判分**结果 (§5.5-2 的判分部分; 后台作业专用).
 
-    ``reply``/``suggestion`` 只作**兼容读**保留 (老形状 JSON / 老快照里有它们):
-    判分调用不再产出台词 (那是 :class:`TurnGeneration` 的活), 所以它们可缺省。
+    字段只有"判分"那几件: 台词/示范是 :class:`TurnGeneration` 的活 (§A1 的拆分)。
+    旧合并形状里的 ``reply``/``suggestion`` 已删 —— 判分链路没有老形状生产者
+    (``judge_prompt`` 只要求本类这几个键), 留着只会让人以为判分还能出台词。
     """
 
-    reply: str = Field(default="", max_length=800)
-    suggestion: str = Field(default="", max_length=500)
     polish: Polish | None = None
     grammar_score: float | None = Field(default=None, ge=0, le=100)
     vocabulary_score: float | None = Field(default=None, ge=0, le=100)
     task_progress: list[TaskProgress] = Field(default_factory=list, max_length=8)
-
-    @field_validator("reply", "suggestion")
-    @classmethod
-    def _strip(cls, v: str) -> str:
-        return v.strip()
 
 
 class ReviewTextJudgement(BaseModel):
@@ -358,6 +352,15 @@ GENERATION_RULES = (
     "(5) learner_cn: 学员刚说的那句英文的简体中文意思。"
 )
 
+#: **反重复的硬要求** (§A5): 两个页面共用一句话 —— 各写一份就一定会漂 (一处说"换句式"、
+#: 另一处只说"别说一样的"), 而它正是"AI 反复问同一类问题"的那道闸。
+ANTI_REPEAT_RULES = "**不得同义复写**: 换新信息、换角度、换句式 —— 同一句话换个说法再说一遍就是失败"
+
+#: 一句台词/示范/学员原话进 prompt 的字符上限 (**两页共用**: 实战侧
+#: :func:`_recent_lines_block`, 自由对话侧 ``dialogue._history_messages`` 都引它)。
+#: 不截的话, 一条超长的模型输出会把后续每一轮的 prompt 都撑大 (prefill 成本随历史线性涨)。
+LINE_MAX_CHARS = 200
+
 #: 判分侧 JSON 形状 (不含任何台词字段 —— 生成侧永不复用判分形状, 反之亦然)。
 _JUDGE_JSON_SHAPE = (
     '只输出 JSON: {"polish": {"original": "...", "polished": "...", '
@@ -377,11 +380,15 @@ def _tasks_block(tasks_state: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _transcript_block(turns: Sequence[Mapping[str, Any]], *, keep: int = 8) -> str:
-    """最近 N 轮的对话文本 (persona 说话 + 学员转写), 给 LLM 当上下文."""
+    """最近 N 轮的对话文本 (persona 说话 + 学员转写), 给 LLM 当上下文.
+
+    每一行也按 :data:`LINE_MAX_CHARS` 截: 这条块是**逐轮重复**进 prompt 的 (最近 6 轮),
+    不截的话一条超长的模型输出会在之后每一轮都被重新喂一遍 (prefill 成本随历史线性涨)。
+    """
     lines: list[str] = []
     for turn in turns[-keep:]:
-        lines.append(f"Coach: {turn.get('reply') or ''}")
-        lines.append(f"Learner: {turn.get('user_text') or ''}")
+        lines.append(f"Coach: {_truncate(str(turn.get('reply') or ''), LINE_MAX_CHARS)}")
+        lines.append(f"Learner: {_truncate(str(turn.get('user_text') or ''), LINE_MAX_CHARS)}")
     return "\n".join(lines)
 
 
@@ -394,8 +401,8 @@ def _recent_lines_block(turns: Sequence[Mapping[str, Any]], *, keep: int = 10) -
     """
     lines: list[str] = []
     for turn in turns[-keep:]:
-        reply = str(turn.get("reply") or "").strip()
-        suggestion = str(turn.get("suggestion") or "").strip()
+        reply = _truncate(str(turn.get("reply") or ""), LINE_MAX_CHARS)
+        suggestion = _truncate(str(turn.get("suggestion") or ""), LINE_MAX_CHARS)
         if reply:
             lines.append(f"- 你已经问过: {reply}")
         if suggestion:
@@ -424,8 +431,7 @@ def turn_prompt(
         "能直接开口推进它的那句), 别让对话提前结束。\n\n"
         f"已发生的对话 (Coach=你, Learner=学员):\n"
         f"{_transcript_block(turns, keep=6) or '(还没有对话, 这是第一轮)'}\n\n"
-        "你已经说过的台词与给过的示范 (**不得同义复写**: 换新信息、换角度, 句式也要换, "
-        "同一句话换个说法再说一遍就是失败):\n"
+        f"你已经说过的台词与给过的示范 ({ANTI_REPEAT_RULES}):\n"
         f"{_recent_lines_block(turns) or '(还没有历史台词)'}\n\n"
         f"学员本轮说 (英文转写):\n{user_text}\n\n"
         f"{GENERATION_JSON_SHAPE}"
@@ -577,7 +583,7 @@ async def judge_turn(
     (D2: 判分口径必须在一门课内稳定); ``max_tokens=GRADE_MAX_TOKENS``。
 
     ``hard_timeout_s``: 整个调用 (含内置重试) 的硬预算 —— 作业里报
-    ``GRADING_JOB_BUDGET_S`` (见 ``drill_grader`` 硬预算块)。降级 (LLM 不可用/超时/
+    ``GRADING_TURN_BUDGET_S`` (见 ``drill_grader`` 硬预算块)。降级 (LLM 不可用/超时/
     两次都不合规) 不抛异常: 返回 ``source="heuristic"`` 的**词面快判**结果 (没有润色、
     没有语法/词汇分) —— "判分失败 = 没有润色", 不是"这一轮不存在" (§A3)。
     """
@@ -1233,10 +1239,12 @@ def build_review_skeleton(
 
 __all__ = sorted(
     [
+        "ANTI_REPEAT_RULES",
         "AnchoredPronunciation",
         "GEN_MAX_TOKENS",
         "GEN_TEMPERATURE",
         "GRADE_MAX_TOKENS",
+        "LINE_MAX_CHARS",
         "MissionTaskView",
         "MissionTurnJudgement",
         "Polish",

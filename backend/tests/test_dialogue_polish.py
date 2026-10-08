@@ -265,8 +265,10 @@ def test_shown_suggestions_are_capped_and_trimmed() -> None:
     kept = dialogue._shown_suggestions(raw)
     assert len(kept) == 7  # 8 条上限里有一条是空的
     assert kept[0] == "Sentence 1."
+    # 上限是**共用**的那一份 (实战侧的 `_recent_lines_block` 用同一个数)
+    assert dialogue._LINE_MAX_CHARS is me.LINE_MAX_CHARS
     assert dialogue._shown_suggestions([""]) == []
-    assert len(dialogue._shown_suggestions(["x" * 500])[0]) <= dialogue._LINE_MAX_CHARS
+    assert len(dialogue._shown_suggestions(["x" * 500])[0]) <= me.LINE_MAX_CHARS
 
 
 def test_repeat_block_lists_coach_lines_and_shown_suggestions() -> None:
@@ -303,4 +305,4 @@ def test_scene_messages_include_description_and_persona() -> None:
     assert scene.description in str(system.content)
     # 末尾指令带着共用形状与禁重复要求 (走的是 mission_engine 的那一份常量)。
     tail = str(messages[-1].content)
-    assert me.GENERATION_JSON_SHAPE in tail and "不得同义复写" in tail
+    assert me.GENERATION_JSON_SHAPE in tail and me.ANTI_REPEAT_RULES in tail

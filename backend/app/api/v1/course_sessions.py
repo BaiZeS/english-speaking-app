@@ -64,7 +64,7 @@ from app.services.ability_engine import record_step_evidence
 from app.services.audio_input import decode_audio
 from app.services.drill_grader import (
     ANSWER_MAX_CHARS,
-    GRADING_JOB_BUDGET_S,
+    GRADING_TURN_BUDGET_S,
     PASS_SCORE,
     REVIEW_COPY_JOB_BUDGET_S,
     SKIP_SOURCE,
@@ -116,10 +116,12 @@ IAT_TURN_BUDGET_S = 8.0
 REVIEW_REDISPATCH_AFTER_S = REVIEW_COPY_JOB_BUDGET_S * 2
 
 #: 同一形状的**另一半**: 实战轮判分作业的重启水位 (见 :func:`resume_stranded_grading`)。
-#: 与总评那对完全同构: ``pending`` 态要求老过 **2 倍作业预算** (一个还活着的作业可能跑满
-#: 一整个周期), ``failed`` 态一个周期之后就能重试 (§A3「判分失败 = 没有润色」, 学员不该
-#: 等下一次重启才看到润色)。
-GRADING_REDISPATCH_AFTER_S = GRADING_JOB_BUDGET_S * 2
+#: 读数按**轮**口径 —— 水位量的是 ``doc["mission"]["turns"][i]["grading"]["at"]`` 背后的
+#: 快照 ``updated_at``, 而每判完一轮就 commit 一次 (刷新它), 所以它挡的是**单轮判分自己卡成
+#: 僵尸** (进程半路死掉 / 作业早在别处停了), 不是"整个作业跑了多久"的上限。
+#: ``pending`` 态要求老过 **2 倍逐轮墙** (一个还活着的作业可能跑满一整个轮周期),
+#: ``failed`` 态一个周期之后就能重试 (§A3「判分失败 = 没有润色」, 学员不该等下一次重启)。
+GRADING_REDISPATCH_AFTER_S = GRADING_TURN_BUDGET_S * 2
 
 #: ``doc["review_status"]`` 的取值域 (JSON 列里的新键, **无迁移**).
 #:   ``generating`` = 数值骨架已落库, 文案作业在途 (或已 stranded, 由 GET 重派)
@@ -129,7 +131,7 @@ GRADING_REDISPATCH_AFTER_S = GRADING_JOB_BUDGET_S * 2
 #:   ``ReviewStatus`` 管 ``doc["review_status"]`` (总评那一句文案);
 #:   ``GradingStatus`` 管 ``doc["mission"]["grading"]`` 与逐轮的 ``turn_entry["grading"]``
 #:   (§A3: ``pending`` = 这一轮还没评 / ``ready`` = 判分已落 / ``failed`` = LLM 不可用,
-#:   没有润色与分数 —— 但它**是终态**, 客户端不必再等)。
+#:   没有润色与分数 —— 它是**这一次**的终态, 但会话级水位过一轮后会重派它, 可能翻身)。
 ReviewStatus = Literal["generating", "ready", "failed"]
 GradingStatus = Literal["pending", "ready", "failed"]
 
@@ -230,10 +232,12 @@ class SessionView(BaseModel):
     #: 类型为 ``str | None`` 而不是字面量: 这是 JSON 列里的旧数据, 脏值该降级成"不可知",
     #: 不该在响应模型校验时把 GET 打成 500。
     review_status: str | None = None
-    #: §A3: 实战轮**判分**作业状态 —— ``pending`` = 还有轮次没评 (客户端继续轮询本端点),
-    #: ``ready`` / ``failed`` 都是终态 (``failed`` = 那一轮没有润色也没有分数, 别再等)。
-    #: 逐轮的细粒度状态在 ``mission.turns[].grading`` 里: 客户端拿它决定哪一行的润色/
-    #: 分数还不该渲染。老会话 (判分早在请求里同步做完) 恒为 ``ready``。
+    #: §A3: 实战轮**判分**作业状态 —— 客户端拿它当"还要不要再 GET"的键。
+    #: ``pending`` = 还有轮次没评; ``ready`` = 都落定了; ``failed`` = 最新的那一轮**这次**
+    #: 没评上 (没有润色/分数), 但它**不是会话级死结**: 过一轮水位后 GET 会重派, 可能翻身成
+    #: ``ready`` —— 所以别拿 ``failed`` 当"永远不会再有"而停轮询 (T5 契约)。
+    #: 逐轮的细粒度状态在 ``mission.turns[].grading`` 里: 客户端用它决定哪一行的润色/分数
+    #: 还不该渲染。老会话 (判分早在请求里同步做完) 恒为 ``ready``。
     grading_status: str | None = None
     #: 整课内容: 开场与恢复都要回, 客户端画词汇卡/题干不必再打一次 /scenes/{id}.
     course: SceneCourse | None = None
@@ -358,6 +362,7 @@ class MissionTurnResponse(BaseModel):
     #: 本轮是否因之前"要提示"被标记 (提示过的回合分数可信度打折, §5.3).
     costs_score: bool = False
     #: 本轮的判分作业状态 (§A3): ``pending`` = 还没评, 客户端隔几秒再 GET 本端点。
+    #: 之后可能是 ``ready`` (判分落了) 或 ``failed`` (这次没评上, 过水位还会被重派)。
     grading_status: str | None = None
     #: 仅 ``auto_finished`` 时有值: 服务端已生成的复盘报告 (§5.3 ReviewReport)。
     #: §P6: 这是**数值骨架** —— 分数/清单/逐词全在, ``source`` 仍为 ``heuristic``,
@@ -2131,18 +2136,25 @@ class _GradingPointer(TypedDict):
 def _grading_pointer(mission: dict[str, Any]) -> _GradingPointer:
     """从逐轮状态重算顶层指针 ``{"status", "turn"}`` (§A3 的轻量读).
 
-    ``turn`` = 还有非终态轮次时取那**最新**的一轮, 否则取最后一轮。客户端与 GET 只读这个
-    指针, 不必为了一个状态字符串把 turns 遍历一遍; 它的值永远等于逐轮状态的真值 (重算,
+    ``turn`` = 取**最新的那个非终态轮** (``pending`` 优先于 ``failed``: 有活儿在等时才报
+    ``pending``, 只剩"这次没评上"的轮次才报 ``failed``); 全都落定时取最后一轮。客户端与 GET
+    只读这个指针, 不必为了一个状态字符串遍历 turns; 它的值永远等于逐轮状态的真值 (重算,
     不是增量维护 —— 少一个会漂的状态)。
+
+    **给客户端的契约 (T5)**: ``failed`` 是**这一轮这次**没评上 (没有润色也没有分数), 但它
+    **不是会话级死结** —— :func:`mission_grading_is_stranded` 把 ``failed`` 也算"可救",
+    GET 过一轮水位后就地重派, 那一轮可以翻身成 ``ready``。所以客户端**别拿 ``failed`` 当
+    "永远不会再有润色"而停止轮询** (该等的等: 它可能在几次 GET 之后变好)。
     """
     turns = [t for t in mission.get("turns") or [] if isinstance(t, dict)]
     indexes = [_as_int(t.get("index")) for t in turns]
     newest = max(indexes) if indexes else 0
-    pending = _pending_grading_turns(mission)
-    if any(_turn_grading_status(t) == "pending" for t in pending):
+    waiting = _pending_grading_turns(mission)
+    pending = [t for t in waiting if _turn_grading_status(t) == "pending"]
+    if pending:
         return {"status": "pending", "turn": max(_as_int(t.get("index")) for t in pending)}
-    if pending:  # 只剩 failed: 终态 (没有润色/分数), 但 GET 过一个周期还会重试它
-        return {"status": "failed", "turn": max(_as_int(t.get("index")) for t in pending)}
+    if waiting:  # 只剩 failed: 这次没评上, 但 GET 过水位会重派 -> 可能翻身
+        return {"status": "failed", "turn": max(_as_int(t.get("index")) for t in waiting)}
     return {"status": "ready", "turn": newest}
 
 
@@ -2197,8 +2209,10 @@ async def run_mission_grading_job(session_id: str) -> None:
     * 预期外异常 (代码 bug / 快照坏了 / 数据库抖动) -> 尽力把待判轮次收敛成 ``failed`` +
       全栈日志, 绝不留 ``pending``。
 
-    ``GRADING_JOB_BUDGET_S`` (45s) 是这堵墙: 作业在请求之外跑 (台词那 202 早返回了), 它
-    不替 30s 读超时交差, 只保证一条挂死的 LLM 不会把轮次永远停在 ``pending``。
+    ``GRADING_TURN_BUDGET_S`` (45s) 是**每一轮**的墙: 作业在请求之外跑 (台词那 202 早返回
+    了), 它不替 30s 读超时交差, 只保证一条挂死的 LLM 不会把轮次永远停在 ``pending``;
+    作业整体最坏 = ``_GRADING_MAX_ROUNDS`` x 它 (理由与"为什么不加总墙"见该常量的
+    ``drill_grader`` 注)。
     """
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as db:
@@ -2256,7 +2270,7 @@ async def _run_grading_job(db: AsyncSession, session_id: str) -> None:
                 course,
                 cast("list[dict[str, Any]]", mission.get("tasks") or []),
                 str(entry.get("user_text") or ""),
-                hard_timeout_s=GRADING_JOB_BUDGET_S,
+                hard_timeout_s=GRADING_TURN_BUDGET_S,
             )
             if not await _publish_grading(
                 db, session_id, course, turn_index, judgement, source, llm_source
@@ -2447,8 +2461,15 @@ async def _fail_grading(db: AsyncSession, session_id: str, exc: Exception) -> No
     """作业崩了也要收敛 (§A3「作业失败必须静默」的兜底): 把还没落的轮次标 ``failed``.
 
     为什么不留 ``pending``: 客户端拿 ``pending`` 当"继续轮询"的键, 永远不落终态就是无限
-    轮询一个不会再有人推的作业。``failed`` 是终态 (没有润色/分数, 但**这一轮存在**), 而且
-    GET 过一个预算周期后还能重派它再试一次 —— 比"无声死去"至少多一条线索。
+    轮询一个不会再有人推的作业。``failed`` 是这次的终态 (没有润色/分数, 但**这一轮存在**),
+    而且 GET 过一轮水位后还能重派它再试一次 —— 比"无声死去"至少多一条线索。
+
+    **``source`` 也要一并落定**: 不做的话会留下"``grading=failed`` 但 ``source=pending``"这种
+    自相矛盾的快照 (pending 的语义是"还没判"), 客户端按 ``source`` 走的分支会把它当"判分在
+    路上"继续等。取 ``heuristic`` 而不是 ``None``: 这条字段的契约是"分数是谁给的 / 这份分数算
+    不算数", 崩溃路径**一个分都没给**, 而 ``heuristic`` 正是这套词表里"不可信、无 LLM 判定"的
+    取值 (``TRUSTED_SOURCES`` 也因此把这一行挡在复盘聚合之外, 与"没有分数"一致); 写 ``None``
+    则会被 step 行的 ``source or "heuristic"`` 兜成同一个值, 两处口径反而对不上。
     """
     try:
         await db.rollback()
@@ -2464,6 +2485,16 @@ async def _fail_grading(db: AsyncSession, session_id: str, exc: Exception) -> No
             return  # 已经有终态了, 别把 ready 改回 failed
         for entry in pending:
             entry["grading"] = {"status": "failed", "at": _iso(_now())}
+            entry["source"] = "heuristic"
+            # step 行同一步落定 (它与快照同一事务): 否则行上留着 source="pending",
+            # 与它归属的那一轮"已经 failed"再次自相矛盾。
+            await _update_mission_step_row(
+                db,
+                session_id=session_id,
+                user_id=str(row.user_id),
+                entry=entry,
+                turn_index=_as_int(entry.get("index")),
+            )
         mission["grading"] = _grading_pointer(mission)
         doc["mission"] = mission
         if not await _commit_grading(db, session_id, doc):
@@ -2560,7 +2591,7 @@ def mission_grading_is_stranded(doc: dict[str, Any], *, now: datetime | None = N
     if not pending:
         return False
     status = "failed" if all(_turn_grading_status(t) == "failed" for t in pending) else "pending"
-    threshold = GRADING_JOB_BUDGET_S if status == "failed" else GRADING_REDISPATCH_AFTER_S
+    threshold = GRADING_TURN_BUDGET_S if status == "failed" else GRADING_REDISPATCH_AFTER_S
     updated_at = _doc_updated_at(doc)
     if updated_at is None:
         return True

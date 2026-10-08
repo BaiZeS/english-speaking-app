@@ -325,12 +325,19 @@ async def test_rerunning_the_job_never_double_counts_the_evidence(
 async def test_the_job_that_loses_the_optimistic_race_leaves_no_evidence(
     client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """落库输给乐观锁 -> 那一刀 (含刚 ``add`` 的画像证据) **随事务一起回滚**.
+    """落库输给乐观锁 -> 刚 ``add`` 的画像证据**一个字都没 commit**.
 
     这是"判分重放不幂等"的另一半: 谓词门挡的是"已经 ready 的轮次", 而这道门挡的是
     "两个作业同时进来"—— 输家必须一个字都不留 (事件流水 + 画像 EWMA 都不能双计), 状态停在
     ``pending`` 好让下一次过水位的 GET 重派它。测试跑在 sqlite 的 StaticPool 上, 制造不了真
     并发, 所以这里钉的是**输家的行为**(与 ``test_review_async`` 那条同一手法)。
+
+    **说清楚这条桩到底证了什么**: ``_save_doc`` 被换成"直接抛 409", 于是真正发生的是
+    "作业的 session 从头到尾没有 commit 过" (证据行留在 session 里随它一起被丢弃) —— 而**不是**
+    "``db.rollback()`` 被调用过"。生产上那条路径由真 :func:`_save_doc` 的
+    ``except StaleDataError: await db.rollback()`` 负责 (它的行为在
+    ``test_course_sessions`` 的乐观锁用例里钉)。这里能证明的是**结果**: 库里没有多出来的
+    事件 / step 行没被回填 / 状态没被推成 ready —— 也就是画像不会双计。
     """
     sid = await _ready_sid(client)
     install_llm(monkeypatch, generation=[generation_json()], grading=[_GRADE_T1])
@@ -348,7 +355,7 @@ async def test_the_job_that_loses_the_optimistic_race_leaves_no_evidence(
     assert doc["mission"]["turns"][0]["grading"]["status"] == "pending", (
         "输家改了状态 -> 快照会停在 ready, 而那一轮的分数/证据其实一条都没落"
     )
-    assert await _events_of(db, sid, "m1") == []  # 证据行随事务回滚 (画像不双计)
+    assert await _events_of(db, sid, "m1") == []  # 输家那一刀没留下任何事件 (画像不双计)
     step = (
         await db.execute(
             select(cs.PracticeStep)
@@ -411,7 +418,18 @@ async def test_an_unexpected_crash_still_lands_the_turn_terminal(
     assert doc["mission"]["grading"]["status"] == "failed"
     # 台词那一半仍在 (作业崩了不该把学员已经看到的那一轮抹掉)
     assert doc["mission"]["turns"][0]["reply"]
-    assert await _events_of(db, sid, "m1") == []  # 影像证据一条都没落 (作业根本没写到判分那一步)
+    assert await _events_of(db, sid, "m1") == []  # 画像证据一条都没落 (作业根本没写到判分那一步)
+    # ``source`` 与 ``grading`` 必须**自洽**: 崩溃路径一个分都没给, 留着请求期写的
+    # ``pending`` 会让客户端按 ``source`` 的分支继续等一个不会再有人推的判分。
+    assert doc["mission"]["turns"][0]["source"] == "heuristic"
+    crashed_step = (
+        await db.execute(
+            select(cs.PracticeStep)
+            .where(cs.PracticeStep.session_id == sid, cs.PracticeStep.step_id == "m1")
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert crashed_step.source == "heuristic"  # step 行的 source 同步落定
 
 
 @pytest.mark.asyncio
@@ -459,14 +477,14 @@ async def test_a_legacy_turn_without_grading_key_is_never_regraded(
 
 def test_redispatch_thresholds_are_per_status() -> None:
     """水位是**纯函数**的读数 (便于单测): ``pending`` 2 倍预算, ``failed`` 1 倍."""
-    assert cs.GRADING_REDISPATCH_AFTER_S == cs.GRADING_JOB_BUDGET_S * 2
+    assert cs.GRADING_REDISPATCH_AFTER_S == cs.GRADING_TURN_BUDGET_S * 2
     base = {
         "mission": {"turns": [{"index": 1, "grading": {"status": "pending", "at": "x"}}]},
         "updated_at": cs._iso(datetime.now(UTC)),
     }
     assert cs.mission_grading_is_stranded(base) is False  # 刚落的 pending: 作业还在跑
     fresh = copy.deepcopy(base)
-    fresh["updated_at"] = cs._iso(datetime.now(UTC) - timedelta(seconds=cs.GRADING_JOB_BUDGET_S))
+    fresh["updated_at"] = cs._iso(datetime.now(UTC) - timedelta(seconds=cs.GRADING_TURN_BUDGET_S))
     assert cs.mission_grading_is_stranded(fresh) is False  # 一个周期还不够 (活着的作业)
     stale = copy.deepcopy(base)
     stale["updated_at"] = cs._iso(
@@ -487,6 +505,32 @@ def test_redispatch_thresholds_are_per_status() -> None:
     )
     # 没有 mission 分区 / 没有快照时刻 -> 不算停摆 / 算已过水位
     assert cs.mission_grading_is_stranded({}) is False
+
+
+def test_grading_pointer_prefers_pending_and_takes_the_newest_waiting_turn() -> None:
+    """指针聚合口径 (§A3/#M10): 取**最新的非终态轮**, 且 ``pending`` 优先于 ``failed``.
+
+    ``pending`` 优先 = "还有活儿在等"这件事必须盖住"之前有一轮没评上", 客户端因此会继续
+    轮询; 只剩 ``failed`` 时才报 ``failed`` (而且它**不是**会话级死结: 过水位 GET 会重派,
+    可能翻身成 ready —— 见 :func:`course_sessions._grading_pointer` 的 T5 契约)。
+    """
+    mission = {
+        "turns": [
+            {"index": 1, "grading": {"status": "ready"}},
+            {"index": 2, "grading": {"status": "failed"}},
+            {"index": 3, "grading": {"status": "pending"}},
+        ]
+    }
+    assert cs.grading_status_of({"mission": mission}) == "pending"
+    assert cs._grading_pointer(mission)["turn"] == 3  # 最新的那个非终态轮
+
+    only_failed = {"turns": [dict(t) for t in mission["turns"][:2]]}
+    assert cs.grading_status_of({"mission": only_failed}) == "failed"
+    assert cs._grading_pointer(only_failed)["turn"] == 2
+
+    all_done = {"turns": [{"index": 1, "grading": {"status": "ready"}}]}
+    assert cs.grading_status_of({"mission": all_done}) == "ready"
+    assert cs._grading_pointer(all_done)["turn"] == 1  # 全落定 -> 取最后一轮
 
 
 @pytest.mark.asyncio
@@ -549,7 +593,7 @@ async def test_a_failed_turn_is_retried_at_the_shorter_threshold(
     assert spawned.calls == [sid]
 
     # 过了一个预算周期: GET 重派一次; 这次判分好了 -> ready
-    await _age_snapshot(db, sid, seconds=cs.GRADING_JOB_BUDGET_S + 1)
+    await _age_snapshot(db, sid, seconds=cs.GRADING_TURN_BUDGET_S + 1)
     await _snapshot(client, sid)
     assert spawned.calls == [sid, sid]
     install_llm(monkeypatch, grading=[_GRADE_T1])

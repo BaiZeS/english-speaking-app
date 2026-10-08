@@ -426,7 +426,7 @@ async def test_mission_turn_grading_degrades_inside_its_budget(
     # 降级 = 没有润色、没有分数, 但**词面快判**照样推进任务 (词面命中 hint_en)。
     assert judgement.polish is None and judgement.grammar_score is None
     assert [item.id for item in judgement.task_progress] == ["t1"]
-    assert judgement.reply == ""  # 台词是另一条路的事 (§A1: 判分侧不产台词)
+    assert not hasattr(judgement, "reply")  # 台词是另一条路的事 (§A1: 判分侧不产台词)
 
 
 @pytest.mark.asyncio
@@ -535,12 +535,12 @@ def test_background_generation_is_still_explicitly_unbounded() -> None:
 
 
 def test_the_grading_job_passes_the_grading_budget() -> None:
-    """判分作业必须把 ``GRADING_JOB_BUDGET_S`` 真的传进 ``judge_turn``; 漏传 = 该路径重新裸奔.
+    """判分作业必须把 ``GRADING_TURN_BUDGET_S`` 真的传进 ``judge_turn``; 漏传 = 该路径重新裸奔.
 
     §A3 起判分**不在请求里**了: 这条断言读的是作业的源文本 (调用改名/传参变化时两处一起
     改, 这是它存在的意义)。
     """
-    assert "hard_timeout_s=GRADING_JOB_BUDGET_S" in inspect.getsource(cs._run_grading_job)
+    assert "hard_timeout_s=GRADING_TURN_BUDGET_S" in inspect.getsource(cs._run_grading_job)
 
 
 def test_the_mission_handler_only_calls_generate_turn() -> None:
