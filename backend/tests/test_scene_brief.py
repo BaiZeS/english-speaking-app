@@ -28,6 +28,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import DialogueSceneRow, GenerationJob
@@ -287,6 +288,59 @@ async def test_scene_key_upsert_reuses_the_row_and_stays_one_row(
     reloaded = await _reload_job(db, second_job)
     assert reloaded.status == "ready"
     assert reloaded.scene_id == custom_scene_id(original.id)
+
+
+@pytest.mark.asyncio
+async def test_scene_brief_concurrent_duplicate_loses_cleanly(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**输家分支真被执行**: 同 (user, scene_key) 的第二个作业撞 ``IntegrityError`` ->
+    ``GenerationError("同一场景已在生成中 (并发去重)")`` -> ``job=failed``, 赢家行零污染。
+
+    sqlite 测试跑在单连接池上, 真并发不可造 —— 打点手法照仓内既有的输家先例
+    (``test_engine_units.test_expression_upsert_race_returns_winner`` /
+    ``test_course_sessions`` 的 racing_flush): 在 ``_persist_scene`` 的 select 与 INSERT
+    之间的 race 窗口里让对手 session 先提交同 key 的行, 输家 flush 撞唯一索引。
+    唯一索引建得对不对由 ``test_migrations_sqlite`` 钉; 这条钉的是撞了之后的语义:
+    输家的 add 随 ``_fail`` 的 rollback 一起丢弃 (不覆盖赢家 doc), job 落 failed。
+    """
+    brief = "并发去重场景"
+    uid = await _user_id(db, DEV)
+    job_id = await _seed_job(db, uid, brief)
+    install_llm(monkeypatch, scene=[scene_spec_json()])
+
+    real_flush = AsyncSession.flush
+    armed = {"n": 0}
+
+    async def racing_flush(self: AsyncSession, *args: Any, **kw: Any) -> None:
+        # 单次打点: runner 内第一条 await flush 就是 _persist_scene 的 INSERT
+        # (进度推进全走 commit, 不经 AsyncSession.flush 这条 python 方法)。
+        if armed["n"] == 0:
+            armed["n"] += 1
+            async with sg.get_sessionmaker()() as winner_db:
+                winner_db.add(
+                    DialogueSceneRow(
+                        user_id=uid,
+                        scene_key=sg.scene_key_for(brief),
+                        doc=scene_spec_payload(title="赢家先落库"),
+                        status="ready",
+                    )
+                )
+                await winner_db.commit()
+            raise IntegrityError("INSERT INTO dialogue_scenes", {}, RuntimeError("UNIQUE"))
+        await real_flush(self, *args, **kw)
+
+    monkeypatch.setattr(AsyncSession, "flush", racing_flush)
+    await sg.run_scene_brief_job(job_id)
+
+    job = await _reload_job(db, job_id)
+    assert job.status == "failed"
+    assert "同一场景已在生成中" in (job.error or ""), job.error
+    rows = await _rows_of(db, uid)
+    assert len(rows) == 1, "输家的半截 INSERT 必须随 rollback 一起消失"
+    assert rows[0].doc["title"] == "赢家先落库"
+    assert rows[0].status == "ready"
+    assert armed["n"] == 1, "打点确实落在 _persist_scene 的 flush 上"
 
 
 @pytest.mark.asyncio
