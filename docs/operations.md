@@ -76,6 +76,22 @@ cd backend && bash scripts/publish_apk.sh v2.2.4
 #    —— §3.0 的门现在会在 push/PR 上强制它, 不再只靠这句话。
 ```
 
+### 3.1.1 发布签名（2026-10-19 v2.3.1 起，硬约束）
+
+**长期密钥**：`/home/ubuntu/release-keys/english-assistant-release.jks`（alias `english-assistant-release`，RSA2048，有效期到 2056；口令在同目录 `credentials.txt`，两份均 0600、**不入 git**）。
+**期望证书 SHA-256 = `d76d7f035b4243af9da97363ab0101382fc37af34d4659a032d0cff00eef5532`**（公钥指纹，可入库；`.env` 的 `APP_APK_CERT_SHA256` 与 Actions Variable `RELEASE_CERT_SHA256` 都填它）。
+
+⚠️ **这把密钥丢了，已装 2.3.1+ 的设备就永远收不到任何可安装的更新**（Android 只认同证书覆盖安装）。异地备份要把 `.jks` 与 `credentials.txt` 一起备，按私钥保密级别处理。
+
+**Gradle 读取顺序**：`gradle.properties` 的 `RELEASE_*` → 同名环境变量。本机凭据写在 `~/.gradle/gradle.properties`（用户级、非 tracked）；**缺 `RELEASE_STORE_FILE` 时 `assembleRelease` 在配置期直接失败**（本盒实测 18s 就报，不会静默出无签名/换签名的包）。
+
+**GH Actions Secrets（仓库 Settings → Secrets and variables → Actions；本盒没装 `gh`，只能网页配）**：
+`RELEASE_KEYSTORE_BASE64`（= `base64 -w0 /home/ubuntu/release-keys/english-assistant-release.jks` 的单行输出，贴完删临时文件）、`RELEASE_STORE_PASSWORD`、`RELEASE_KEY_ALIAS`=`english-assistant-release`、`RELEASE_KEY_PASSWORD`；repository variable `RELEASE_CERT_SHA256` 填上面那串指纹（`release.yml` 的 `Assert signing certificate fingerprint` 步骤用它断言，不符即红）。
+
+**发布侧第二道门**：`publish_apk.sh` 在写完 `static/apk/` 之后、翻转 `.env` 之前跑 `scripts/check_apk_cert.sh <apk> $APP_APK_CERT_SHA256` —— `.env` 缺该项或指纹不符都 **exit 1 拒绝发布**，线上仍旧版可用。2026-10-19 本机实测：拿当时在役的 `EnglishAssistant-2.3.0.apk` 跑这道门，报 `actual = ac1b92fe5aa1…`（CI 临时 debug key）后拒绝——正是「用户能下载、装不上、CI 全绿」那条事故链的封堵点。
+
+历史成因（别再走回头路）：`release.yml` 曾跑 `assembleDebug` 且仓库零 `signingConfig`，CI 临时 runner 每次新生成 `~/.android/debug.keystore`，在役 7 个包实测 5 种证书（2.1.0 `bc389138…` / 2.2.0 `64f4fd59…` / 2.2.1+2.2.3 `ee3842b9…`=本机 debug key / 2.2.2 `be86c9dd…` / 2.2.4 `b742c20c…` / 2.3.0 `ac1b92fe…`）。**代价是存量设备升级必须先卸载一次**（换证书绕不过，强更也绕不过）—— `APP_RELEASE_NOTES` 与 `docs/usage-guide.md` 都要写清。
+
 ### 3.2 强制升级（可选，一条**独立于** `publish_apk.sh` 的生产配置变更）
 
 `publish_apk.sh` 只写 `APP_LATEST_VERSION`/`APP_APK_URL`，**不碰** `APP_MIN_SUPPORTED_VERSION`。而 `/app/version` 的 `min_supported_version` 默认是 `0.0.0` 哨兵——**只有显式配置才有强更语义**（`decideUpdate` 的"跳过此版本"分支只在非强更时生效）。
