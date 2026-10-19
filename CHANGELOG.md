@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — 对话升级：LLM 实时台词 + 双语参考 + 自定义场景（后端已上线；Android 未发版）
+## v2.3.0 — 2026-10-19 · 对话升级：LLM 实时台词 + 双语参考 + 判分异步 + 自定义场景
 
-后端已部署生产 `:5173`；Android 侧代码已落地但**未发版**（versionCode/versionName 未 bump、真机走查未做）。
+后端已部署生产 `:5173` 并通过线上冒烟；Android 侧本批以 versionCode 14 / versionName 2.3.0 随发版批推送 CI，**GitHub Release 与 `publish_apk.sh` 收口（OTA 切 v2.3.0）在 CI 绿后另行执行**；真机走查 8 项仍未做（清单见 `docs/compose/reports/dialogue-live-generation.md`）。
 
 ### 用户可感知
 
@@ -11,8 +11,8 @@
 - **台词拿不到就是错误、不再假装**：503 `TURN_GENERATION_UNAVAILABLE`，这一轮不落库、不前进；剧本回放与写死兜底句全部删除。
 - **修「自由对话越聊越重复」**：最近 10 轮台词进禁复写清单，加 `shown_suggestions`（≤8），场景 `description`/`persona`/`beats` 进 prompt。
 - **自由对话 `/dialogue/turn` 首次纳入时延门**：求和 `IAT 8 + max(ISE 8.5, GEN 14) = 22.0 ≤ 25`；ISE 逐词分经裁决保留并与生成并行（音频不落库）。
-- **双语参考上屏**（Android，未发版）：台词可展开「译」；开口句默认双语；「我」气泡带中文；提示卡 / 任务清单中文透出。
-- **自定义场景**（Android，未发版）：用户一句话描述 → 后台生成骨架 → ready 后自动入列表并选中，仅本人可见。
+- **双语参考上屏**（Android，v2.3.0）：台词可展开「译」；开口句默认双语；「我」气泡带中文；提示卡 / 任务清单中文透出。
+- **自定义场景**（Android，v2.3.0）：用户一句话描述 → 后台生成骨架 → ready 后自动入列表并选中，仅本人可见。
 - **未知或别人的场景 id 一律 404 `SCENE_NOT_FOUND`**，不再静默回落到内置场景。
 - **场景目录 9 个场景填齐英中展示对** + `persona`/`user_role`/`beats`(3-6)/`openings`(≥2)/`suggestions`(≥2)。
 
@@ -25,7 +25,7 @@
 - **新端点**：`POST /dialogue/scenes/custom` → 202 并复用 `GET /scenes/jobs/{id}` 轮询；ready 后 `GET /dialogue/scenes`（带身份）合并返回（`kind="custom"`，其 `title_en`/`description_en` 设计性恒空 = 按学员语言展示）。
 - **`/dialogue/generate` 设备身份注册补 commit**（审查修复）。
 - **场景目录 dataclass 默认值删掉**以逼漏填；静态「下一句」兜底字段删除，并有测试钉死**不得复活**（「每轮同一句」的根因）。
-- **Android（未发版）**：新 `BilingualText`（次级语言空白 ⇒ 整行不渲染）；判分异步 UI（pending 占位「评分生成中…」按水位 `GET` 回填、failed 静默但不停轮询、老数据不渲染、`source=="pending"` 不触发降级横幅）；「+ 自定义场景」弹层 → 202 → 轮询 → ready 自动入列表并选中；三条对话请求带 `device_id`；503 后用户气泡保留；错误码表加两中文条目；**实战页气泡 `LazyColumn` key 改单调 id** 修掉重复 key 崩溃；DTO 全 add-only + 默认值。
+- **Android（v2.3.0）**：新 `BilingualText`（次级语言空白 ⇒ 整行不渲染）；判分异步 UI（pending 占位「评分生成中…」按水位 `GET` 回填、failed 静默但不停轮询、老数据不渲染、`source=="pending"` 不触发降级横幅）；「+ 自定义场景」弹层 → 202 → 轮询 → ready 自动入列表并选中；三条对话请求带 `device_id`；503 后用户气泡保留；错误码表加两中文条目；**实战页气泡 `LazyColumn` key 改单调 id** 修掉重复 key 崩溃；DTO 全 add-only + 默认值。
 - **后端四道门**：`pytest` **644 passed**（586→644）/ `ruff check` / `ruff format --check` / `mypy` 全绿。
 - **Android 门**：ktlint 0 + JVM 单测 **374/374**（337→374）；detekt 103（100→103），新增 4 条全是 300 行体积阈值的 `LargeClass`/`LongMethod` 存量口径，留待独立整理批。
 
