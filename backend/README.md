@@ -91,14 +91,22 @@ docker compose up -d        # 起 postgres + api 容器（api 的 uvicorn 带 --
 ### 自由对话 / AI 链路 LLM（v2.0 主引擎，强烈建议配置）
 
 `/dialogue/*`（自由对话）、`/sessions/*/mission`（实战对话）、`/polish`（润色）、打基础三题型判分、
-`/scenes/generate`（生成课两段）、`/assessment/*/complete`（测评判级）全部走 **阿里云百炼
-OpenAI 兼容端点**；未配置时各处自动降级（deterministic fallback / heuristic 判分 +
-`source=stub` 警示，绝不被当作真实证据）。在 `backend/.env` 填：
+`/scenes/generate`（生成课两段）、`/assessment/*/complete`（测评判级）、`/dialogue/scenes/custom`（自定义场景骨架）
+全部走 **阿里云百炼 OpenAI 兼容端点**；未配置时各处自动降级（deterministic fallback / heuristic 判分 +
+`source=stub` 警示，绝不被当作真实证据）。**例外：对话台词不再降级**——实战/自由对话拿不到台词
+（未配凭据 / 超时 / 不合规）一律 `503 TURN_GENERATION_UNAVAILABLE`（工厂收口文案），这一轮不落库不前进，
+剧本回放与写死兜底句已删除；判分（润色/语法/词汇/任务判定）也移出请求，交 `run_mission_grading_job`
+后台作业，响应只增 `grading_status`，客户端按水位 `GET /sessions/{id}` 回填。在 `backend/.env` 填：
 
 ```
 # 阿里云百炼 MaaS（OpenAI 兼容 /compatible-mode/v1）
 LLM_BASE_URL=https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
 LLM_API_KEY=sk-...
+# 对话/判分/场景骨架新链路关掉 Qwen3 系隐藏思考 token (extra_body={"enable_thinking": False});
+# 实测 (qwen3.8-flash): 台词路 11-25s -> 2-3s —— 生产建议 true。
+# 默认 false: 未知 body 参数会让某些 OpenAI 兼容网关直接 400。只作用新链路, 不动既有 drill 调用。
+# 本生产机 .env 已设 true 并 restart 生效。
+LLM_DISABLE_THINKING=true
 LLM_DEFAULT_MODEL=                # 留空=走白名单序; 本机生产填 qwen3.8-flash (09-07 现役;
                                   #  历史: 08 月免费档仅 qwen3.8-max/3.7-plus 可用, ~3 tok/s;
                                   #  现 key 两模型实测 200: qwen3.8-flash + deepseek-v4-flash-0731)
@@ -194,8 +202,9 @@ backend/
 | POST | `/api/v1/score` | 评分（真实 ISE 逐词音素，输入 base64 PCM L16 16kHz）| ✓ |
 | GET | `/api/v1/history` | 历史 | ✓ |
 | POST | `/api/v1/history` | 写历史 | ✓ |
-| POST | `/api/v1/dialogue/generate` | 自由对话开场 + 建议回答 | stub fallback / ready provider |
-| POST | `/api/v1/dialogue/turn` | 多轮对话下一轮 + 建议回答 | stub fallback / ready provider |
+| POST | `/api/v1/dialogue/generate` | 自由对话开场 + 建议回答（请求内实时生成；拿不到台词 503 `TURN_GENERATION_UNAVAILABLE`，设备身份注册已补 commit） | ✓ |
+| POST | `/api/v1/dialogue/turn` | 多轮对话下一轮：一次 LLM 调用出 `reply`/`reply_cn`/`suggestion`/`suggestion_cn`/`learner_cn`（全默认 `""`、上限 500）。首次受时延门管辖（求和 `IAT 8 + max(ISE 8.5, GEN 14) = 22.0 ≤ 25`）；拿不到台词 503 且这一轮不落库不前进 | ✓ |
+| GET/POST | `/api/v1/dialogue/scenes` · `/api/v1/dialogue/scenes/custom` | 场景目录（9 个，带身份调用时合并本人自定义场景，`kind="custom"`）/ 自定义场景：一句话描述 → 202 + 复用 `GET /scenes/jobs/{id}` 轮询 → ready 后并入列表，仅本人可见（表 `dialogue_scenes`，`scene_key` 指纹唯一索引 upsert 幂等；未知/别人的 id 一律 404 `SCENE_NOT_FOUND`）| ✓ |
 | GET | /api/v1/llm/models | 自由对话可选模型目录（由后端 LLM 配置决定）| ✓ |
 | GET | /api/v1/app/version | App 自动更新元数据 (latest/min 版本 + APK URL + 是否强制 + source=env\|github\|default) | ✓ |
 
@@ -227,6 +236,6 @@ mypy app
 - **跟读模式**：后端课程台词按角色轮次交错后，客户端去掉角色标签，逐句展示最近五句；每句沿用 `/tts` + `/score`（≥60 过关）。
 - **对话模式**：客户端将课程的角色 A/B 交错成完整对话，仅把角色 B 设为用户目标；点击「播放角色 A」后录制并评分角色 B。
 - **影子跟读**：整课连播 + 全程录音（回声消除），按句切片逐句评分聚合成整课报告；录音可回放对比。
-- **自由对话模式**（旧入口，保留）：`/dialogue/generate` 开场 + 建议回答；`/dialogue/turn` 下一轮 + 润色对照（v2.0 起同一次 LLM 调用返回判分与润色，识别文本直喂上下文）。未配置 LLM 时内置场景 fallback 保证 APK 流程可跑。
-- **任务通关情景课**（v2.0 主打）：`/sessions` 状态机驱动「打基础四题型（跟读/复述/翻译/造句）→ 实战对话（任务清单：required 全达成才通关，AI 人设追问、提示可开关但计入代价）→ 复盘报告（总分+四维+亮点/改进+原话 vs 更好说法+能力增量）」。无凭据环境按诚实降级链路走通（source 标记 + 画像零写入）。
+- **自由对话模式**：`/dialogue/generate` 开场 + 建议回答（默认双语），`/dialogue/turn` 下一轮 + 建议回答——台词与中文参考由**同一次 LLM 调用**实时生成（`reply`/`reply_cn`/`suggestion`/`suggestion_cn`/`learner_cn`），识别文本直喂上下文；判分（润色/语法/词汇）移出请求进后台作业，`grading_status` 回填。**台词生成不降级**：未配 LLM 凭据或超时即 503 `TURN_GENERATION_UNAVAILABLE`，这一轮不落库不前进（旧内置场景 fallback 已删除）。
+- **任务通关情景课**（v2.0 主打）：`/sessions` 状态机驱动「打基础四题型（跟读/复述/翻译/造句）→ 实战对话（任务清单：required 全达成才通关，AI 人设追问、提示可开关但计入代价）→ 复盘报告（总分+四维+亮点/改进+原话 vs 更好说法+能力增量）」。**台词拿不到同样 503（这一轮不落库不前进）**；判分移出请求交 `run_mission_grading_job`（逐轮 `grading` 态 + 顶层指针、在途门、终态 CAS 防画像双计、重启水位重派、失败静默），其余环节无凭据时按诚实降级链路走通（source 标记 + 画像零写入）。
 - **AI 生成课 / CEFR 测评 / 表达库 / 弱词训练**：见上方端点表；生成课走两段式 jobs，测评判级自 v2.2.2 起也走 202 + 后台作业（免费额度限速下 20s 同步预算实测会把判级砍成空态，故异步化；老客户端仍可走同步路径）。

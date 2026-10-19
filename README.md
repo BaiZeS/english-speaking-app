@@ -9,8 +9,8 @@
 | 设计 | ✅ Spec 已定（见 `docs/superpowers/specs/2026-07-11-english-speaking-app-design.md`）|
 | Phase 1 基建 | ✅ 后端脚手架 + CI（backend-ci 全绿）|
 | Phase 2 L1 MVP（K12 + 新概念 1 跟读）| ✅ 后端 9 端点 + 真实讯飞 TTS/ISE 评分 + Android 客户端完成，APK 由 CI 构建（android-ci 全绿）；⏳ 真机联调 |
-| 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；自由对话无 LLM 凭据时使用确定性 fallback |
-| LLM 自由对话 | ✅ 后端接入百炼 OpenAI 兼容端点 + `/llm/models` 目录端点；客户端设置页可选模型，未配置时自动降级 |
+| 三模式重构 | ✅ 跟读 / 角色对话 / 自由对话 Android 流程完成；对话链路的确定性 fallback 已随下方「对话升级」删除（台词拿不到一律 503） |
+| LLM 自由对话 | ✅ 后端接入百炼 OpenAI 兼容端点 + `/llm/models` 目录端点；客户端设置页可选模型。**2026-10 对话升级后**：台词在请求内实时生成（`/dialogue/turn` 一次调用出 `reply`/`reply_cn`/`suggestion`/`suggestion_cn`/`learner_cn` 五字段），判分（润色/语法/词汇/任务判定）移出请求进后台作业 `run_mission_grading_job`（响应只增 `grading_status`，客户端按水位 `GET` 回填，失败静默）；**不再有假回退**——台词拿不到（未配 LLM 凭据 / 超时 / 不合规）即 503 `TURN_GENERATION_UNAVAILABLE`，这一轮不落库不前进，剧本回放与写死兜底句全删 |
 | 自动更新 | ✅ 后端 `/app/version` 元数据 + Android 启动拉取、版本对比、APK 流式下载 + FileProvider 安装（强升门槛支持）；**v2.2.4 起检查失败不再锁死 App**：弹窗可关且关闭不再触发重查、新增「进入设置」逃生门、失败文案可读化、回前台重查静默 |
 | 多本书籍 | ✅ `/books` 目录端点 + Android 首页下拉切换；`/dialogue/scenes` 暴露自由对话场景 |
 | Dashboard | ✅ `/stats` 汇总接口 + Android 概览页：总练习 / 平均分 / 最高分 / 连续天数 / 14 天趋势图 / 分项平均 |
@@ -20,10 +20,12 @@
 | 模块化 PlayerScreen | ✅ 551 行单体拆为 Screen + Controls + ReadAlongView + DialogueView + ScorePanel 5 个文件 |
 | 商务英语语料 | ✅ `data/business/` 6 课（会议/汇报/谈判/接待宴请/电话会议/风险沟通），默认书籍 |
 | 多书隔离 | ✅ 路由/历史/进度按 (book, lesson) 隔离（history 表加 book 列，Alembic 迁移）；Android 全链路贯通 |
-| 商务自由对话场景 | ✅ 商务会议/工作汇报/商务谈判 3 个场景（共 9 个），选择器默认商务会议 |
+| 商务自由对话场景 | ✅ 商务会议/工作汇报/商务谈判 3 个场景（共 9 个），选择器默认商务会议；2026-10 起 9 个场景填齐英中展示对 + `persona`/`user_role`/`beats`(3-6)/`openings`(≥2)/`suggestions`(≥2)（dataclass 默认值删除以逼漏填，静态「下一句」兜底字段删除并有测试钉死不复活） |
 | 评分真假可辨 | ✅ /score 与 /tts 返回 `source` 字段；未配凭据时客户端显示"占位假分/假音频"警示 |
 | 影子跟读 | ✅ 整段连续影子跟读：全文音频连播 + 全程录音（AEC/VOICE_COMMUNICATION）+ 按句切片逐句评分聚合；录音保留可回放对比（听我的/对比听） |
-| 自由对话真实转写 | ✅ 讯飞 IAT 听写接入 `/dialogue/turn`：识别用户实际说的话，替换占位符并喂给 LLM（无凭据自动回退占位行为） |
+| 自由对话真实转写 | ✅ 讯飞 IAT 听写接入 `/dialogue/turn`：识别用户实际说的话，替换占位符并喂给 LLM；`/dialogue/turn` 首次纳入时延门（求和 `IAT 8 + max(ISE 8.5, GEN 14) = 22.0 ≤ 25`，ISE 逐词分经裁决保留并与生成并行、音频不落库）。**旧「无凭据自动回退占位行为」已删除**：拿不到台词即 503，不再假回退 |
+| 自定义场景 | ✅ 用户一句话描述 → 后台生成骨架（202 + 复用 `GET /scenes/jobs/{id}` 轮询）→ ready 后 `GET /dialogue/scenes`（带身份）合并入列表且**仅本人可见**（`kind="custom"`，其 `title_en`/`description_en` 设计性恒空 = 按学员语言展示）；落库新表 `dialogue_scenes`（`scene_key` 指纹唯一索引 upsert 幂等、doc JSON、ready-only 可见）+ `generation_jobs.kind`（迁移 `c3b7e5a91d24`，生产已 auto-upgrade）；未知/别人的 id 一律 404 `SCENE_NOT_FOUND`（静默回落已删）。**后端已上线，客户端待发版** |
+| 对话两页双语渲染 | ✅ **后端已上线，客户端待发版**：新 `BilingualText` 次级语言空白 ⇒ 整行不渲染（不机翻）；台词「译」可展开 + 「我」气泡带中文 + 开口句默认双语 + 提示卡/清单中文透出。Android 同批：判分 pending 占位「评分生成中…」按水位 `GET` 回填（failed 静默但不停轮询）、`source=="pending"` 不触发降级横幅、503 后用户气泡保留、实战页气泡 `LazyColumn` key 改单调 id 修掉重复 key 崩溃 |
 | 弱词专项训练 | ✅ 评分 <70 词自动入弱词本（Room），训练页：示范→跟读单词（ISE read_word）→≥85 毕业 |
 | 评分语速修复 | ✅ 语速按真实音频时长计算（原固定 4s 窗口）；/score 支持 category=read_word |
 | **v2.0 后端（P1–P4）** | ✅ 情景课内容层（8 门人工剧本 + 文件缓存读路径）、会话状态机（崩溃可恢复）、打基础四题型评分、任务制实战 + 单次 LLM 复盘报告、两级 AI 生成课（jobs 轮询）、CEFR 测评、EWMA 能力画像（stub 证据门控）、/polish、/expressions、/courses/progress |
@@ -50,7 +52,7 @@
 
 - **客户端**：Kotlin 2.0 + Jetpack Compose + Hilt + Retrofit + Room
 - **后端**：Python 3.11 + FastAPI + PostgreSQL 16（Redis 已随 v2.0 清理移除——TTS 走磁盘缓存）
-- **AI 服务**：MiMo TTS（语音合成，已启用真合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级，本机现役模型 `qwen3.8-flash`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）
+- **AI 服务**：MiMo TTS（语音合成，已启用真合成）+ 讯飞 ISE（语音评测，逐词音素评分）+ 讯飞 IAT（英文听写）+ 阿里云百炼 OpenAI 兼容端点（LLM：实战对话/判分/课程生成/测评判级/场景骨架，本机现役模型 `qwen3.8-flash`，详见 backend README「LLM」节与 [docs/operations.md](docs/operations.md)）。**`LLM_DISABLE_THINKING`**（默认 false，本生产机 `.env` 已设 true）关掉 Qwen3 系隐藏思考 token：实测台词路 11-25s → 2-3s
 - **CI**：GitHub Actions（backend-ci + android-ci + release.yml 打 tag 自动出 APK）。`android-ci` 的四个 job：`release-gate`（**改了 `android/app/src/main/**` 就必须同范围 bump `versionCode` + 写 `CHANGELOG.md`**，否则红且挡住产物构建）→ ktlint → detekt(软) → testDebugUnitTest → assembleDebug。2026-09-15 两笔加固：actions 全集迁到 Node 24（checkout v5 / setup-java v5 / cache v5 / upload-artifact v6 / setup-python v6 / action-gh-release v3 / setup-android v4），`setup-android` 显式覆盖 `packages=platform-tools`（Google 自 2026-09-15 停供 sdkmanager 的 `tools` 包，用默认值会红，action issue #537），并修掉 `release-gate` 里 `grep -c` 计数为 0 时在 `bash -eo pipefail` 下**静默中止**（不发 `::error::`）的 bug。本部署机已装 Android SDK（`~/Android/Sdk`），改 Android 前本地跑 `./android/scripts/ktlint.sh` + `./gradlew testDebugUnitTest --no-daemon` 预验，CI 为最终权威。
 
 ## 快速开始
