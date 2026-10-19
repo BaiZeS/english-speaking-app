@@ -105,7 +105,7 @@ curl -s http://118.89.58.84:5173/api/v1/app/version   # 核对 min_supported_ver
 | 讯飞 ISE | `XUNFEI_APP_ID/API_KEY/API_SECRET`（09-07 填；**09-08 真火冒烟过门**：`source=xunfei` + `xunfei ise ok` 硬证，逐词分 1-5×20）| 跟读/影子/弱词真实逐词音素分（`source=xunfei`；日志 `xunfei ise ok` 为硬证，**单看分数不可信**）。协议硬要求见 §6 讯飞坑位 |
 | 讯飞 IAT | 同上 | 实战/自由对话真实听写（09-08 真机听写转写实测通过；无则文本输入为主路径）|
 | MiMo-TTS | `MIMO_API_KEY`（**线路绑定，域名不互换**：`sk-` 平台 key ⇄ `https://api.xiaomimimo.com/v1`；`tp-` token-plan key ⇄ `https://token-plan-cn.xiaomimimo.com/v1`；本盒现为 sk-/api 线路）| 示范声真合成 ✓（09-07 实测 200）|
-| 百炼 LLM | `LLM_BASE_URL/LLM_API_KEY`；现役 `LLM_DEFAULT_MODEL=qwen3.8-flash` + `LLM_ALLOWED_MODELS=qwen3.8-flash,deepseek-v4-flash-0731` | 已配 ✓（09-07 实测两模型 chat 200；模型下拉经 `LLM_EXTRA_MODELS_JSON` 下发恢复）|
+| 百炼 LLM | `LLM_BASE_URL/LLM_API_KEY`；现役 `LLM_DEFAULT_MODEL=qwen3.8-flash` + `LLM_ALLOWED_MODELS=qwen3.8-flash,deepseek-v4-flash-0731` | 已配 ✓（09-07 实测两模型 chat 200；模型下拉经 `LLM_EXTRA_MODELS_JSON` 下发恢复）。`LLM_DISABLE_THINKING=true`（10-19 起生效）——对话/判分/场景骨架调用关思考 token，重启 recreate 后 `/dialogue/turn` 冒烟 gen_ms≈2.1s；drill/assessment 既有链路不受影响。|
 
 ## 5. 冒烟与验证集（发版/迁移后跑）
 
