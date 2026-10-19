@@ -23,27 +23,37 @@ import retrofit2.HttpException
  *
  * 服务端消息文本本次**保持不动** (改它是对外契约变更, 会打断断言 message 的测试)。
  */
+/**
+ * `code -> 中文文案` 表。
+ *
+ * 是**表**而不是 `when`: 它纯粹是数据, 加一条码不该改动判序逻辑 —— 这一点有实证,
+ * 一次新增两条码就把 `sessionErrorCodeText` 的圈复杂度顶过了 detekt 的上限 (18)。
+ * 取值顺序那三条本身住在下面那个函数里, 与本表无关。
+ *
+ * 键是稳定契约 (`AppError.code`), 所以文案由客户端掌控, 永不出英文。
+ */
+private val ERROR_CODE_TEXT: Map<String, String> = mapOf(
+    "SKIP_LIMIT_REACHED" to "跳过额度已用完 (每场最多 2 步), 请把剩下的步骤做完",
+    "MISSION_FINISHED" to "本场已收工, 去看复盘报告吧",
+    "SESSION_CONCURRENT_UPDATE" to "会话刚在别处被更新, 请退出后重新进入",
+    "SESSION_NOT_ACTIVE" to "本场会话已结束",
+    "SESSION_NOT_FOUND" to "这场练习找不到了, 请退出后重新进入",
+    "WRONG_STAGE" to "当前环节还不能做这一步, 按清单顺序来",
+    "STEP_OUT_OF_ORDER" to "请按清单顺序完成, 先做当前这一步",
+    "STEP_ALREADY_DONE" to "这一步已经做过了",
+    "STEP_NOT_FOUND" to "这一步不属于本课, 请退出后重新进入",
+    "MISSION_INPUT_REQUIRED" to "说点什么或打字再发送",
+    "TRANSCRIPT_UNAVAILABLE" to "这段语音没能转写出文字, 试试打字发送",
+    "SESSION_KIND_UNSUPPORTED" to "这类会话不支持该操作",
+    // §A6/D5: 台词生成拿不到 (模型超时或未配置) 时这一轮**没有发生** —— 服务端不再回放
+    // 剧本兜底, 所以文案必须说清"重试一次", 而不是让人以为自己在练一段脚本对话。
+    "TURN_GENERATION_UNAVAILABLE" to "AI 台词生成不可用 (模型超时或未配置), 这一轮没有发生, 请重试",
+    // §3 C3b: 场景 id 拼错/不属于自己不再静默落到目录第一条, 而是明确 404。
+    "SCENE_NOT_FOUND" to "这个场景找不到了, 换个场景再试试"
+)
+
 fun sessionErrorCodeText(code: String?, backendMessage: String?, fallback: String): String {
-    val mapped = when (code) {
-        "SKIP_LIMIT_REACHED" -> "跳过额度已用完 (每场最多 2 步), 请把剩下的步骤做完"
-        "MISSION_FINISHED" -> "本场已收工, 去看复盘报告吧"
-        "SESSION_CONCURRENT_UPDATE" -> "会话刚在别处被更新, 请退出后重新进入"
-        "SESSION_NOT_ACTIVE" -> "本场会话已结束"
-        "SESSION_NOT_FOUND" -> "这场练习找不到了, 请退出后重新进入"
-        "WRONG_STAGE" -> "当前环节还不能做这一步, 按清单顺序来"
-        "STEP_OUT_OF_ORDER" -> "请按清单顺序完成, 先做当前这一步"
-        "STEP_ALREADY_DONE" -> "这一步已经做过了"
-        "STEP_NOT_FOUND" -> "这一步不属于本课, 请退出后重新进入"
-        "MISSION_INPUT_REQUIRED" -> "说点什么或打字再发送"
-        "TRANSCRIPT_UNAVAILABLE" -> "这段语音没能转写出文字, 试试打字发送"
-        "SESSION_KIND_UNSUPPORTED" -> "这类会话不支持该操作"
-        // §A6/D5: 台词生成拿不到 (模型超时或未配置) 时这一轮**没有发生** —— 服务端
-        // 不再回放剧本兜底, 所以文案必须说清"重试一次", 而不是让人以为自己在练剧本对话。
-        "TURN_GENERATION_UNAVAILABLE" -> "AI 台词生成不可用 (模型超时或未配置), 这一轮没有发生, 请重试"
-        // §3 C3b: 场景 id 拼错/不属于自己不再静默落到目录第一条, 而是明确 404。
-        "SCENE_NOT_FOUND" -> "这个场景找不到了, 换个场景再试试"
-        else -> null
-    }
+    val mapped = code?.let { ERROR_CODE_TEXT[it] }
     if (mapped != null) return mapped
     if (backendMessage != null && backendMessage.containsCjk()) return backendMessage
     return fallback

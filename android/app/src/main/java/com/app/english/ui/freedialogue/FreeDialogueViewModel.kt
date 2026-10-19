@@ -212,10 +212,10 @@ class FreeDialogueViewModel @Inject constructor(
             if (job != null && GeneratePollingPolicy.isTerminal(job)) {
                 val sceneId = job.sceneId
                 if (job.isReady && !sceneId.isNullOrBlank()) return sceneId
-                throw IllegalStateException(job.error ?: "场景生成失败, 稍后再试")
+                error(job.error ?: "场景生成失败, 稍后再试")
             }
             if (GeneratePollingPolicy.isTimedOut(elapsed)) {
-                throw IllegalStateException("场景生成超时了 (任务仍在服务端跑), 稍后回来再看看")
+                error("场景生成超时了 (任务仍在服务端跑), 稍后回来再看看")
             }
             delay(GeneratePollingPolicy.nextDelayMillis(polls))
             polls++
