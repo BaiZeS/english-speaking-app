@@ -104,7 +104,7 @@ LLM_MAX_TOKENS = 400
 #   POST /sessions/{id}/mission (§A 拆调用后)      iat 8 + max(ise 8, GEN 14)  = 22
 #     (判分**移出请求** -> ``GRADING_TURN_BUDGET_S`` 那个逐轮作业墙; 锚定 ISE 仍与生成并行 ——
 #      它 8s 短于台词的墙, **不吃额外墙钟**; 它也不能搬进作业: 音频不落库, 作业拿不到)
-#   POST /dialogue/turn (§A4 拆调用后)              iat 8 + max(ise 8.5, GEN 14) = 22.5
+#   POST /dialogue/turn (§A4 拆调用后)              iat 8 + max(ise 8.5, GEN 14) = 22.0
 #   POST /sessions/{id}/finish-mission           DB + 数值骨架 (零 LLM)     = DB  见 (§P6)
 #   POST /mission 聊到轮次上限自动收工              iat 8 + GEN 14 + 骨架    = 22  见 (§P6)
 #   POST /polish                               DB    + POLISH 10          = 10

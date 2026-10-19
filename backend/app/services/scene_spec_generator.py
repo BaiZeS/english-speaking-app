@@ -205,6 +205,9 @@ async def _persist_scene(db: AsyncSession, job: GenerationJob, spec: CustomDialo
     if row is not None:
         # JSON 列整体换对象 (原地改不会被 UPDATE, T3 钉死的坑); 行 id 不动 -> 对外
         # custom_<row.id> 在重生成时保持稳定 (§3 C1 docstring 的契约)。
+        # 并发重生成 = 后写者赢 (质量审查 M-2 已接受): 同 (user, scene_key) 的两个作业
+        # 各自 select-不到-则-INSERT 时唯一索引挡第二个; 都 select-到-时后 commit 覆盖前者 doc,
+        # 两个 job 都报 ready —— 重生成语义本就是「覆盖旧行」(§3 C1), 不在 JSON 列上补 CAS。
         row.doc = doc
         row.status = "ready"
         row.updated_at = _utcnow()
@@ -312,7 +315,12 @@ def dialogue_scene_view(scene_id: str, spec: CustomDialogueScene) -> DialogueSce
 
 
 def spawn_scene_brief_job(job_id: str) -> None:
-    """``asyncio.create_task`` 后台跑; 模块级集合防任务被 GC (与 ``spawn_job`` 同形)。"""
+    """``asyncio.create_task`` 后台跑; 模块级集合防任务被 GC (与 ``spawn_job`` 同形)。
+
+    **没有会话级在途门** (同整课生成 ``spawn_job`` 的既有口径, 质量审查 M-3): 同人同
+    描述连点两次 = 两个作业两次 LLM, 后完成者覆盖 ``doc`` (upsert 语义) —— 客户端按钮
+    防连点属安卓侧 (T5), 服务端不挡。
+    """
     task = asyncio.create_task(run_scene_brief_job(job_id))
     _JOBS.add(task)
     task.add_done_callback(_JOBS.discard)
