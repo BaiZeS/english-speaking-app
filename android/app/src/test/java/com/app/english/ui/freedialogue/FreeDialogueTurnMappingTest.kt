@@ -106,4 +106,71 @@ class FreeDialogueTurnMappingTest {
             }
         }
     }
+
+    // ---- §A4/A5: 回给服务端的「已展示参考句」清单 ----
+
+    private fun shown(text: String, isUser: Boolean = true): FreeDialogueMessage =
+        FreeDialogueMessage(
+            role = if (isUser) "user" else "assistant",
+            text = "whatever",
+            isUser = isUser,
+            shownSuggestion = text
+        )
+
+    /**
+     * 只取**最近** [SHOWN_SUGGESTIONS_LIMIT] 句: prompt 预算是有限的, 而防复写只关心
+     * 最近给过什么 —— 十轮之前那句重复一遍也没有意义。
+     */
+    @Test
+    fun shownSuggestions_keepsOnlyTheLatestEight() {
+        val messages = (1..10).map { shown("Try: line $it") }
+        val shown = shownSuggestions(messages)
+        assertEquals(8, shown.size)
+        assertEquals("Try: line 3", shown.first())
+        assertEquals("Try: line 10", shown.last())
+    }
+
+    /** 同一句连着展示两轮只报一次 —— 重复项白占预算, 服务端那边也没有新信息。 */
+    @Test
+    fun shownSuggestions_deduplicatesRepeatedSentences() {
+        val messages = listOf(
+            shown("I'd like a latte."),
+            shown("To go, please."),
+            shown("I'd like a latte."),
+            shown("Could you make it large?")
+        )
+        assertEquals(
+            listOf("I'd like a latte.", "To go, please.", "Could you make it large?"),
+            shownSuggestions(messages)
+        )
+    }
+
+    /** 没有参考回答的那几轮 (卡片上是"本轮没有参考回答") 不参与, 空白同理。 */
+    @Test
+    fun shownSuggestions_skipsBlankAndUntranslatedTurns() {
+        val messages = listOf(
+            shown("", isUser = false),
+            shown("   "),
+            shown("A flat white, please.")
+        )
+        assertEquals(listOf("A flat white, please."), shownSuggestions(messages))
+        assertTrue(shownSuggestions(emptyList()).isEmpty())
+    }
+
+    /**
+     * 调用点的形状 (与 `stopAndSubmit` 一致): 学员开口那一刻卡片上那句也要算"已展示过",
+     * 所以它必须出现在清单**末尾** —— 服务端读它说"这一句别再给了"。
+     */
+    @Test
+    fun shownSuggestions_pendingTurnCarriesTheSentenceOnTheCard() {
+        val messages = listOf(
+            msg("What would you like?", isUser = false),
+            shown("I'd like a latte."),
+            msg("", isUser = true, hasTranscript = false)
+        )
+        val pending = shown("Could you make it iced?")
+        val shown = shownSuggestions(messages + pending)
+        assertEquals("I'd like a latte.", shown.first())
+        assertEquals("Could you make it iced?", shown.last())
+    }
 }

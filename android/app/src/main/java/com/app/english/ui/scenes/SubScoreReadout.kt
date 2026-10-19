@@ -4,6 +4,7 @@ import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.ScoreLevel
 import com.app.english.domain.model.DrillGradeResult
 import com.app.english.domain.model.MissionTurn
+import com.app.english.domain.model.WordScore
 
 /**
  * 评分维度 -> 界面读数的**共用**映射(打基础逐题反馈与实战逐轮反馈同表)。
@@ -58,10 +59,22 @@ data class SpeechStrip(
     val weakWords: List<String>
 )
 
-fun speechStripOf(turn: MissionTurn): SpeechStrip? {
-    val dims = subScoreReadout(turn.subScores)
-    val rateLabel = speechRateReadout(turn.speechRateWpm)
-    val weakWords = turn.wordDetails
+fun speechStripOf(turn: MissionTurn): SpeechStrip? =
+    speechStripOf(turn.subScores, turn.wordDetails, turn.speechRateWpm)
+
+/**
+ * 同一张读数表的**值形态**入口: 恢复快照与判分回填手上只有三个裸值
+ * (`mission.turns[].sub_scores` / `word_details` / `speech_rate_wpm`), 没有一次
+ * 实战响应可以借来组装 [MissionTurn] —— 两边必须画出同一张条, 所以共用这一个实现。
+ */
+fun speechStripOf(
+    subScores: Map<String, Double?>,
+    wordDetails: List<WordScore>,
+    speechRateWpm: Double?
+): SpeechStrip? {
+    val dims = subScoreReadout(subScores)
+    val rateLabel = speechRateReadout(speechRateWpm)
+    val weakWords = wordDetails
         .filter { ScoreColorMapper.level(it.score) == ScoreLevel.RED }
         .map { it.word }
         .distinct()

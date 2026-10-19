@@ -47,6 +47,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.ScoreColorMapper
 import com.app.english.domain.model.TaskChip
+import com.app.english.ui.components.BilingualText
 import com.app.english.ui.components.HoldToTalkButton
 import com.app.english.ui.components.PulseMeterGeometry
 import com.app.english.ui.components.RecordingGuard
@@ -155,6 +156,7 @@ fun MissionScreen(
                     micGranted = micPermission.status.isGranted,
                     onRequestPermission = { micPermission.launchPermissionRequest() },
                     suggestion = state.suggestion,
+                    suggestionCn = state.suggestionCn,
                     onInputChange = {
                         input = it
                         viewModel.updateDraft(it)
@@ -306,10 +308,21 @@ private fun TaskChipView(task: TaskChip) {
                 }
             )
             Box(Modifier.size(Spacings.tiny))
-            Text(
-                text = task.descCn + if (task.required) "" else " (选做)",
-                style = MaterialTheme.typography.labelMedium
-            )
+            Column {
+                Text(
+                    text = task.descCn + if (task.required) "" else " (选做)",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                // D4/chips: 任务的中文提示 (`hint_cn`) 库内早有, T2 起才随视图下发 ——
+                // 有才画, 空串时这一行不存在。
+                if (task.hintCn.isNotBlank()) {
+                    Text(
+                        text = task.hintCn,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }
@@ -327,6 +340,7 @@ private fun BubbleRow(
         ) {
             BubbleCard(
                 text = bubble.text,
+                translation = bubble.translation,
                 container = MaterialTheme.colorScheme.surfaceVariant,
                 content = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = { onPlayAi(bubble.text) }
@@ -338,11 +352,21 @@ private fun BubbleRow(
         ) {
             BubbleCard(
                 text = if (bubble.hasTranscript) bubble.text else "(这句没有识别到文字)",
+                translation = bubble.translation,
                 container = MaterialTheme.colorScheme.primaryContainer,
                 content = MaterialTheme.colorScheme.onPrimaryContainer,
                 onClick = null
             )
             bubble.speech?.let { strip -> SpeechStripRow(strip) }
+            // §A3 第三态: 台词与发音读数先出, 润色/语法词汇分还在判分作业里。这一行
+            // 就摆在该出现润色卡的位置上 —— 空着会读成"这句话没问题", 那是另一回事。
+            if (bubble.gradingPending && bubble.polish == null) {
+                Text(
+                    text = "评分生成中…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             bubble.polish?.let { polish -> PolishInlineCard(polish, onCollect) }
         }
     }
@@ -394,7 +418,8 @@ private fun BubbleCard(
     text: String,
     container: androidx.compose.ui.graphics.Color,
     content: androidx.compose.ui.graphics.Color,
-    onClick: (() -> Unit)?
+    onClick: (() -> Unit)?,
+    translation: String? = null
 ) {
     Surface(
         color = container,
@@ -404,9 +429,13 @@ private fun BubbleCard(
         enabled = onClick != null,
         modifier = Modifier.widthIn(max = 300.dp)
     ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
+        // D4: 英文/识别文本优先, 行尾「译」展开中文 (缺中文时连「译」都不给)。
+        BilingualText(
+            primary = text,
+            secondary = translation,
+            collapsible = true,
+            primaryStyle = MaterialTheme.typography.bodyMedium,
+            secondaryStyle = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(Spacings.s2)
         )
     }
@@ -443,10 +472,13 @@ private fun PolishInlineCard(
                     textDecoration = TextDecoration.LineThrough,
                     color = MaterialTheme.colorScheme.error
                 )
-                Text(
-                    text = polish.polished,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.tertiary
+                // D4: 润色句 + 它的中文 (`polished_cn`); 后端没给中文就只出润色句一行
+                // —— 不补空行、不机翻。
+                BilingualText(
+                    primary = polish.polished,
+                    secondary = polish.polishedCn,
+                    primaryStyle = MaterialTheme.typography.bodyMedium,
+                    secondaryStyle = MaterialTheme.typography.bodySmall
                 )
                 if (polish.explanationCn.isNotBlank()) {
                     Text(
@@ -473,7 +505,8 @@ private fun PolishBubble.toSuggestion(): com.app.english.domain.model.PolishSugg
     com.app.english.domain.model.PolishSuggestion(
         original = original,
         polished = polished,
-        explanationCn = explanationCn
+        explanationCn = explanationCn,
+        polishedCn = polishedCn
     )
 
 @Composable
@@ -498,11 +531,38 @@ private fun HintCard(hint: com.app.english.domain.model.HintData, onDismiss: () 
                     color = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             }
+            // 任务的中文描述 = 这一问要达成什么 (服务端优先给未完成的必做任务)。
+            if (hint.descCn.isNotBlank()) {
+                Text(
+                    text = hint.descCn,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
             if (hint.hintEn.isNotBlank()) {
-                Text(hint.hintEn, style = MaterialTheme.typography.bodyMedium)
+                // D4: 英文示范 + 它的中文 (`hint_cn`, 库内早有); 中文为空时只出英文那一行。
+                BilingualText(
+                    primary = hint.hintEn,
+                    secondary = hint.hintCn,
+                    primaryStyle = MaterialTheme.typography.bodyMedium,
+                    secondaryStyle = MaterialTheme.typography.bodySmall
+                )
+            } else if (hint.hintCn.isNotBlank()) {
+                // 只有中文提示没有示范英文: 照样把它摆出来 (库里的 `hint_cn` 被边界丢了
+                // 一整轮, 卡片上只剩一句英文台词, 中文要点无处可去)。
+                Text(
+                    text = hint.hintCn,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
             }
             if (hint.scriptLine.isNotBlank()) {
-                Text(hint.scriptLine, style = MaterialTheme.typography.bodyMedium)
+                BilingualText(
+                    primary = hint.scriptLine,
+                    secondary = hint.scriptLineCn,
+                    primaryStyle = MaterialTheme.typography.bodyMedium,
+                    secondaryStyle = MaterialTheme.typography.bodySmall
+                )
             }
             if (hint.noteCn.isNotBlank()) {
                 Text(
@@ -525,6 +585,7 @@ private fun InputBar(
     micGranted: Boolean,
     onRequestPermission: () -> Unit,
     suggestion: String,
+    suggestionCn: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onStartRecord: () -> Unit,
@@ -537,11 +598,21 @@ private fun InputBar(
         verticalArrangement = Arrangement.spacedBy(Spacings.s1)
     ) {
         if (suggestion.isNotBlank()) {
-            Text(
-                text = "试试这么说：$suggestion",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            // D4: 「试试这么说」是**要求学员开口的那一句**, 所以默认双语(英文在上、中文
+            // 在下), 不是可折叠的「译」—— 学员此刻正要照着它说。
+            Column {
+                Text(
+                    text = "试试这么说：",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                BilingualText(
+                    primary = suggestion,
+                    secondary = suggestionCn,
+                    primaryStyle = MaterialTheme.typography.labelMedium,
+                    secondaryStyle = MaterialTheme.typography.labelSmall
+                )
+            }
         }
         // 脉冲条在输入框上方独立一行: 它比按钮更需要"看得见", 而按钮是嵌在输入行里的
         // 行内小话筒(与输入框/发送键同一个 Row), 所以这里不套 HoldToTalkRow。

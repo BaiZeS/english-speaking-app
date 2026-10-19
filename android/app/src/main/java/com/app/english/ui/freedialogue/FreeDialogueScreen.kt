@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -49,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.app.english.domain.model.ScoreResult
+import com.app.english.ui.components.BilingualText
 import com.app.english.ui.components.ErrorState
 import com.app.english.ui.components.LoadingState
 import com.app.english.ui.components.RecordingGuard
@@ -102,13 +105,13 @@ fun FreeDialogueScreen(
                     }
                 },
                 actions = {
-                    if (state.scenes.size > 1) {
-                        ScenePicker(
-                            scenes = state.scenes,
-                            selectedId = state.selectedSceneId,
-                            onSelect = viewModel::selectScene
-                        )
-                    }
+                    // 选择器**总是**在: 它现在同时是「+ 自定义场景」的唯一入口。
+                    ScenePicker(
+                        scenes = state.scenes,
+                        selectedId = state.selectedSceneId,
+                        onSelect = viewModel::selectScene,
+                        onCreateCustom = viewModel::openSceneDialog
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -139,6 +142,75 @@ fun FreeDialogueScreen(
             )
         }
     }
+
+    // 「+ 自定义场景」: 一句场景描述 -> 202 + 轮询 -> 目录里真的出现这一行才切过去 (§3 C3)。
+    if (state.isSceneDialogOpen) {
+        CustomSceneDialog(
+            isCreating = state.isCreatingScene,
+            error = state.customSceneError,
+            onDismiss = viewModel::dismissSceneDialog,
+            onSubmit = viewModel::createCustomScene
+        )
+    }
+}
+
+/**
+ * 自定义场景输入弹层: 限长 200 (与服务端 `scene_brief` 的 4..200 同一口径)。
+ * 生成期间不关弹层 —— 轮询要几秒到十几秒, 关掉它学员就看不见"还在生成"和失败原因。
+ */
+@Composable
+private fun CustomSceneDialog(
+    isCreating: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit
+) {
+    var brief by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!isCreating) onDismiss() },
+        title = { Text("描述一个你想练的场景") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "一句话说清场景就行, 比如「和外教聊我的周末」。AI 会把它做成一场对话。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = brief,
+                    onValueChange = { brief = it.take(CUSTOM_SCENE_MAX_CHARS) },
+                    enabled = !isCreating,
+                    maxLines = 3,
+                    label = { Text("场景描述") },
+                    supportingText = { Text("${brief.length}/$CUSTOM_SCENE_MAX_CHARS") }
+                )
+                if (isCreating) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("AI 正在写这个场景…", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                // 失败原样显示在弹层里: 目录里没有这一行, 界面就不能假装建好了。
+                error?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSubmit(brief) },
+                enabled = !isCreating && brief.trim().length >= CUSTOM_SCENE_MIN_CHARS
+            ) { Text(if (isCreating) "生成中…" else "生成") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isCreating) { Text("取消") }
+        }
+    )
 }
 
 @Composable
@@ -191,12 +263,21 @@ private fun FreeDialogueContent(
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
-                Text(
-                    // P8·2c: 没有参考回答也照常能录 —— 这里只是渲染层兜底文案。
-                    state.suggestedReply.ifBlank { "（本轮没有参考回答，直接开口说就好）" },
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                if (state.suggestedReply.isBlank()) {
+                    Text(
+                        // P8·2c: 没有参考回答也照常能录 —— 这里只是渲染层兜底文案。
+                        "（本轮没有参考回答，直接开口说就好）",
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                } else {
+                    // D4: 要求学员开口的那句**默认双语** —— 英文在上, 中文在下, 一眼能懂。
+                    BilingualText(
+                        primary = state.suggestedReply,
+                        secondary = state.suggestedReplyCn,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
         }
 
@@ -281,15 +362,19 @@ private fun MessageBubble(message: FreeDialogueMessage) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            Text(
+            // D4: AI 台词英文优先、行尾「译」展开中文 (带「中文」标签, 字重/字号区别于
+            // 英文正文, 别被读成第二句参考回答); 「我」气泡同理——展开的是学员那句的
+            // `learner_cn`, 本轮响应里就有, 不新发请求。
+            BilingualText(
                 // P8·2d: 占位提示只活在这里 (渲染层)。协议层的 text 保持
                 // 诚实空串, 历史回传模型时被识别失败的回合就是空。
-                if (message.isUser && !message.hasTranscript) {
+                primary = if (message.isUser && !message.hasTranscript) {
                     "（这句没有识别到文字）"
                 } else {
                     message.text
                 },
-                style = MaterialTheme.typography.bodyLarge,
+                secondary = message.translation,
+                collapsible = true,
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
@@ -320,7 +405,8 @@ private fun FreeScoreCard(score: ScoreResult) {
 private fun ScenePicker(
     scenes: List<com.app.english.domain.model.DialogueScene>,
     selectedId: String,
-    onSelect: (String) -> Unit
+    onSelect: (String) -> Unit,
+    onCreateCustom: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selected = scenes.firstOrNull { it.id == selectedId } ?: scenes.firstOrNull()
@@ -337,16 +423,38 @@ private fun ScenePicker(
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // 首项是入口而不是一个场景: 描完的场景会作为普通行出现在同一个目录里
+            // (§3 C3b: 服务端把它并进 `GET /dialogue/scenes`), 所以这里不给它单独的区。
+            DropdownMenuItem(
+                text = { Text("+ 自定义场景", style = MaterialTheme.typography.bodyLarge) },
+                onClick = {
+                    onCreateCustom()
+                    expanded = false
+                }
+            )
             scenes.forEach { scene ->
                 DropdownMenuItem(
                     text = {
+                        // §3 C3b 的最终形状: 英文副标题**只属于目录行** (catalog 恒非空);
+                        // 自定义行按学员自己描述的语言展示 —— 那两格服务端恒为空串, 这里也
+                        // 就不给它渲染第二行 (D5: 空 = 那一行不存在, 不是"翻译成了空")。
+                        // 显式按 kind 判断而不是靠"空串自动隐藏": 后者会把"自定义场景将来
+                        // 多出一个英文值"变成一次静默的规则变更。
+                        val english = scene.titleEn.takeIf { !scene.isCustom }
+                        val englishDescription = scene.descriptionEn.takeIf { !scene.isCustom }
                         Column {
-                            Text(scene.title, style = MaterialTheme.typography.bodyLarge)
+                            BilingualText(
+                                primary = scene.title,
+                                secondary = english,
+                                primaryStyle = MaterialTheme.typography.bodyLarge
+                            )
                             if (scene.description.isNotBlank()) {
-                                Text(
-                                    text = scene.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                BilingualText(
+                                    primary = scene.description,
+                                    secondary = englishDescription,
+                                    primaryStyle = MaterialTheme.typography.bodySmall,
+                                    secondaryStyle = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(top = 2.dp)
                                 )
                             }
                         }

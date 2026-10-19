@@ -40,7 +40,13 @@ object GeneratePollingPolicy {
  * 规则: 没有 polish、或润色句与原句完全相同(LLM 判为无需修改时的退化返回),
  * 气泡不渲染; polish 一定来自服务端真值, 客户端不再编造占位文案。
  */
-data class PolishBubble(val original: String, val polished: String, val explanationCn: String) {
+data class PolishBubble(
+    val original: String,
+    val polished: String,
+    val explanationCn: String,
+    /** D4 双语: 润色句的中文意思; 空串 = 那一行不渲染。 */
+    val polishedCn: String = ""
+) {
     val isOriginalWorse: Boolean get() = original.isNotBlank() && polished.isNotBlank()
 }
 
@@ -51,7 +57,8 @@ fun PolishSuggestion?.toBubbleOrNull(): PolishBubble? {
     return PolishBubble(
         original = polish.original,
         polished = polish.polished,
-        explanationCn = polish.explanationCn
+        explanationCn = polish.explanationCn,
+        polishedCn = polish.polishedCn
     )
 }
 

@@ -16,6 +16,7 @@ import com.app.english.data.repository.ExpressionRepository
 import com.app.english.data.repository.PolishCollectRequest
 import com.app.english.data.repository.SessionRepository
 import com.app.english.domain.model.HintData
+import com.app.english.domain.model.MissionTurnLog
 import com.app.english.domain.model.MissionTurnResult
 import com.app.english.domain.model.PolishSuggestion
 import com.app.english.domain.model.SessionSnapshot
@@ -24,6 +25,8 @@ import com.app.english.ui.navigation.Route
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,21 +40,31 @@ import timber.log.Timber
 sealed interface MissionBubble {
     val turnIndex: Int
 
-    /** AI 台词(点击播 TTS)。 */
-    data class Ai(val text: String, override val turnIndex: Int) : MissionBubble
+    /**
+     * AI 台词(点击播 TTS)。
+     *
+     * [translation] 是 D4 的 `reply_cn`: 英文优先, 行尾「译」展开中文 (空串 = 不给「译」)。
+     */
+    data class Ai(val text: String, override val turnIndex: Int, val translation: String? = null) :
+        MissionBubble
 
     /**
      * 用户台词; 无转写时诚实显示占位(不再编造字面量)。
      *
      * [speech] 是这一轮的发音读数(维度分/语速/没读准的词)。语音轮才有, 纯文本轮为
-     * null —— **恢复快照里没有逐轮评分**(mission.turns 只存转写与润色), 所以重进实战页
-     * 时旧的轮次不再挂条: 这不是客户端丢数据, 是服务端还没把它们存下来。
+     * null —— 它现在**也**能从恢复快照里拿到 (§A3 之后 `mission.turns[].sub_scores`
+     * 已经落库), 所以重进实战页与判分回填都不会再把它弄丢。
+     *
+     * [gradingPending] = §A3 的第三态: 台词已经出来了, 润色与语法/词汇分还在后台作业里,
+     * 这一行显示「评分生成中…」而不是空着。`failed` **不是**这一态 (静默缺省, 不弹窗)。
      */
     data class User(
         val text: String,
         val hasTranscript: Boolean,
         val polish: PolishBubble?,
         val speech: SpeechStrip? = null,
+        val translation: String? = null,
+        val gradingPending: Boolean = false,
         override val turnIndex: Int
     ) : MissionBubble
 }
@@ -72,6 +85,44 @@ fun missionErrorCodeText(code: String?, backendMessage: String?): String = when 
     )
 }
 
+/**
+ * §A3 判分回填的**合并规则**(纯函数, JVM 可测)。
+ *
+ * 只动"还在等判分"的那几条用户气泡, 别的原样返回:
+ * - 已落定的轮次再合一次没有意义, 而且会把学员正在看的那一屏无谓地重组;
+ * - 报错留下的那一轮 (turnIndex 可能与重试成功的轮次相同, `gradingPending` 恒 false)
+ *   不该被别人的判分覆盖 —— 它本来就不是一次成功的实战轮。
+ *
+ * `failed` 的轮次把 [MissionBubble.User.gradingPending] 收掉 = 那一行**静默缺省**:
+ * 判分失败的意思是"这一轮没有润色/分数", 不是"这一轮不存在", 更不该弹一个「评分失败」。
+ */
+internal fun applyGradingToBubbles(
+    bubbles: List<MissionBubble>,
+    turns: List<MissionTurnLog>
+): List<MissionBubble> {
+    if (turns.isEmpty()) return bubbles
+    val byTurn = turns.associateBy { it.turnIndex }
+    return bubbles.map { bubble ->
+        val log = if (bubble is MissionBubble.User && bubble.gradingPending) {
+            byTurn[bubble.turnIndex]
+        } else {
+            null
+        }
+        if (bubble is MissionBubble.User && log != null) {
+            val learnerCn = log.learnerCn.ifBlank { bubble.translation.orEmpty() }
+            bubble.copy(
+                polish = log.polish.toBubbleOrNull(),
+                speech = speechStripOf(log.subScores, log.wordDetails, log.speechRateWpm)
+                    ?: bubble.speech,
+                translation = learnerCn.takeIf(String::isNotBlank),
+                gradingPending = GradingPollingPolicy.isPending(log.gradingStatus)
+            )
+        } else {
+            bubble
+        }
+    }
+}
+
 data class MissionUiState(
     val isLoading: Boolean = true,
     val bubbles: List<MissionBubble> = emptyList(),
@@ -80,6 +131,8 @@ data class MissionUiState(
     val maxTurns: Int = 0,
     val personaCn: String = "",
     val suggestion: String = "",
+    /** D4: 「试试这么说」那句的中文 (`suggestion_cn`); 空 = 不渲染那一行。 */
+    val suggestionCn: String = "",
     val isSubmitting: Boolean = false,
     val isRecording: Boolean = false,
     val isPlaying: Boolean = false,
@@ -144,6 +197,9 @@ class MissionViewModel @Inject constructor(
     private var snapshot: SessionSnapshot? = null
     private var sceneId: String = ""
 
+    /** §A3 判分回填循环 (同一时刻只允许一个; 重进/连轮都只是"确保它在跑")。 */
+    private var gradingPollJob: Job? = null
+
     init {
         restore()
     }
@@ -174,18 +230,34 @@ class MissionViewModel @Inject constructor(
                 }
                 val course = loaded.course
                 val opening = mission.openingA.ifBlank { course?.mission?.openingA.orEmpty() }
+                // D4「不等 LLM 先透」: 开场白的中文库里早有 (`opening_a_cn`), 恢复页面时
+                // 一个字节的生成都不用等 —— 这正是 A7' 那段"把库里已有的双语透出来"。
+                val openingCn = mission.openingACn.ifBlank { course?.mission?.openingACn.orEmpty() }
                 val bubbles = buildList {
-                    add(MissionBubble.Ai(text = opening, turnIndex = 0))
+                    add(MissionBubble.Ai(text = opening, turnIndex = 0, translation = openingCn))
                     mission.turns.forEach { turn ->
                         add(
                             MissionBubble.User(
                                 text = turn.transcript,
                                 hasTranscript = turn.transcript.isNotBlank(),
                                 polish = turn.polish.toBubbleOrNull(),
+                                speech = speechStripOf(
+                                    turn.subScores,
+                                    turn.wordDetails,
+                                    turn.speechRateWpm
+                                ),
+                                translation = turn.learnerCn,
+                                gradingPending = GradingPollingPolicy.isPending(turn.gradingStatus),
                                 turnIndex = turn.turnIndex
                             )
                         )
-                        add(MissionBubble.Ai(text = turn.reply, turnIndex = turn.turnIndex))
+                        add(
+                            MissionBubble.Ai(
+                                text = turn.reply,
+                                turnIndex = turn.turnIndex,
+                                translation = turn.replyCn
+                            )
+                        )
                     }
                 }
                 _state.update {
@@ -208,6 +280,9 @@ class MissionViewModel @Inject constructor(
                                 )
                     )
                 }
+                // 重进这一页时判分可能还在作业里: 接着轮 —— 否则"进来早了两秒"就永远
+                // 卡在「评分生成中…」上, 而服务端其实早就把润色写好了。
+                if (GradingPollingPolicy.isAwaiting(loaded.gradingStatus)) pollGradingUntilSettled()
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false, error = e.userMessage()) }
             }
@@ -276,12 +351,28 @@ class MissionViewModel @Inject constructor(
             val result = sessionRepository.missionTurn(sessionId, text, audioB64)
             consumeTurnResult(result)
         } catch (e: Exception) {
-            _state.update { it.copy(isSubmitting = false, error = e.missionMessage()) }
+            // §4-6 报错保气泡: 一次 503 (TURN_GENERATION_UNAVAILABLE) 以前会让这一轮的
+            // 用户气泡彻底消失, 学员连自己刚说过什么都看不到。打字轮把原话摆回去; 语音轮
+            // 的转写没回来 (它在服务端那半丢了), 就诚实地摆一个"没识别到文字"的气泡 ——
+            // 宁可留一个说真话的空位, 也不让这一轮在聊天流里蒸发。
+            _state.update { current ->
+                current.copy(
+                    isSubmitting = false,
+                    bubbles = current.bubbles + MissionBubble.User(
+                        text = text.orEmpty(),
+                        hasTranscript = !text.isNullOrBlank(),
+                        polish = null,
+                        turnIndex = current.turnCount + 1
+                    ),
+                    error = e.missionMessage()
+                )
+            }
         }
     }
 
     private fun consumeTurnResult(result: MissionTurnResult) {
         val turn = result.turn
+        val gradingPending = GradingPollingPolicy.isPending(turn.gradingStatus)
         _state.update { current ->
             current.copy(
                 isSubmitting = false,
@@ -290,18 +381,29 @@ class MissionViewModel @Inject constructor(
                     hasTranscript = turn.transcript.isNotBlank(),
                     polish = turn.polish.toBubbleOrNull(),
                     speech = speechStripOf(turn),
+                    translation = turn.learnerCn,
+                    gradingPending = gradingPending,
                     turnIndex = turn.turnIndex
-                ) + MissionBubble.Ai(text = turn.reply, turnIndex = turn.turnIndex),
+                ) + MissionBubble.Ai(
+                    text = turn.reply,
+                    turnIndex = turn.turnIndex,
+                    translation = turn.replyCn
+                ),
                 checklist = result.checklist,
                 turnCount = result.turnCount,
                 maxTurns = result.maxTurns,
                 suggestion = turn.suggestion,
+                suggestionCn = turn.suggestionCn,
                 finished = result.finished,
                 hint = null,
                 hintWarnsScore = false,
                 snackbar = result.turn.newlyDone.firstOrNull()?.evidence
             )
         }
+        // §A3: 台词到手、判分还在作业里 -> 按现成节奏轮 `GET /sessions/{id}` 回填润色、
+        // 逐词染色与清单。`failed` 也继续轮 (水位过后服务端会重派, 它可能翻身成 `ready`),
+        // 但界面上那一行**静默缺省** —— 判分失败 = 这一轮没有润色, 不是"这一轮不存在"。
+        if (GradingPollingPolicy.isAwaiting(result.gradingStatus)) pollGradingUntilSettled()
         // 到轮次上界的自动收工(§P6 客户端 4): 响应带的是**数值骨架** + `generating`。
         // 三个信号任一成立都算收工, 因为服务端在这一条路径上是同时给它们的, 而其中任何一个
         // 单独出现都已经说明"这一场结束了": 只看 `review != null` 会漏掉"骨架还在路上"的
@@ -320,6 +422,82 @@ class MissionViewModel @Inject constructor(
 
     /** 界面消费掉一次性「去复盘」导航请求(LaunchedEffect 里调一次, 避免重组时重复导航)。 */
     fun consumeReviewRequest() = _state.update { it.copy(openReviewRequested = false) }
+
+    /**
+     * §A3 判分回填循环。
+     *
+     * **不新增端点、不新增轮询机制**: 打的就是 `GET /sessions/{id}` ([restore] 用的同一个
+     * 读路径), 节奏取现成的 [ReviewPollingPolicy] (2s 起探、线性退避到 6s 封顶、5 分钟放弃
+     * —— 判分实测 5-15s, 这个水位连服务端一次重派周期都盖得住)。服务端在 GET 里顺手把卡住
+     * 的判分作业就地重派, 所以 `failed` **也要继续轮** (后端契约点名要求: 它可能翻身成
+     * `ready`), 但界面那行静默缺省, 绝不弹「评分失败」。
+     *
+     * 同一时刻只允许一个循环 (重进/连轮都会想启动它, 两条循环会在同一份快照上互相覆盖)。
+     */
+    private fun pollGradingUntilSettled() {
+        if (gradingPollJob?.isActive == true) return
+        gradingPollJob = viewModelScope.launch {
+            val startedAt = System.currentTimeMillis()
+            var polls = 0
+            var failures = 0
+            var sawSnapshot = false
+            var lastStatus: String? = null
+            while (true) {
+                val snapshot = try {
+                    sessionRepository.get(sessionId)
+                } catch (e: Exception) {
+                    // 单次丢包按网络抖动放过: 判分晚到几秒不是事故, 把整页变成红字才是。
+                    failures++
+                    Timber.w(e, "grading poll failed | session=%s poll=%d", sessionId, polls)
+                    null
+                }
+                val elapsed = System.currentTimeMillis() - startedAt
+                if (snapshot != null) {
+                    failures = 0
+                    sawSnapshot = true
+                    lastStatus = snapshot.gradingStatus
+                    _state.update { current ->
+                        current.copy(
+                            bubbles = applyGradingToBubbles(
+                                current.bubbles,
+                                snapshot.mission?.turns.orEmpty()
+                            ),
+                            // 判分作业会顺手把任务清单往前推 (done 粘滞, 只许变好):
+                            // 让学员看到的那几枚勾与刚落的判分是同一份事实。
+                            checklist = snapshot.mission?.tasks?.takeIf { it.isNotEmpty() }
+                                ?: current.checklist
+                        )
+                    }
+                }
+                val keep = GradingPollingPolicy.shouldKeepPolling(
+                    status = lastStatus,
+                    sawSnapshot = sawSnapshot,
+                    consecutiveFailures = failures,
+                    elapsedMillis = elapsed
+                )
+                if (!keep) {
+                    // 放弃等待 (超时 / 连续丢包): 把「评分生成中…」收掉 —— 我们不再问了,
+                    // 再挂着那行字就是替一个没人盯的作业打保票。`failed` 与放弃都是静默的。
+                    clearGradingPending()
+                    return@launch
+                }
+                delay(ReviewPollingPolicy.nextDelayMillis(polls))
+                polls++
+            }
+        }
+    }
+
+    /** 不再等待时收掉第三态: 那一行回到"没有润色就不画"的缺省。 */
+    private fun clearGradingPending() = _state.update { current ->
+        current.copy(bubbles = current.bubbles.map(::withoutGradingPending))
+    }
+
+    private fun withoutGradingPending(bubble: MissionBubble): MissionBubble =
+        if (bubble is MissionBubble.User && bubble.gradingPending) {
+            bubble.copy(gradingPending = false)
+        } else {
+            bubble
+        }
 
     fun requestHint() {
         if (_state.value.inFlight || _state.value.finished) return
