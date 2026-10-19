@@ -36,17 +36,27 @@ import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import timber.log.Timber
 
-/** 聊天列表里的一条气泡(turnIndex 给 LazyColumn 的 key 用)。 */
+/** 聊天列表里的一条气泡。 */
 sealed interface MissionBubble {
     val turnIndex: Int
 
     /**
-     * AI 台词(点击播 TTS)。
+     * **单调 id**: LazyColumn 的 key 只认它 (见 [MissionBubbleIds])。
      *
-     * [translation] 是 D4 的 `reply_cn`: 英文优先, 行尾「译」展开中文 (空串 = 不给「译」)。
+     * 为什么不能再用内容当 key: 「失败也落气泡」之后, 语音发送连挂两次会落下两条
+     * `User("", hasTranscript=false, 同一个 turnIndex)` —— 逐字节相同。旧 key
+     * (`class-turnIndex-hashCode`) 于是重复, LazyColumn 当场抛 IllegalArgumentException
+     * 崩溃。id 还顺手治好另一件事: 内容一变 key 就变, 这一项的组合状态 (例如「译」的展开
+     * 态) 会被丢掉重算; 有了稳定 id, 刷新判分结果不再把展开态收回去。
      */
-    data class Ai(val text: String, override val turnIndex: Int, val translation: String? = null) :
-        MissionBubble
+    val id: Long
+
+    data class Ai(
+        val text: String,
+        override val turnIndex: Int,
+        val translation: String? = null,
+        override val id: Long = 0L
+    ) : MissionBubble
 
     /**
      * 用户台词; 无转写时诚实显示占位(不再编造字面量)。
@@ -65,8 +75,20 @@ sealed interface MissionBubble {
         val speech: SpeechStrip? = null,
         val translation: String? = null,
         val gradingPending: Boolean = false,
-        override val turnIndex: Int
+        override val turnIndex: Int,
+        override val id: Long = 0L
     ) : MissionBubble
+}
+
+/**
+ * 气泡 id 的**唯一来源**: 一次 ViewModel 会话里单调递增, 跨重进也只需在当前这份列表内
+ * 唯一 (key 的唯一性是 LazyColumn 的一次组合范围, 不是全局不变量)。
+ *
+ * 单独抽成一个类是为了能测 —— 崩溃的成因是"两条内容完全相同的气泡拿到同一个 key",
+ * 而那个判据不在 Composable 里, 就在这里。
+ */
+internal class MissionBubbleIds(private var latest: Long = 0L) {
+    fun next(): Long = ++latest
 }
 
 /**
@@ -200,6 +222,9 @@ class MissionViewModel @Inject constructor(
     /** §A3 判分回填循环 (同一时刻只允许一个; 重进/连轮都只是"确保它在跑")。 */
     private var gradingPollJob: Job? = null
 
+    /** 气泡 id 源 (LazyColumn 的 key 只认它, 见 [MissionBubbleIds])。 */
+    private val bubbleIds = MissionBubbleIds()
+
     init {
         restore()
     }
@@ -234,7 +259,14 @@ class MissionViewModel @Inject constructor(
                 // 一个字节的生成都不用等 —— 这正是 A7' 那段"把库里已有的双语透出来"。
                 val openingCn = mission.openingACn.ifBlank { course?.mission?.openingACn.orEmpty() }
                 val bubbles = buildList {
-                    add(MissionBubble.Ai(text = opening, turnIndex = 0, translation = openingCn))
+                    add(
+                        MissionBubble.Ai(
+                            text = opening,
+                            turnIndex = 0,
+                            translation = openingCn,
+                            id = bubbleIds.next()
+                        )
+                    )
                     mission.turns.forEach { turn ->
                         add(
                             MissionBubble.User(
@@ -248,14 +280,16 @@ class MissionViewModel @Inject constructor(
                                 ),
                                 translation = turn.learnerCn,
                                 gradingPending = GradingPollingPolicy.isPending(turn.gradingStatus),
-                                turnIndex = turn.turnIndex
+                                turnIndex = turn.turnIndex,
+                                id = bubbleIds.next()
                             )
                         )
                         add(
                             MissionBubble.Ai(
                                 text = turn.reply,
                                 turnIndex = turn.turnIndex,
-                                translation = turn.replyCn
+                                translation = turn.replyCn,
+                                id = bubbleIds.next()
                             )
                         )
                     }
@@ -362,7 +396,8 @@ class MissionViewModel @Inject constructor(
                         text = text.orEmpty(),
                         hasTranscript = !text.isNullOrBlank(),
                         polish = null,
-                        turnIndex = current.turnCount + 1
+                        turnIndex = current.turnCount + 1,
+                        id = bubbleIds.next()
                     ),
                     error = e.missionMessage()
                 )
@@ -383,11 +418,13 @@ class MissionViewModel @Inject constructor(
                     speech = speechStripOf(turn),
                     translation = turn.learnerCn,
                     gradingPending = gradingPending,
-                    turnIndex = turn.turnIndex
+                    turnIndex = turn.turnIndex,
+                    id = bubbleIds.next()
                 ) + MissionBubble.Ai(
                     text = turn.reply,
                     turnIndex = turn.turnIndex,
-                    translation = turn.replyCn
+                    translation = turn.replyCn,
+                    id = bubbleIds.next()
                 ),
                 checklist = result.checklist,
                 turnCount = result.turnCount,

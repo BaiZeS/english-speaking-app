@@ -127,9 +127,7 @@ fun MissionScreen(
                         .padding(horizontal = Spacings.s2),
                     verticalArrangement = Arrangement.spacedBy(Spacings.s2)
                 ) {
-                    items(state.bubbles, key = { bubble ->
-                        "${bubble.javaClass.simpleName}-${bubble.turnIndex}-${bubble.hashCode()}"
-                    }) { bubble ->
+                    items(state.bubbles, key = { bubble -> bubble.id }) { bubble ->
                         BubbleRow(bubble, onPlayAi = viewModel::playAiBubble, onCollect = {
                             viewModel.collectPolish(it)
                         })
