@@ -37,3 +37,5 @@
 - **抄作业形状会漏「会话级幂等门 × 逐轮进度」这一条**：跑完复读 todo 再判，比末尾再派生可靠（派生点被在途门自吞）。
 - **失败也落气泡放大一切内容相等性假设**：列表 key 必须带外单调 id，「译」展开态随之存活；审查两轮各逮到一张此类脸。
 - 本盒生产操作全程留痕：只按用户书面授权动 `.env`/restart；`deploy.sh` 自动跑 alembic——源码回滚跨迁移边界要先看 `git diff --name-only <tag>..HEAD -- backend/app/db/migrations/`。
+
+| 发版链路 | tag `v2.3.0` → CI Release success → GitHub Release asset → `publish_apk.sh v2.3.0` → `/app/version`=2.3.0/env → static Range 206 | ✅ 2026-10-19 |
