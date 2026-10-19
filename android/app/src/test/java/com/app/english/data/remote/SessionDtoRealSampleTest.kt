@@ -1,5 +1,6 @@
 package com.app.english.data.remote
 
+import com.app.english.ui.scenes.speechStripOf
 import com.app.english.ui.scenes.subScoreReadout
 import com.app.english.ui.scenes.taskProgressLabel
 import org.junit.Assert.assertEquals
@@ -253,5 +254,164 @@ class SessionDtoRealSampleTest {
                 "session_id":"","created_at":"2026-09-04T18:17:35.447780+00:00"}"""
         )
         assertEquals("mission", expression.sourceLabel)
+    }
+
+    // ====== §A3/§A4: 实战轮判分移出请求 + D4 双语 (真实形状样本) ======
+
+    /**
+     * 新形状的一轮: 台词与双语当场就有, 润色/语法词汇分**这一轮为 null** ——
+     * `grading_status="pending"` 说的就是这件事 (判分在后台作业里)。
+     *
+     * 顺带钉住 T3 审查留下的那条: `source="pending"` **不是**降级信号, 界面上不许因此
+     * 挂「非真实评测」横幅; 真降级由 `mission.turns[].source` 在判分落定后才说得清。
+     */
+    @Test
+    fun decodesMissionTurnWithBilingualAndPendingGrading() {
+        val payload = """
+            {"session_id":"s3","revision":9,"stage":"mission","status":"active",
+             "turn_index":2,"transcript":"I went hiking with my friends.",
+             "reply":"Nice! Which trail did you take?",
+             "suggestion":"We took the river trail.",
+             "reply_cn":"不错！你们走的哪条路线？",
+             "suggestion_cn":"我们走的河边那条路线。",
+             "learner_cn":"我和朋友去徒步了。",
+             "polish":null,
+             "sub_scores":{"pronunciation":71.0,"grammar":null,"vocabulary":null,
+               "fluency":null},
+             "word_details":[],"speech_rate_wpm":null,"newly_done":[],"checklist":[],
+             "cleared":false,"turn_count":2,"max_turns":14,"auto_finished":false,
+             "finished":false,"ability_events":[],"source":"pending",
+             "llm_source":"qwen3.8-flash","costs_score":false,
+             "grading_status":"pending","review":null}
+        """.trimIndent()
+        val response = json.decodeFromString<MissionTurnResponseDto>(payload)
+        assertEquals("pending", response.gradingStatus)
+        assertNull(response.polish)
+        val result = response.toDomain()
+        assertEquals("pending", result.gradingStatus)
+        assertEquals("pending", result.turn.gradingStatus)
+        assertEquals("不错！你们走的哪条路线？", result.turn.replyCn)
+        assertEquals("我们走的河边那条路线。", result.turn.suggestionCn)
+        assertEquals("我和朋友去徒步了。", result.turn.learnerCn)
+        // 判分未落时语法/词汇仍然是 null —— 不是 0, 界面据此跳过不画那一维。
+        assertNull(result.turn.subScores["grammar"])
+        assertEquals(71.0, result.turn.subScores["pronunciation"]!!, 0.01)
+    }
+
+    /** 老形状(没有三个中文键、没有 grading_status)仍要 decode 到安全的缺省。 */
+    @Test
+    fun legacyMissionTurnWithoutBilingualKeysDecodesToDefaults() {
+        val payload = """
+            {"session_id":"s4","revision":9,"stage":"mission","status":"active",
+             "turn_index":1,"transcript":"Hello","reply":"Hi there!",
+             "suggestion":"","polish":null,"sub_scores":{},"word_details":[],
+             "newly_done":[],"checklist":[],"cleared":false,"turn_count":1,
+             "max_turns":14,"auto_finished":false,"finished":false,
+             "ability_events":[],"source":"llm","costs_score":false,"review":null}
+        """.trimIndent()
+        val result = json.decodeFromString<MissionTurnResponseDto>(payload).toDomain()
+        assertEquals("", result.turn.replyCn)
+        assertEquals("", result.turn.suggestionCn)
+        assertEquals("", result.turn.learnerCn)
+        assertEquals("", result.turn.gradingStatus)
+        assertNull(result.gradingStatus)
+        // 界面读数: 三个中文键全空 -> 那三行不渲染 (D5), 不是三个空行。
+        assertTrue(result.turn.replyCn.isBlank())
+    }
+
+    /** `GET /sessions/{id}` 顶层的判分键 + 老快照(没有这个键) -> null = 不可知。 */
+    @Test
+    fun sessionViewCarriesGradingStatusAndToleratesItsAbsence() {
+        val pending = json.decodeFromString<SessionViewDto>(
+            SESSION_VIEW_WITH_STATUS.replace(REVIEW_STATUS_PLACEHOLDER, "\"generating\"")
+                .replace("\"review\":null,", "\"review\":null,\"grading_status\":\"pending\",")
+        )
+        assertEquals("pending", pending.gradingStatus)
+        assertEquals("pending", pending.toDomain().gradingStatus)
+
+        val legacy = json.decodeFromString<SessionViewDto>(
+            SESSION_VIEW_WITH_STATUS.replace(REVIEW_STATUS_PLACEHOLDER, "null")
+        )
+        assertNull(legacy.gradingStatus)
+        assertNull(legacy.toDomain().gradingStatus)
+        // 空串与缺键同义 (JSON 列里的脏值要能当"不可知"处理, 不许当 pending 用)。
+        val blank = json.decodeFromString<SessionViewDto>(
+            SESSION_VIEW_WITH_STATUS.replace(REVIEW_STATUS_PLACEHOLDER, "null")
+                .replace("\"review\":null,", "\"review\":null,\"grading_status\":\"  \",")
+        )
+        assertNull(blank.toDomain().gradingStatus)
+    }
+
+    /**
+     * 恢复通道(`GET /sessions/{id}` 的 `mission.turns[]`)必须带齐逐轮双语 + 判分槽位 +
+     * 发音证据 —— 否则"重进实战页只剩英文"与"没读准的词消失"这两条会重新出现。
+     */
+    @Test
+    fun missionSnapshotTurnsCarryBilingualEvidenceAndGradingSlot() {
+        val payload = """
+            {"opening":{"a":"Hi there.","a_cn":"你好。"},
+             "turns":[
+               {"index":1,"user_text":"I went hiking.","reply":"Nice! Which trail?",
+                "suggestion":"We took the river trail.","reply_cn":"不错！哪条路线？",
+                "suggestion_cn":"我们走的河边那条路线。","learner_cn":"我去徒步了。",
+                "polish":{"original":"I go hiking","polished":"I went hiking",
+                  "explanation_cn":"过去时。","polished_cn":"我去徒步了。"},
+                "sub_scores":{"pronunciation":66.0,"grammar":90.0,"vocabulary":null,
+                  "fluency":null},
+                "word_details":[{"word":"hiking","score":31.0,"ipa":"/ˈhaɪkɪŋ/"}],
+                "speech_rate_wpm":118.0,"costs_score":false,"source":"llm",
+                "grading":{"status":"ready","at":"2026-10-08T10:00:00+00:00"}},
+               {"index":2,"user_text":"It was great.","reply":"Sounds fun!",
+                "suggestion":"","polish":null,"sub_scores":{},"word_details":[],
+                "costs_score":false,"source":"pending",
+                "grading":{"status":"pending","at":"2026-10-08T10:01:00+00:00"}}],
+             "tasks":[{"id":"t1","desc_cn":"说清路线","hint_en":"We took the river trail.",
+               "hint_cn":"用 took 说路线","required":true,"done":true,
+               "evidence":"说了路线","done_at_turn":1}],
+             "turn_count":2,"max_turns":14,"cleared":false,"finished":false,
+             "hints_used":0,"grading":{"status":"pending","turn":2}}
+        """.trimIndent()
+        val recovery = json.decodeFromString<MissionSnapshotDto>(payload).toDomain()
+        assertEquals("你好。", recovery.openingACn)
+        val graded = recovery.turns[0]
+        assertEquals("不错！哪条路线？", graded.replyCn)
+        assertEquals("我们走的河边那条路线。", graded.suggestionCn)
+        assertEquals("我去徒步了。", graded.learnerCn)
+        assertEquals("ready", graded.gradingStatus)
+        assertEquals("我去徒步了。", graded.polish?.polishedCn)
+        // 逐词染色与维度分都到得了界面 (以前这一段被边界丢掉)。
+        assertEquals(66.0, graded.subScores["pronunciation"]!!, 0.01)
+        assertEquals(118.0, graded.speechRateWpm!!, 0.01)
+        assertEquals(
+            listOf("发音" to 66.0, "语法" to 90.0),
+            subScoreReadout(graded.subScores).map { it.label to it.score }
+        )
+        // 逐词染色: 落在红带的词就是界面上"没读准"的那几个。
+        assertEquals(
+            listOf("hiking"),
+            speechStripOf(graded.subScores, graded.wordDetails, graded.speechRateWpm)?.weakWords
+        )
+        val pending = recovery.turns[1]
+        assertEquals("pending", pending.gradingStatus)
+        assertEquals("", pending.replyCn)
+        // chips 的中文提示 (库内早有, T2 起才随视图下发)。
+        assertEquals("用 took 说路线", recovery.tasks.single().hintCn)
+    }
+
+    /** 提示卡: `hint_cn` / `script_line_cn` 两键都要到手 (以前边界把库里中文整条丢掉)。 */
+    @Test
+    fun decodesHintPayloadWithBothChineseLines() {
+        val payload = """
+            {"session_id":"s5","revision":3,"stage":"mission","status":"active",
+             "hint":{"task_id":"t2","desc_cn":"说明奶糖","hint_en":"No sugar, please.",
+               "hint_cn":"直接说 no sugar","script_line":"Just a little sugar.",
+               "script_line_cn":"只要一点点糖。","note_cn":"先把要求说清楚"},
+             "costs_score":true,"hints_used":1}
+        """.trimIndent()
+        val hint = json.decodeFromString<HintResponseDto>(payload).toHintData()
+        assertEquals("直接说 no sugar", hint.hintCn)
+        assertEquals("只要一点点糖。", hint.scriptLineCn)
+        assertEquals("No sugar, please.", hint.hintEn)
+        assertEquals("说明奶糖", hint.descCn)
     }
 }

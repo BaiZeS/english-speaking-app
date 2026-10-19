@@ -98,7 +98,10 @@ fun DialogueTurnResponseDto.toDomain(): com.app.english.domain.model.DialogueTur
         replyText = replyText,
         suggestedReply = suggestedReply,
         recognizedText = recognizedText,
-        replyAudioUrl = replyAudioUrl
+        replyAudioUrl = replyAudioUrl,
+        replyCn = replyCn,
+        suggestionCn = suggestionCn,
+        learnerCn = learnerCn
     )
 
 fun LlmModelDto.toDomain(): com.app.english.domain.model.LlmModel =
@@ -129,7 +132,10 @@ fun BookDto.toDomain(): Book = Book(
 fun DialogueSceneDto.toDomain(): DialogueScene = DialogueScene(
     id = id,
     title = title,
-    description = description
+    description = description,
+    titleEn = titleEn,
+    descriptionEn = descriptionEn,
+    kind = kind
 )
 
 fun DailyScoreDto.toDomain(): DailyScore = DailyScore(

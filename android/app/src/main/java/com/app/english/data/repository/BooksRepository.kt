@@ -21,11 +21,18 @@ interface BooksRepository {
 }
 
 @Singleton
-class BooksRepositoryImpl @Inject constructor(private val api: EnglishApi) : BooksRepository {
+class BooksRepositoryImpl @Inject constructor(
+    private val api: EnglishApi,
+    private val settingsStore: SettingsStore
+) : BooksRepository {
     override suspend fun listBooks(): List<Book> = api.listBooks().books.map { it.toDomain() }
 
+    /**
+     * 场景目录**带身份**(§3 C3b): 不带身份只看见内置目录, 自己描的场景永远不出现 ——
+     * 这就是"作业 ready 之后刷新一次列表"能看见新场景的原因。
+     */
     override suspend fun listDialogueScenes(): List<DialogueScene> =
-        api.listDialogueScenes().scenes.map { it.toDomain() }
+        api.listDialogueScenes(settingsStore.deviceId).scenes.map { it.toDomain() }
 }
 
 interface StatsRepository {

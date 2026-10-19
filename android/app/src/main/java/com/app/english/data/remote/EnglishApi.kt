@@ -46,8 +46,17 @@ interface EnglishApi {
     @GET("books")
     suspend fun listBooks(): BooksResponseDto
 
+    /** 场景目录; 带身份时按归属合并学员自己的自定义场景 (§3 C3b, `kind="custom"`)。 */
     @GET("dialogue/scenes")
-    suspend fun listDialogueScenes(): DialogueScenesResponseDto
+    suspend fun listDialogueScenes(@Query("device_id") deviceId: String): DialogueScenesResponseDto
+
+    /**
+     * 描一个自定义对话场景 -> **202** `{job_id, polling_url}` (§3 C3)。
+     * 作业与整课生成同居一张表, 所以轮询就用现成的 [getGenerationJob] (返回的 `kind`
+     * 是 `scene_brief`); 就绪后重新打一次 [listDialogueScenes] 就能看到新场景。
+     */
+    @POST("dialogue/scenes/custom")
+    suspend fun createCustomScene(@Body request: CustomSceneRequestDto): GenerateAcceptedDto
 
     @GET("lessons/{lessonId}/progress")
     suspend fun getLessonProgress(

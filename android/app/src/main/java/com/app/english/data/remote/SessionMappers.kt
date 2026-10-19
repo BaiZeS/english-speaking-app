@@ -132,8 +132,12 @@ fun BriefingProgressDto.toDomain(): BriefingProgress = BriefingProgress(
     }
 )
 
-fun PolishDto.toDomain(): PolishSuggestion =
-    PolishSuggestion(original = original, polished = polished, explanationCn = explanationCn)
+fun PolishDto.toDomain(): PolishSuggestion = PolishSuggestion(
+    original = original,
+    polished = polished,
+    explanationCn = explanationCn,
+    polishedCn = polishedCn
+)
 
 fun TranscriptPairDto.toDomain(): PolishSuggestion =
     PolishSuggestion(original = original, polished = polished, explanationCn = explanationCn)
@@ -142,6 +146,7 @@ fun MissionTaskViewDto.toDomain(): TaskChip = TaskChip(
     id = id,
     descCn = descCn,
     hintEn = hintEn,
+    hintCn = hintCn,
     required = required,
     done = done,
     evidence = evidence
@@ -157,6 +162,7 @@ fun SessionViewDto.toDomain(): SessionSnapshot = SessionSnapshot(
     mission = mission?.toDomain(),
     review = review?.toDomain(),
     reviewStatus = reviewStatus.normalizesToNull(),
+    gradingStatus = gradingStatus.normalizesToNull(),
     course = course?.toDomain()
 )
 
@@ -175,7 +181,14 @@ fun MissionSnapshotDto.toDomain(): MissionRecovery = MissionRecovery(
             transcript = turn.userText,
             reply = turn.reply,
             polish = turn.polish?.toDomain(),
-            costsScore = turn.costsScore
+            costsScore = turn.costsScore,
+            replyCn = turn.replyCn,
+            suggestionCn = turn.suggestionCn,
+            learnerCn = turn.learnerCn,
+            gradingStatus = turn.grading?.status.orEmpty(),
+            subScores = turn.subScores,
+            wordDetails = turn.wordDetails.map { WordScore(it.word, it.score, it.ipa) },
+            speechRateWpm = turn.speechRateWpm
         )
     },
     tasks = tasks.map { it.toDomain() },
@@ -189,7 +202,11 @@ fun MissionTurnResponseDto.toDomain(): MissionTurnResult = MissionTurnResult(
         transcript = transcript,
         reply = reply,
         suggestion = suggestion,
+        replyCn = replyCn,
+        suggestionCn = suggestionCn,
+        learnerCn = learnerCn,
         polish = polish?.toDomain(),
+        gradingStatus = gradingStatus.normalizesToNull().orEmpty(),
         newlyDone = newlyDone.map { NewlyDoneTask(it.id, it.evidence) },
         costsScore = costsScore,
         subScores = subScores,
@@ -206,7 +223,8 @@ fun MissionTurnResponseDto.toDomain(): MissionTurnResult = MissionTurnResult(
     source = source,
     llmSource = llmSource,
     review = review?.toDomain(),
-    reviewStatus = reviewStatus.normalizesToNull()
+    reviewStatus = reviewStatus.normalizesToNull(),
+    gradingStatus = gradingStatus.normalizesToNull()
 )
 
 fun ReviewReportDto.toDomain(): com.app.english.domain.model.ReviewReportData =
@@ -248,7 +266,9 @@ fun HintResponseDto.toHintData(): HintData = HintData(
     descCn = hint.descCn,
     hintEn = hint.hintEn,
     scriptLine = hint.scriptLine,
-    noteCn = hint.noteCn
+    noteCn = hint.noteCn,
+    hintCn = hint.hintCn,
+    scriptLineCn = hint.scriptLineCn
 )
 
 fun SessionSummaryDto.toDomain(): ContinueSession = ContinueSession(
@@ -269,7 +289,8 @@ fun GenerationJobDto.toDomain(): GenerationJob = GenerationJob(
     progress = progress,
     stageText = stageText,
     sceneId = sceneId,
-    error = error
+    error = error,
+    kind = kind
 )
 
 fun ExpressionDto.toDomain(): ExpressionEntry = ExpressionEntry(

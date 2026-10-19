@@ -102,7 +102,12 @@ data class GenerationJobDto(
     val progress: Double = 0.0,
     @SerialName("stage_text") val stageText: String = "",
     @SerialName("scene_id") val sceneId: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    /**
+     * §3 C3 add-only: 两种后台任务同居 `generation_jobs` —— `course` (整课生成) 与
+     * `scene_brief` (自定义对话场景)。这一列让客户端分得开 (旧后端缺键 -> `course`)。
+     */
+    val kind: String = "course"
 )
 
 // ====== 通关进度(计划 §5.2 M3 course_progress) ======

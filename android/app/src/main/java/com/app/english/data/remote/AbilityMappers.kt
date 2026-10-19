@@ -103,5 +103,6 @@ fun PolishResponseDto.toDomain(): PolishOutcome = PolishOutcome(
 private fun PolishDto.toSuggestion(): PolishSuggestion = PolishSuggestion(
     original = original,
     polished = polished,
-    explanationCn = explanationCn
+    explanationCn = explanationCn,
+    polishedCn = polishedCn
 )

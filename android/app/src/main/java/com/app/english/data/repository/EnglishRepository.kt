@@ -36,11 +36,17 @@ interface EnglishRepository {
         mode: String = "adult",
         modelId: String? = null
     ): DialogueSession = error("Dialogue generation is not supported by this repository")
+
+    /**
+     * @param shownSuggestions §A4/A5: 最近已经**展示给学员**的参考句 (≤8), 服务端拿它防
+     *   复写 (自由对话没有会话表, 参考句每轮被覆盖, 只有客户端知道给过哪几句)。
+     */
     suspend fun dialogueTurn(
         sceneId: String,
         history: List<DialogueMessageDto>,
         userAudioBase64: String,
-        modelId: String? = null
+        modelId: String? = null,
+        shownSuggestions: List<String> = emptyList()
     ): DialogueTurn = error("Dialogue turns are not supported by this repository")
     suspend fun listLlmModels(): List<LlmModel> =
         error("LLM model catalog is not supported by this repository")
@@ -98,20 +104,29 @@ class EnglishRepositoryImpl @Inject constructor(
         mode: String,
         modelId: String?
     ): DialogueSession = api.generateDialogue(
-        DialogueGenerateRequestDto(scene = scene, mode = mode, modelId = modelId)
+        // 身份 add-only (§3 C3b): 自定义场景的开场白按归属解行, 目录场景不受影响。
+        DialogueGenerateRequestDto(
+            scene = scene,
+            mode = mode,
+            modelId = modelId,
+            deviceId = settingsStore.deviceId
+        )
     ).toDomain()
 
     override suspend fun dialogueTurn(
         sceneId: String,
         history: List<DialogueMessageDto>,
         userAudioBase64: String,
-        modelId: String?
+        modelId: String?,
+        shownSuggestions: List<String>
     ): DialogueTurn = api.dialogueTurn(
         DialogueTurnRequestDto(
             sceneId = sceneId,
             history = history,
             userAudioB64 = userAudioBase64,
-            modelId = modelId
+            modelId = modelId,
+            deviceId = settingsStore.deviceId,
+            shownSuggestions = shownSuggestions
         )
     ).toDomain()
 
@@ -123,7 +138,7 @@ class EnglishRepositoryImpl @Inject constructor(
     override suspend fun listBooks(): List<Book> = api.listBooks().books.map { it.toDomain() }
 
     override suspend fun listDialogueScenes(): List<DialogueScene> =
-        api.listDialogueScenes().scenes.map { it.toDomain() }
+        api.listDialogueScenes(settingsStore.deviceId).scenes.map { it.toDomain() }
 
     override suspend fun getStats(deviceId: String): PracticeStats =
         api.getStats(deviceId).toDomain()

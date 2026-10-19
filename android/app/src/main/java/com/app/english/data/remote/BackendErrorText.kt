@@ -37,6 +37,11 @@ fun sessionErrorCodeText(code: String?, backendMessage: String?, fallback: Strin
         "MISSION_INPUT_REQUIRED" -> "说点什么或打字再发送"
         "TRANSCRIPT_UNAVAILABLE" -> "这段语音没能转写出文字, 试试打字发送"
         "SESSION_KIND_UNSUPPORTED" -> "这类会话不支持该操作"
+        // §A6/D5: 台词生成拿不到 (模型超时或未配置) 时这一轮**没有发生** —— 服务端
+        // 不再回放剧本兜底, 所以文案必须说清"重试一次", 而不是让人以为自己在练剧本对话。
+        "TURN_GENERATION_UNAVAILABLE" -> "AI 台词生成不可用 (模型超时或未配置), 这一轮没有发生, 请重试"
+        // §3 C3b: 场景 id 拼错/不属于自己不再静默落到目录第一条, 而是明确 404。
+        "SCENE_NOT_FOUND" -> "这个场景找不到了, 换个场景再试试"
         else -> null
     }
     if (mapped != null) return mapped

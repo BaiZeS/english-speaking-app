@@ -37,7 +37,10 @@ class BackendErrorTextTest {
             "STEP_NOT_FOUND",
             "MISSION_INPUT_REQUIRED",
             "TRANSCRIPT_UNAVAILABLE",
-            "SESSION_KIND_UNSUPPORTED"
+            "SESSION_KIND_UNSUPPORTED",
+            // §A6/D5 + §3 C3b 新增的两条。
+            "TURN_GENERATION_UNAVAILABLE",
+            "SCENE_NOT_FOUND"
         )
         for (code in codes) {
             val text = sessionErrorCodeText(code, backendMessage = null, fallback = "兜底")
@@ -66,6 +69,38 @@ class BackendErrorTextTest {
             fallback = "兜底"
         )
         assertEquals("当前环节还不能做这一步, 按清单顺序来", mapped)
+    }
+
+    /**
+     * §A6/D5: 台词拿不到时**这一轮没有发生** —— 服务端不再回放剧本兜底, 所以那句中文必须
+     * 说清"重试", 而不能让人以为自己刚才练的是一段脚本对话 (或者以为自己发了假请求)。
+     */
+    @Test
+    fun turnGenerationUnavailableTellsTheLearnerTheRoundDidNotHappen() {
+        val text = sessionErrorCodeText(
+            "TURN_GENERATION_UNAVAILABLE",
+            "AI 台词生成不可用（模型超时或未配置），这一轮没有发生，请重试",
+            fallback = "兜底"
+        )
+        assertEquals("AI 台词生成不可用 (模型超时或未配置), 这一轮没有发生, 请重试", text)
+        assertTrue(text.contains("没有发生"))
+        assertTrue(text.containsCjkForTest())
+    }
+
+    /**
+     * §3 C3b: 场景 id 拼错 / 别人的自定义场景现在明确 404 —— 文案要说"换一个场景", 而不是
+     * 让人在同一个坏 id 上反复重试 (旧行为更糟: 静默教成一门「商务会议」)。
+     */
+    @Test
+    fun sceneNotFoundTellsTheLearnerToSwitchScene() {
+        val text = sessionErrorCodeText(
+            "SCENE_NOT_FOUND",
+            "scene custom_deadbeef not found",
+            fallback = "兜底"
+        )
+        assertEquals("这个场景找不到了, 换个场景再试试", text)
+        assertFalse(text.contains("not found"))
+        assertTrue(text.containsCjkForTest())
     }
 
     @Test

@@ -81,7 +81,14 @@ data class DialogueTurn(
     val replyText: String,
     val suggestedReply: String,
     val recognizedText: String? = null,
-    val replyAudioUrl: String? = null
+    val replyAudioUrl: String? = null,
+    /**
+     * §A4 (D4 双语): 台词/示范句的中文意思, 以及学员刚那句的中文 (「我」气泡的「译」)。
+     * 空串 = 那一行不渲染 —— 缺字段就是缺字段, 界面不机翻也不放占位。
+     */
+    val replyCn: String = "",
+    val suggestionCn: String = "",
+    val learnerCn: String = ""
 )
 
 data class LlmModel(
@@ -107,7 +114,20 @@ data class Book(
     val lessonCount: Int
 )
 
-data class DialogueScene(val id: String, val title: String, val description: String)
+/**
+ * 自由对话的场景卡片。`title`/`description` 中文 + `titleEn`/`descriptionEn` 英文对照
+ * (D4; 自定义场景那两格是空串 = 那一行不渲染)。`kind` = `catalog` | `custom`。
+ */
+data class DialogueScene(
+    val id: String,
+    val title: String,
+    val description: String,
+    val titleEn: String = "",
+    val descriptionEn: String = "",
+    val kind: String = "catalog"
+) {
+    val isCustom: Boolean get() = kind == "custom"
+}
 
 data class DailyScore(
     val date: String,

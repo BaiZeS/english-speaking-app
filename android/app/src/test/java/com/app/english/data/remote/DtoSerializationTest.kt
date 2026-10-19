@@ -309,4 +309,146 @@ class DtoSerializationTest {
         assertEquals(1, dto.daily.size)
         assertEquals(listOf(1, 2, 3), dto.lessonsAttempted)
     }
+
+    // ---- §A4/D4 双语 add-only: 新键默认值 + 带新值的样本 + 旧样本仍可 decode ----
+
+    /**
+     * 台词/示范句/学员那句的中文是**恒键**, 旧后端(或未配 LLM 时的空值)也必须有默认值:
+     * 缺键 -> 空串 -> 界面整行不渲染 (D5)。绝不因为缺这三个键让整个响应解码失败 ——
+     * 那会把"没有中文"放大成"这一轮对话消失"。
+     */
+    @Test
+    fun dialogueTurnResponse_bilingualKeysDefaultAndDecode() {
+        val legacy = """
+            {"status":"ready","reply_text":"That sounds fun!","suggested_reply":"I usually hike.",
+             "recognized_text":"I went hiking."}
+        """.trimIndent()
+        val old = json.decodeFromString(DialogueTurnResponseDto.serializer(), legacy)
+        assertEquals("", old.replyCn)
+        assertEquals("", old.suggestionCn)
+        assertEquals("", old.learnerCn)
+        assertEquals("That sounds fun!", old.replyText)
+
+        val bilingual = """
+            {"status":"ready","reply_text":"That sounds fun!","reply_audio_url":null,
+             "suggested_reply":"I usually hike on weekends.",
+             "recognized_text":"I went hiking.","model_id":"qwen3.8-flash",
+             "polish":null,"grammar_score":null,"vocabulary_score":null,
+             "ability_events":[],"llm_source":"qwen3.8-flash",
+             "reply_cn":"听起来不错！","suggestion_cn":"我周末一般去徒步。",
+             "learner_cn":"我去徒步了。"}
+        """.trimIndent()
+        val dto = json.decodeFromString(DialogueTurnResponseDto.serializer(), bilingual)
+        assertEquals("听起来不错！", dto.replyCn)
+        assertEquals("我周末一般去徒步。", dto.suggestionCn)
+        assertEquals("我去徒步了。", dto.learnerCn)
+        val domain = dto.toDomain()
+        assertEquals("听起来不错！", domain.replyCn)
+        assertEquals("我周末一般去徒步。", domain.suggestionCn)
+        assertEquals("我去徒步了。", domain.learnerCn)
+        assertNull(dto.replyAudioUrl)
+        // §A3: 这一条响应里的 `polish`/`grammar_score`/`vocabulary_score` 恒为 null (判分
+        // 移出了这条请求)。客户端 DTO **刻意不建**这三个字段 —— 它们从来没有任何消费点
+        // (自由对话的润色走 `POST /polish`), add-only 加进来就是死代码。上面那份样本带着
+        // 这三个键仍然解得出来, 本身就是「旧客户端忽略未知键」那条纪律的现场证明。
+        assertEquals("That sounds fun!", dto.replyText)
+    }
+
+    /** §A4/A5: 已展示参考句 + 身份随请求回去 (服务端靠它防复写 / 记画像)。 */
+    @Test
+    fun dialogueTurnRequest_serializesShownSuggestionsAndIdentity() {
+        val request = DialogueTurnRequestDto(
+            sceneId = "custom_3f1c",
+            history = listOf(DialogueMessageDto("assistant", "Hi!")),
+            userAudioB64 = "AAAA",
+            modelId = "qwen-plus",
+            deviceId = "dev-1",
+            shownSuggestions = listOf("I'd like a latte.", "To go, please.")
+        )
+        val encoded = json.encodeToString(DialogueTurnRequestDto.serializer(), request)
+        assertTrue(encoded.contains("\"device_id\":\"dev-1\""))
+        assertTrue(
+            encoded.contains("\"shown_suggestions\":[\"I'd like a latte.\",\"To go, please.\"]")
+        )
+        // 不带已展示清单时是空数组而不是省略: 服务端两种读法等价, 但显式空更诚实。
+        val bare = json.encodeToString(
+            DialogueTurnRequestDto.serializer(),
+            DialogueTurnRequestDto(sceneId = "daily_conversation", history = emptyList())
+        )
+        assertTrue(bare.contains("\"shown_suggestions\":[]"))
+    }
+
+    /**
+     * 场景目录的英文对照 (§3 C3b 最终形状): **catalog 行恒非空, custom 行恒为空串**
+     * (自定义场景按学员自己描述的语言展示 —— 那两格是设计性空, 不是缺数据)。
+     * 旧样本(完全没有这两个键)仍要能 decode。
+     */
+    @Test
+    fun dialogueScenesResponse_englishKeysAndKind() {
+        val payload = """
+            {
+              "scenes":[
+                {"id":"ordering_coffee","title":"点咖啡","description":"在咖啡店点单",
+                 "title_en":"Ordering Coffee","description_en":"Order drinks at a coffee shop.",
+                 "kind":"catalog"},
+                {"id":"custom_9c2b","title":"和外教聊我的周末","description":"聊周末做了什么",
+                 "title_en":"","description_en":"","kind":"custom"}
+              ],
+              "default_scene":"ordering_coffee"
+            }
+        """.trimIndent()
+        val dto = json.decodeFromString(DialogueScenesResponseDto.serializer(), payload)
+        val catalog = dto.scenes[0].toDomain()
+        assertEquals("Ordering Coffee", catalog.titleEn)
+        assertEquals("Order drinks at a coffee shop.", catalog.descriptionEn)
+        assertEquals("catalog", catalog.kind)
+        assertFalse(catalog.isCustom)
+
+        val custom = dto.scenes[1].toDomain()
+        // 两键**存在但为空**: 界面给 custom 行只画中文, 不给空串补第二行 (D5)。
+        assertEquals("", custom.titleEn)
+        assertEquals("", custom.descriptionEn)
+        assertEquals("custom", custom.kind)
+        assertTrue(custom.isCustom)
+        // 43 字符级的 id 原样透传, 客户端不截断也不假设它是短串。
+        assertEquals("custom_9c2b", custom.id)
+
+        val legacy = """
+            {"scenes":[{"id":"daily_conversation","title":"日常寒暄","description":"聊聊今天"}],
+             "default_scene":"daily_conversation"}
+        """.trimIndent()
+        val old = json.decodeFromString(DialogueScenesResponseDto.serializer(), legacy)
+            .scenes[0].toDomain()
+        assertEquals("", old.titleEn)
+        assertEquals("", old.descriptionEn)
+        assertEquals("catalog", old.kind)
+    }
+
+    /** §3 C3: 描述自定义场景的入参键名 (scene_brief + 身份)。 */
+    @Test
+    fun customSceneRequest_serializesBriefAndIdentity() {
+        val request = CustomSceneRequestDto(
+            sceneBrief = "和外教聊我的周末",
+            deviceId = "dev-1"
+        )
+        val encoded = json.encodeToString(CustomSceneRequestDto.serializer(), request)
+        assertTrue(encoded.contains("\"scene_brief\":\"和外教聊我的周末\""))
+        assertTrue(encoded.contains("\"device_id\":\"dev-1\""))
+    }
+
+    /** §3 C3: 生成任务轮询载荷多了 `kind` —— 自定义场景作业与整课作业同居一张表。 */
+    @Test
+    fun generationJob_decodesKindWithCourseDefault() {
+        val sceneBrief = json.decodeFromString<GenerationJobDto>(
+            """{"job_id":"j1","status":"ready","progress":1.0,"stage_text":"生成完成",
+                "scene_id":"custom_9c2b","error":null,"kind":"scene_brief"}"""
+        )
+        assertEquals("scene_brief", sceneBrief.kind)
+        assertEquals("custom_9c2b", sceneBrief.sceneId)
+        // 旧后端没有这个键 -> `course` (整课生成是唯一的老用途)。
+        val legacy = json.decodeFromString<GenerationJobDto>(
+            """{"job_id":"j2","status":"running","progress":0.1,"stage_text":"理解学习目标…"}"""
+        )
+        assertEquals("course", legacy.kind)
+    }
 }

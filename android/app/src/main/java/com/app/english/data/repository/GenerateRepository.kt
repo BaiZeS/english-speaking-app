@@ -3,6 +3,7 @@ package com.app.english.data.repository
 import com.app.english.data.local.CourseCacheDao
 import com.app.english.data.local.CourseCacheEntity
 import com.app.english.data.local.SettingsStore
+import com.app.english.data.remote.CustomSceneRequestDto
 import com.app.english.data.remote.EnglishApi
 import com.app.english.data.remote.GenerateSceneRequestDto
 import com.app.english.data.remote.SceneCourseDto
@@ -23,6 +24,12 @@ import kotlinx.serialization.json.Json
 interface GenerateRepository {
     suspend fun startGeneration(goalText: String): String
 
+    /**
+     * 描一个自定义**对话场景** -> job id (§3 C3)。与整课生成共用 job 表与轮询端点,
+     * 所以接着调 [pollJob] 就是全部轮询机制 (没有第二条轮询通道)。
+     */
+    suspend fun startCustomScene(sceneBrief: String): String
+
     suspend fun pollJob(jobId: String): GenerationJob
 
     /** 详情读路径: 网络优先, 失败回落 course_cache 快照(没有缓存则原样抛)。 */
@@ -42,6 +49,10 @@ class GenerateRepositoryImpl @Inject constructor(
 
     override suspend fun startGeneration(goalText: String): String = api.generateScene(
         GenerateSceneRequestDto(deviceId = settingsStore.deviceId, goalText = goalText)
+    ).jobId
+
+    override suspend fun startCustomScene(sceneBrief: String): String = api.createCustomScene(
+        CustomSceneRequestDto(sceneBrief = sceneBrief, deviceId = settingsStore.deviceId)
     ).jobId
 
     override suspend fun pollJob(jobId: String): GenerationJob =

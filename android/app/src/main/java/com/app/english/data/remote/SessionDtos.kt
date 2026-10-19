@@ -69,6 +69,13 @@ data class SessionViewDto(
      * 类型跟服务端一样宽松(而不是枚举): 它住在 JSON 列里, 脏值要能当"不可知"处理。
      */
     @SerialName("review_status") val reviewStatus: String? = null,
+    /**
+     * §A3: 实战轮**判分**作业状态 —— 客户端拿它当"还要不要再 GET"的键。
+     * `pending` = 还有轮次没评; `ready` = 都落定了; `failed` = 最新那轮**这次**没评上,
+     * 但过一轮水位后 GET 会重派、可能翻身成 `ready` —— 所以 `failed` **不是**会话级死结,
+     * 界面侧静默缺省那一行, 不停轮询也不弹「评分失败」。老会话恒为 `ready`。
+     */
+    @SerialName("grading_status") val gradingStatus: String? = null,
     val course: SceneCourseDto? = null
 )
 
@@ -165,7 +172,9 @@ data class MissionTurnRequestDto(
 data class PolishDto(
     val original: String = "",
     val polished: String = "",
-    @SerialName("explanation_cn") val explanationCn: String = ""
+    @SerialName("explanation_cn") val explanationCn: String = "",
+    /** D4 双语: 润色句的中文意思 (缺省空串 = 那一行不渲染)。 */
+    @SerialName("polished_cn") val polishedCn: String = ""
 )
 
 /** 任务清单视图(`MissionTaskView`)。 */
@@ -174,6 +183,8 @@ data class MissionTaskViewDto(
     val id: String,
     @SerialName("desc_cn") val descCn: String = "",
     @SerialName("hint_en") val hintEn: String = "",
+    /** 中文提示/要点 (库内早有 `MissionTask.hint_cn`, T2 起才进视图)。 */
+    @SerialName("hint_cn") val hintCn: String = "",
     val required: Boolean = true,
     val done: Boolean = false,
     val evidence: String = "",
@@ -194,6 +205,13 @@ data class MissionTurnResponseDto(
     val transcript: String = "",
     val reply: String = "",
     val suggestion: String = "",
+    /**
+     * §A4 (D4 双语) add-only: 台词/示范句的中文意思, 以及学员刚那句的中文
+     * (「我」气泡的「译」)。空串 = 那一行不渲染 —— **绝不**机翻占位。
+     */
+    @SerialName("reply_cn") val replyCn: String = "",
+    @SerialName("suggestion_cn") val suggestionCn: String = "",
+    @SerialName("learner_cn") val learnerCn: String = "",
     val polish: PolishDto? = null,
     @SerialName("sub_scores") val subScores: Map<String, Double?> = emptyMap(),
     @SerialName("word_details") val wordDetails: List<WordScoreDto> = emptyList(),
@@ -209,6 +227,12 @@ data class MissionTurnResponseDto(
     val source: String = "heuristic",
     @SerialName("llm_source") val llmSource: String? = null,
     @SerialName("costs_score") val costsScore: Boolean = false,
+    /**
+     * §A3 add-only: 本轮判分作业状态 (`pending` / `ready` / `failed`)。本响应到点恒为
+     * `pending` —— 判分移出请求之后, 润色与语法/词汇分**本轮为 null**, 客户端拿
+     * `GET /sessions/{id}` 回填。`source == "pending"` 是同一件事的旧口径, 不是降级。
+     */
+    @SerialName("grading_status") val gradingStatus: String? = null,
     val review: ReviewReportDto? = null,
     /**
      * 仅 `auto_finished` 时有值(§P6): 到轮次上限被服务端自动收工 —— 这条路径**以前**
@@ -234,6 +258,10 @@ data class MissionSnapshotDto(
 @Serializable
 data class MissionOpeningDto(val a: String = "", @SerialName("a_cn") val aCn: String = "")
 
+/** 逐轮判分槽位 (`doc["mission"]["turns"][i]["grading"]`; §A3)。 */
+@Serializable
+data class TurnGradingDto(val status: String = "", val at: String = "")
+
 /** 历史轮次日志(doc["mission"]["turns"] 条目的渲染字段子集)。 */
 @Serializable
 data class MissionTurnLogDto(
@@ -241,9 +269,23 @@ data class MissionTurnLogDto(
     @SerialName("user_text") val userText: String = "",
     val reply: String = "",
     val suggestion: String = "",
+    /** §A4 双语: 恢复/重进这一页时按它重绘「译」内容 (空串 = 不渲染)。 */
+    @SerialName("reply_cn") val replyCn: String = "",
+    @SerialName("suggestion_cn") val suggestionCn: String = "",
+    @SerialName("learner_cn") val learnerCn: String = "",
     val polish: PolishDto? = null,
     @SerialName("costs_score") val costsScore: Boolean = false,
-    val source: String = "heuristic"
+    val source: String = "heuristic",
+    /**
+     * §A3: 逐轮证据**早就在** `mission.turns[]` 里 (发音/流利由请求内的锚定 ISE 落,
+     * 语法/词汇由判分作业补)。以前这一段被边界丢掉, 于是重进实战页 / 判分回填后
+     * 「没读准的词」和维度分一起消失 —— 现在按原样读回来。
+     */
+    @SerialName("sub_scores") val subScores: Map<String, Double?> = emptyMap(),
+    @SerialName("word_details") val wordDetails: List<WordScoreDto> = emptyList(),
+    @SerialName("speech_rate_wpm") val speechRateWpm: Double? = null,
+    /** `pending` = 这一轮还没评完 (界面据此挂「评分生成中…」而不是空着)。 */
+    val grading: TurnGradingDto? = null
 )
 
 @Serializable
@@ -251,7 +293,11 @@ data class MissionHintPayloadDto(
     @SerialName("task_id") val taskId: String? = null,
     @SerialName("desc_cn") val descCn: String = "",
     @SerialName("hint_en") val hintEn: String = "",
+    /** 任务的中文提示 (库内已有; T2 起随提示卡下发)。 */
+    @SerialName("hint_cn") val hintCn: String = "",
     @SerialName("script_line") val scriptLine: String = "",
+    /** 参考剧本那句的中文 (库内 `DialogueExchange.b_cn` 一直被边界丢掉)。 */
+    @SerialName("script_line_cn") val scriptLineCn: String = "",
     @SerialName("note_cn") val noteCn: String = ""
 )
 

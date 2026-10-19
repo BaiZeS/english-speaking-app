@@ -88,7 +88,11 @@ data class DialogueLineDto(
 data class DialogueGenerateRequestDto(
     val scene: String,
     val mode: String = "adult",
-    @SerialName("model_id") val modelId: String? = null
+    @SerialName("model_id") val modelId: String? = null,
+    // §3 C3b add-only (B4 身份线): 打开**自定义场景**的开场白需要归属身份; 目录场景
+    // 不带也能开 (服务端 `_identity_user` 缺两个键就是旧客户端的纯无状态行为)。
+    @SerialName("device_id") val deviceId: String? = null,
+    @SerialName("user_id") val userId: String? = null
 )
 
 @Serializable
@@ -109,7 +113,16 @@ data class DialogueTurnRequestDto(
     @SerialName("scene_id") val sceneId: String,
     val history: List<DialogueMessageDto>,
     @SerialName("user_audio_b64") val userAudioB64: String = "",
-    @SerialName("model_id") val modelId: String? = null
+    @SerialName("model_id") val modelId: String? = null,
+    // v2.0 P3 add-only: 带身份则本轮证据进能力画像, 不带与旧版逐字节一致。
+    @SerialName("device_id") val deviceId: String? = null,
+    @SerialName("user_id") val userId: String? = null,
+    /**
+     * §A4/A5 add-only (D5 裁决): 回**最近已经展示过的参考句** (≤8, 服务端还会再截断)。
+     * 自由对话没有会话表、`suggestedReply` 每轮被覆盖, 所以只能由客户端把这句带回去,
+     * 服务端才知道"哪几句已经给过了"才能真防复写。不带也能跑 (退化成只看 Coach 台词)。
+     */
+    @SerialName("shown_suggestions") val shownSuggestions: List<String> = emptyList()
 )
 
 @Serializable
@@ -119,7 +132,11 @@ data class DialogueTurnResponseDto(
     @SerialName("reply_audio_url") val replyAudioUrl: String? = null,
     @SerialName("suggested_reply") val suggestedReply: String,
     @SerialName("recognized_text") val recognizedText: String? = null,
-    @SerialName("model_id") val modelId: String? = null
+    @SerialName("model_id") val modelId: String? = null,
+    // ---- §A4 (D4 双语) add-only: 空串 = 那一行不渲染, 绝不机翻占位 ----
+    @SerialName("reply_cn") val replyCn: String = "",
+    @SerialName("suggestion_cn") val suggestionCn: String = "",
+    @SerialName("learner_cn") val learnerCn: String = ""
 )
 
 @Serializable
@@ -190,13 +207,36 @@ data class BooksResponseDto(
     @SerialName("default_book") val defaultBook: String
 )
 
+/**
+ * `GET /dialogue/scenes` 的目录条目。`title`/`description` 是中文卡片文案,
+ * `title_en`/`description_en` 是 D4 要求的英文对照 (自定义场景那两格是空串 =
+ * 那一行不渲染); `kind` 区分内置目录与学员自己描的场景 (§3 C3b)。
+ */
 @Serializable
-data class DialogueSceneDto(val id: String, val title: String, val description: String)
+data class DialogueSceneDto(
+    val id: String,
+    val title: String,
+    val description: String,
+    @SerialName("title_en") val titleEn: String = "",
+    @SerialName("description_en") val descriptionEn: String = "",
+    val kind: String = "catalog"
+)
 
 @Serializable
 data class DialogueScenesResponseDto(
     val scenes: List<DialogueSceneDto>,
     @SerialName("default_scene") val defaultScene: String
+)
+
+/**
+ * `POST /dialogue/scenes/custom` 的入参 (§3 C2/C3): 学员自己写的一段场景描述。
+ * 长度门 4..200 在客户端与后端各有一份 (后端是契约, 客户端只是别让他白等一次 422)。
+ */
+@Serializable
+data class CustomSceneRequestDto(
+    @SerialName("scene_brief") val sceneBrief: String,
+    @SerialName("device_id") val deviceId: String? = null,
+    @SerialName("user_id") val userId: String? = null
 )
 
 @Serializable

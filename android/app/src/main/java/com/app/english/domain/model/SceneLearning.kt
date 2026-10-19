@@ -145,11 +145,23 @@ data class TaskChip(
     val hintEn: String,
     val required: Boolean,
     val done: Boolean,
-    val evidence: String
+    val evidence: String,
+    /**
+     * 中文提示/要点 (库内早有, T2 起才随视图下发); 空串 = 不渲染那一行。
+     * 挨着 [hintEn] 才对, 但它是 add-only 的新键 —— 追加在末尾是为了不动既有调用点
+     * (仓内还有按位置构造的用例), 顺序在这里不是语义的一部分。
+     */
+    val hintCn: String = ""
 )
 
 /** 「原句 vs 更好说法」—— 润色气泡 / 复盘对照 / 表达库卡片共用。 */
-data class PolishSuggestion(val original: String, val polished: String, val explanationCn: String)
+data class PolishSuggestion(
+    val original: String,
+    val polished: String,
+    val explanationCn: String,
+    /** D4 双语: 润色句的中文意思; 空串 = 不渲染那一行。 */
+    val polishedCn: String = ""
+)
 
 /** 实战对话一轮完成后加进消息列表的条目。 */
 data class MissionTurn(
@@ -157,7 +169,18 @@ data class MissionTurn(
     val transcript: String,
     val reply: String,
     val suggestion: String,
+    /**
+     * §A4 (D4 双语): 台词/示范句/学员那句的中文。空串 = 那一行不渲染 (绝不留空中文行)。
+     */
+    val replyCn: String = "",
+    val suggestionCn: String = "",
+    val learnerCn: String = "",
     val polish: PolishSuggestion? = null,
+    /**
+     * §A3: 本轮判分状态 (`pending` / `ready` / `failed`)。`pending` = 台词已到手、
+     * 润色与语法/词汇分还在后台作业里 —— 这一行的润色区显示「评分生成中…」而不是空白。
+     */
+    val gradingStatus: String = "",
     val newlyDone: List<NewlyDoneTask> = emptyList(),
     val costsScore: Boolean = false,
     /**
@@ -193,6 +216,12 @@ data class SessionSnapshot(
      * 处理, 绝不让复盘页卡在转圈上 —— 那正是本次要修的 bug 的形状)。
      */
     val reviewStatus: String? = null,
+    /**
+     * §A3: 判分作业的会话级状态 (`pending` / `ready` / `failed`; 字段缺席 = 不可知)。
+     * 与 [reviewStatus] 是**两条独立的线**, 判据不许混用: 这个键只说"实战轮的润色与
+     * 判分落没落定"。
+     */
+    val gradingStatus: String? = null,
     val course: SceneCourseDetail? = null
 )
 
@@ -211,7 +240,17 @@ data class MissionTurnLog(
     val transcript: String,
     val reply: String,
     val polish: PolishSuggestion?,
-    val costsScore: Boolean
+    val costsScore: Boolean,
+    /** §A4: 「译」展开时用的中文 (空串 = 那一行不渲染)。 */
+    val replyCn: String = "",
+    val suggestionCn: String = "",
+    val learnerCn: String = "",
+    /** §A3: `pending` 的轮次在恢复后的界面上仍是「评分生成中…」。 */
+    val gradingStatus: String = "",
+    /** §A3: 逐轮证据 (恢复/回填后「没读准的词」与维度分照旧可见)。 */
+    val subScores: Map<String, Double?> = emptyMap(),
+    val wordDetails: List<WordScore> = emptyList(),
+    val speechRateWpm: Double? = null
 )
 
 /** 实战一轮的完整响应(状态机推进 + 收工判定)。 */
@@ -234,7 +273,13 @@ data class MissionTurnResult(
      * 练到自然结束"必然撞上手机 30s 读超时(比人工「收工」更高频)。现在它和人工收工一样:
      * [review] 一到手就跳复盘页, 由复盘页轮询这个状态键。
      */
-    val reviewStatus: String? = null
+    val reviewStatus: String? = null,
+    /**
+     * §A3: 本响应到点恒为 `pending` —— 判分不在这一条请求里, 台词/双语先出, 润色与
+     * 语法/词汇分由后台作业补, 客户端拿 `GET /sessions/{id}` 回填。界面据此在润色区
+     * 显示「评分生成中…」并开始轮询。
+     */
+    val gradingStatus: String? = null
 )
 
 /**
@@ -251,7 +296,11 @@ data class HintData(
     val descCn: String,
     val hintEn: String,
     val scriptLine: String,
-    val noteCn: String
+    val noteCn: String,
+    /** 任务的中文提示 (库内已有, T2 起随提示卡下发); 空串 = 不渲染。 */
+    val hintCn: String = "",
+    /** 参考剧本那句的中文 (`DialogueExchange.b_cn`, 一直被边界丢掉); 空串 = 不渲染。 */
+    val scriptLineCn: String = ""
 )
 
 /** 复盘报告(`ReviewReport`)。 */
@@ -316,7 +365,9 @@ data class GenerationJob(
     val progress: Double,
     val stageText: String,
     val sceneId: String?,
-    val error: String?
+    val error: String?,
+    /** `course` = 整课生成 | `scene_brief` = 自定义对话场景 (§3 C3; 旧后端缺键 -> course)。 */
+    val kind: String = "course"
 ) {
     val isRunning: Boolean get() = status == "running"
     val isReady: Boolean get() = status == "ready"
