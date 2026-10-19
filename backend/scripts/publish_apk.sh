@@ -30,6 +30,16 @@ curl -fSL --retry 3 --max-time 3600 -o "static/apk/${ASSET}.part" "$URL"
 mv -f "static/apk/${ASSET}.part" "static/apk/${ASSET}"
 ls -lh "static/apk/${ASSET}"
 
+# 发布前签名门禁：证书一旦和线上装的不是一把，用户「能下载但装不上」，而 CI 全绿
+# —— 只能在这里挡住（成因与实测见 scripts/check_apk_cert.sh 头注、operations §3.1.1）。
+EXPECTED_CERT="$(grep -E '^APP_APK_CERT_SHA256=' .env | cut -d= -f2- || true)"
+if [ -z "$EXPECTED_CERT" ]; then
+  echo "!! .env 缺 APP_APK_CERT_SHA256，拒绝发布（签名未知的包等于装不上手机）。" >&2
+  echo "   配置方法见 docs/operations.md §3.1.1（值 = 长期密钥证书 SHA-256）。" >&2
+  exit 1
+fi
+bash "$(dirname "$0")/check_apk_cert.sh" "static/apk/${ASSET}" "$EXPECTED_CERT"
+
 touch .env
 set_env() { # key value
   local k=$1 v=$2
