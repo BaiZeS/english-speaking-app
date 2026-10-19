@@ -126,7 +126,17 @@ data class DialogueScene(
     val descriptionEn: String = "",
     val kind: String = "catalog"
 ) {
-    val isCustom: Boolean get() = kind == "custom"
+    /**
+     * 非内置场景 (学员自己描的那种)。判据是 **`kind != "catalog"`** 而不是 `== "custom"`:
+     * 语义是"这不是内置行", 而内置行的英文副标题/描述才是客户端该展示的那一份 ——
+     * 后端将来多出第三种 kind 时, 默认落到"不给英文"这一侧, 而不是悄悄开始展示。
+     */
+    val isCustom: Boolean get() = kind != KIND_CATALOG
+
+    companion object {
+        /** 内置目录行的 kind (唯一会被展示英文副标题的那一类)。 */
+        const val KIND_CATALOG = "catalog"
+    }
 }
 
 data class DailyScore(

@@ -25,8 +25,8 @@ object GradingPollingPolicy {
     const val STATUS_READY = "ready"
     const val STATUS_FAILED = "failed"
 
-    /** 连续第 2 次轮询失败就放弃 (与 `ReviewStateMachine` / `GenerateCourseViewModel` 同纪律)。 */
-    const val MAX_CONSECUTIVE_POLL_FAILURES = 2
+    /** 连续第 2 次轮询失败就放弃 —— **借自** [ReviewStateMachine] 的同一个纪律, 不另立数字。 */
+    const val MAX_CONSECUTIVE_POLL_FAILURES = ReviewStateMachine.MAX_CONSECUTIVE_POLL_FAILURES
 
     /** 这一轮要不要挂「评分生成中…」占位行 (只有字面量 `pending` 算)。 */
     fun isPending(status: String?): Boolean = status == STATUS_PENDING
@@ -37,7 +37,14 @@ object GradingPollingPolicy {
      */
     fun isAwaiting(status: String?): Boolean = status == STATUS_PENDING || status == STATUS_FAILED
 
-    /** 这一拍之后还要不要再 GET 一次。 */
+    /**
+     * 这一拍之后还要不要再 GET 一次。
+     *
+     * 判序**借自 [ReviewStateMachine.nextPollStep] 的三判式** (超时 > 连败 > 状态), 只把最后
+     * 那一档的状态判据换成"`pending` 或 `failed` 继续轮": 那两处都是"GET 同一份快照直到某个
+     * 作业状态落定", 判序写反的后果也一样 (一份永远停在 pending 的快照把页面钉死在轮询上)。
+     * 多出来的一档 `!sawSnapshot` 是本策略独有的: 一次快照都没读到, 状态还只是"不知道"。
+     */
     fun shouldKeepPolling(
         status: String?,
         sawSnapshot: Boolean,

@@ -422,6 +422,19 @@ class DtoSerializationTest {
         assertEquals("", old.titleEn)
         assertEquals("", old.descriptionEn)
         assertEquals("catalog", old.kind)
+
+        // 判据是"非内置"而不是"等于 custom" (审查 M11): 后端将来多出第三种 kind 时, 默认
+        // 落在**不给英文**那一侧, 而不是悄悄开始展示它带来的英文串。
+        assertEquals("catalog", com.app.english.domain.model.DialogueScene.KIND_CATALOG)
+        assertTrue(
+            com.app.english.domain.model.DialogueScene(
+                id = "future_kind",
+                title = "标题",
+                description = "描述",
+                titleEn = "Should not be shown",
+                kind = "something_else"
+            ).isCustom
+        )
     }
 
     /** §3 C3: 描述自定义场景的入参键名 (scene_brief + 身份)。 */

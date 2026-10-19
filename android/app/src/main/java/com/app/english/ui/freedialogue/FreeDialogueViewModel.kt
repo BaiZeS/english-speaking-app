@@ -21,6 +21,7 @@ import com.app.english.domain.model.DialogueSession
 import com.app.english.domain.model.ScoreResult
 import com.app.english.ui.navigation.Route
 import com.app.english.ui.scenes.GeneratePollingPolicy
+import com.app.english.ui.scenes.ReviewStateMachine
 import com.app.english.ui.score.LineScoreResult
 import com.app.english.ui.score.ScoreSession
 import com.app.english.ui.score.ScoreSessionHolder
@@ -209,19 +210,27 @@ class FreeDialogueViewModel @Inject constructor(
     private suspend fun awaitSceneBriefJob(jobId: String): String {
         val startedAt = System.currentTimeMillis()
         var polls = 0
+        var failures = 0
         while (true) {
             // 单次轮询失败按网络抖动放过 (与 GenerateCourseViewModel 同纪律)。
             val job = try {
                 generateRepository.pollJob(jobId)
             } catch (e: Exception) {
-                Timber.w(e, "scene brief poll failed | job=%s", jobId)
+                failures++
+                Timber.w(e, "scene brief poll failed | job=%s poll=%d", jobId, polls)
                 null
             }
+            if (job != null) failures = 0
             val elapsed = System.currentTimeMillis() - startedAt
             if (job != null && GeneratePollingPolicy.isTerminal(job)) {
                 val sceneId = job.sceneId
                 if (job.isReady && !sceneId.isNullOrBlank()) return sceneId
                 error(job.error ?: "场景生成失败, 稍后再试")
+            }
+            // 连败止损 (审查 M8): 与 15 分钟超时并列的第二道门 —— 断网时不该对着一个
+            // 打不通的地址空转到 15 分钟, 学员要的是"稍后再看", 不是干等。
+            if (failures >= ReviewStateMachine.MAX_CONSECUTIVE_POLL_FAILURES) {
+                error("连不上服务器 (场景可能还在生成), 稍后回来再看看")
             }
             if (GeneratePollingPolicy.isTimedOut(elapsed)) {
                 error("场景生成超时了 (任务仍在服务端跑), 稍后回来再看看")
