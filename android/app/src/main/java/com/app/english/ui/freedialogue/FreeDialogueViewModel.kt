@@ -418,6 +418,10 @@ class FreeDialogueViewModel @Inject constructor(
                     it.copy(
                         isSubmitting = false,
                         messages = it.messages + pendingUser,
+                        // 这一轮没有发生 -> 把刚才那句参考回答摆回去: 学员正准备照着它说,
+                        // 一次 503 不该顺带把他手上的句子拿走 (它也只是**这一轮**被清掉的)。
+                        suggestedReply = current.suggestedReply,
+                        suggestedReplyCn = current.suggestedReplyCn,
                         error = e.sessionMessage("这一轮没有成功, 请重试")
                     )
                 }
