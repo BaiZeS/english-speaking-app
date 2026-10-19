@@ -7,7 +7,7 @@
 旧版（1.4.0 等）收不到 OTA 提示属预期——装一次新包即可，此后自动更新：
 1. 手机浏览器打开最新版（**优先用服务器直链**，走服务器加速；GitHub 出口在本机实测只有 10-40KB/s，同一个包要下 10-30 分钟）：
    - 服务器直链：`http://118.89.58.84:5173/static/apk/EnglishAssistant-2.3.0.apk`
-   - GitHub Releases（同名包，找 `v2.3.0`）：`https://github.com/BaiZeS/english-speaking-app/releases/download/v2.2.4/EnglishAssistant-2.3.0.apk`
+   - GitHub Releases（同名包，找 `v2.3.0`）：`https://github.com/BaiZeS/english-speaking-app/releases/download/v2.3.0/EnglishAssistant-2.3.0.apk`
 2. 安装时允许「未知来源」。首次启动不需要任何设置，直接可用。
 3. 之后开 App 若提示新版本 → 点更新 → 下载走服务器加速（不再是 GitHub 龟速），装完即最新版。
 
