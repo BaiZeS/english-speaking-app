@@ -5,6 +5,7 @@
 模型: mimo-v2.5-tts
 鉴权: api-key 请求头 (MIMO_API_KEY)
 流式: SSE 返回 base64 PCM16 24kHz 音频块
+落盘: 上采样到 48kHz 写 WAV (华为/鸿蒙在 24kHz 起不了 AudioTrack, 见 wav.py 头注)
 """
 
 from __future__ import annotations
@@ -20,6 +21,18 @@ from app.config import settings
 from app.services.interfaces import TtsResult
 from app.services.stub_providers import StubTTSProvider
 
+# WAV 封装与上采样在 app.services.wav (stub 占位音频同源复用, 反向 import 会成环);
+# 保留 _pcm16_to_wav 别名: tests/test_mimo_tts.py 直接导入这个名字。
+from app.services.wav import (
+    PLAYBACK_SAMPLE_RATE,
+    SYNTH_SAMPLE_RATE,
+    upsample_to_playback,
+    wav_duration_ms,
+)
+from app.services.wav import (
+    pcm16_to_wav as _pcm16_to_wav,
+)
+
 _KNOWN_VOICES: set[str] = {"Mia", "Chloe", "Milo", "Dean"}
 
 
@@ -33,16 +46,13 @@ def _normalize_voice(voice: str | None) -> str:
 
 
 def _audio_cache_path(text: str, voice: str) -> tuple[str, str]:
-    h = hashlib.sha256(f"mimo::{voice}::{text}".encode()).hexdigest()[:16]
+    # 键里带播放采样率: 24kHz 时代落盘的历史缓存必须整体失效重建,
+    # 否则改完代码老文件仍是静音的元凶 (磁盘缓存命中路径不看内容)。
+    h = hashlib.sha256(f"mimo::{PLAYBACK_SAMPLE_RATE}::{voice}::{text}".encode()).hexdigest()[:16]
     audio_dir = settings.tts_audio_dir
     os.makedirs(audio_dir, exist_ok=True)
-    # MiMo 流式 PCM16 会包成 WAV 头 (_pcm16_to_wav), 扩展名用 .wav 与内容一致.
+    # 流式 PCM16 上采样后包成 WAV 头 (_pcm16_to_wav), 扩展名用 .wav 与内容一致.
     return os.path.join(audio_dir, f"{h}.wav"), f"/static/tts/{h}.wav"
-
-
-# WAV 封装挪到 app.services.wav (stub 占位音频同源复用, 反向 import 会成环);
-# 保留 _pcm16_to_wav 别名: tests/test_mimo_tts.py 直接导入这个名字。
-from app.services.wav import pcm16_to_wav as _pcm16_to_wav  # noqa: E402
 
 
 class MimoTtsProvider:
@@ -68,7 +78,7 @@ class MimoTtsProvider:
         if os.path.exists(disk_path):
             with open(disk_path, "rb") as f:
                 audio_bytes = f.read()
-            duration_ms = max(200, len(audio_bytes) // 48)
+            duration_ms = max(200, wav_duration_ms(audio_bytes))
             return TtsResult(
                 audio_bytes=audio_bytes,
                 duration_ms=duration_ms,
@@ -88,7 +98,7 @@ class MimoTtsProvider:
 
         with open(disk_path, "wb") as f:
             f.write(audio_bytes)
-        duration_ms = max(200, len(audio_bytes) // 48)
+        duration_ms = max(200, wav_duration_ms(audio_bytes))
         logger.info("mimo tts ok voice={} bytes={} -> {}", voice_norm, len(audio_bytes), url_path)
         return TtsResult(
             audio_bytes=audio_bytes,
@@ -98,7 +108,7 @@ class MimoTtsProvider:
         )
 
     def _synthesize_streaming(self, text: str, voice: str) -> bytes:
-        """Call MiMo TTS with streaming PCM16, convert to WAV."""
+        """Call MiMo TTS with streaming PCM16, upsample, and wrap as WAV."""
         client = OpenAI(
             api_key=settings.mimo_api_key,
             base_url=settings.mimo_tts_base_url,
@@ -134,4 +144,5 @@ class MimoTtsProvider:
         if not collected_pcm:
             return b""
 
-        return _pcm16_to_wav(bytes(collected_pcm))
+        # 只在这一步之后才是「播放器拿到的东西」: 24k -> 48k, 容器不变。
+        return _pcm16_to_wav(upsample_to_playback(bytes(collected_pcm), SYNTH_SAMPLE_RATE))

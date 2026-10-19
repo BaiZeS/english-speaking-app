@@ -152,6 +152,10 @@ async def test_synthesize_streaming_success(monkeypatch: pytest.MonkeyPatch, tmp
     # Should be valid WAV (starts with RIFF)
     assert result.audio_bytes[:4] == b"RIFF"
     assert result.duration_ms > 0
+    # 播放侧采样率: 24k 时代的内容在华为/鸿蒙上完全静音。
+    assert struct.unpack("<I", result.audio_bytes[24:28])[0] == 48000
+    # 100 个 24k 采样 (两次 50 采样 chunk) 上采样成 200 个 48k 采样 + 44 字节头。
+    assert len(result.audio_bytes) == 44 + 2 * (2 * 50 * 2)
     # Verify correct API call parameters
     assert fake_client.chat.completions.last_kwargs["model"] == mimo_tts.settings.mimo_tts_model
     assert fake_client.chat.completions.last_kwargs["audio"]["voice"] == "Mia"

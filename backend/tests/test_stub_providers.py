@@ -23,11 +23,11 @@ async def test_stub_tts_returns_playable_silent_wav_with_deterministic_hash() ->
     assert fmt[1] == 16  # fmt chunk size
     assert fmt[2] == 1  # PCM
     assert fmt[3] == 1  # mono
-    assert fmt[4] == 24000  # 与 MiMo 主路同采样率
+    assert fmt[4] == 48000  # 与 MiMo 主路同采样率 (播放侧统一 48k, 见 wav.py)
     assert fmt[7] == 16  # bits per sample
     assert r1.audio_bytes[36:40] == b"data"
     data_size = struct.unpack("<I", r1.audio_bytes[40:44])[0]
-    assert data_size == r1.duration_ms * 48  # 24kHz*2B => 48B/ms, 时长真实
+    assert data_size == r1.duration_ms * 96  # 48kHz*2B => 96B/ms, 时长真实
     assert set(r1.audio_bytes[44:]) <= {0}  # 全零 PCM == 静音
 
 
