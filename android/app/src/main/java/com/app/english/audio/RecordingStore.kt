@@ -20,6 +20,8 @@ import timber.log.Timber
  * `filesDir/recordings/{book}/{lessonId}/{lineId}-{timestamp}.wav`. Only the
  * newest [MAX_PER_LINE] recordings per line are kept. Methods perform disk IO
  * and must be called on a background dispatcher.
+ * 存入前按整数比上采样到 [RecordingStore.PLAYBACK_SAMPLE_RATE]：设备播放只保证
+ * 44.1k/48k，16k 原样落盘在华为/鸿蒙上就是静音回放。
  */
 @Singleton
 class RecordingStore @Inject constructor(@ApplicationContext private val context: Context) {
@@ -32,9 +34,12 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
         if (!dir.exists()) dir.mkdirs()
         val target = File(dir, "${sanitize(lineId)}-${System.currentTimeMillis()}.wav")
         val pcm = pcmFile.readBytes()
+        // 采集侧 16k 是讯飞 ISE 的硬要求，不能改采集；但回放必须 48k：
+        // 华为/鸿蒙在 16k 起不了 AudioTrack，表现是「录音回放没声音」。
+        val playable = upsamplePcm16(pcm, CAPTURE_SAMPLE_RATE, PLAYBACK_SAMPLE_RATE)
         FileOutputStream(target).use { out ->
-            out.write(wavHeader(pcm.size))
-            out.write(pcm)
+            out.write(wavHeader(playable.size))
+            out.write(playable)
         }
         prune(dir, lineId)
         return target
@@ -62,7 +67,7 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
 
     private fun sanitize(value: String): String = value.replace(SANITIZE, "_")
 
-    /** Canonical 44-byte RIFF/WAVE header for PCM L16 mono at [SAMPLE_RATE]. */
+    /** Canonical 44-byte RIFF/WAVE header for PCM L16 mono at [PLAYBACK_SAMPLE_RATE]. */
     private fun wavHeader(dataSize: Int): ByteArray = ByteBuffer.allocate(HEADER_BYTES)
         .order(ByteOrder.LITTLE_ENDIAN)
         .put(RIFF)
@@ -72,8 +77,8 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
         .putInt(FMT_CHUNK_SIZE)
         .putShort(AUDIO_FORMAT_PCM)
         .putShort(CHANNELS_MONO)
-        .putInt(SAMPLE_RATE)
-        .putInt(SAMPLE_RATE * BLOCK_ALIGN)
+        .putInt(PLAYBACK_SAMPLE_RATE)
+        .putInt(PLAYBACK_SAMPLE_RATE * BLOCK_ALIGN)
         .putShort(BLOCK_ALIGN)
         .putShort(BITS_PER_SAMPLE)
         .put(DATA)
@@ -82,7 +87,8 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
 
     private companion object {
         const val MAX_PER_LINE = 3
-        const val SAMPLE_RATE = 16_000
+        const val CAPTURE_SAMPLE_RATE = 16_000
+        const val PLAYBACK_SAMPLE_RATE = 48_000
         const val HEADER_BYTES = 44
         const val CHUNK_SIZE_OFFSET = 36
         const val FMT_CHUNK_SIZE = 16
