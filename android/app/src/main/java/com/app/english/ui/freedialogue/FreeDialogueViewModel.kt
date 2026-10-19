@@ -143,6 +143,9 @@ class FreeDialogueViewModel @Inject constructor(
     fun selectScene(sceneId: String) {
         if (sceneId == _state.value.selectedSceneId) return
         settingsStore.setSelectedSceneId(sceneId)
+        // 选择器要跟着选中项走 (标题 + 高亮): 只改 settings 的话界面仍指着上一个场景,
+        // 而台词已经换成新的了。
+        _state.update { it.copy(selectedSceneId = sceneId) }
         generate(sceneId)
     }
 
@@ -257,15 +260,30 @@ class FreeDialogueViewModel @Inject constructor(
     private fun generate(sceneId: String) {
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
-            _state.value = try {
+            try {
                 val session = repository.generateDialogue(
                     sceneId,
                     "adult",
                     settingsStore.getSelectedModelId()
                 )
-                session.toUiState()
+                // 目录与选中项**不属于**这一次生成。以前这里整份覆盖 state, 于是每次
+                // `generate()` 都把 `scenes` 清成空表 —— 选择器里一行场景都没有 (只因为
+                // 它以前只在 `scenes.size > 1` 时才渲染, 这个洞一直没露出来)。本批把选择器
+                // 改成常显并让它承载「+ 自定义场景」之后, 它就是"看完的目录凭空消失"。
+                _state.update { previous ->
+                    session.toUiState().copy(
+                        scenes = previous.scenes,
+                        selectedSceneId = previous.selectedSceneId,
+                        isLoadingScenes = previous.isLoadingScenes
+                    )
+                }
             } catch (e: Exception) {
-                _state.value.copy(isLoading = false, error = e.message ?: "加载自由对话失败")
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.sessionMessage("加载自由对话失败")
+                    )
+                }
             }
         }
     }
