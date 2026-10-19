@@ -27,7 +27,9 @@ import com.app.english.ui.score.ScoreSessionHolder
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,6 +122,10 @@ class FreeDialogueViewModel @Inject constructor(
     ) { "lessonId argument required" }
     private val book: String =
         savedStateHandle.get<String>(Route.FreeDialogue.ARG_BOOK) ?: "nce1"
+
+    /** 场景生成的作业句柄 (新的一次 `generate` 先取消它, 见 [LatestRequestGate])。 */
+    private var generateJob: Job? = null
+    private val generateGate = LatestRequestGate()
 
     private val _state = MutableStateFlow(FreeDialogueUiState())
     val state: StateFlow<FreeDialogueUiState> = _state.asStateFlow()
@@ -258,7 +264,10 @@ class FreeDialogueViewModel @Inject constructor(
     }
 
     private fun generate(sceneId: String) {
-        viewModelScope.launch {
+        // 快速连切场景 (审查 I4): 慢响应会整包覆盖掉新场景 —— 先取消在途的那一次。
+        generateJob?.cancel()
+        val token = generateGate.begin()
+        generateJob = viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             try {
                 val session = repository.generateDialogue(
@@ -266,6 +275,9 @@ class FreeDialogueViewModel @Inject constructor(
                     "adult",
                     settingsStore.getSelectedModelId()
                 )
+                // 取消只砍得掉挂在挂起点上的旧请求; "响应已经到手、正在写 state" 那几行
+                // 观察不到取消, 所以再加一道令牌: 只有仍是最新的那次请求才许写 state。
+                if (!generateGate.isCurrent(token)) return@launch
                 // 目录与选中项**不属于**这一次生成。以前这里整份覆盖 state, 于是每次
                 // `generate()` 都把 `scenes` 清成空表 —— 选择器里一行场景都没有 (只因为
                 // 它以前只在 `scenes.size > 1` 时才渲染, 这个洞一直没露出来)。本批把选择器
@@ -277,10 +289,18 @@ class FreeDialogueViewModel @Inject constructor(
                         isLoadingScenes = previous.isLoadingScenes
                     )
                 }
+            } catch (e: CancellationException) {
+                // 取消不是失败: 原样抛回去, 不落错误态 (结构化并发也会因此正常收尾)。
+                throw e
             } catch (e: Exception) {
+                // 只有仍是最新的那次才报错: 否则快速连切时, 某次失败的旧请求会给一个
+                // 已经加载好的新场景挂上红字。
+                if (!generateGate.isCurrent(token)) return@launch
                 _state.update {
                     it.copy(
                         isLoading = false,
+                        // 切场景失败 -> 高亮回到**真正加载过**的那个场景, 而不是失败的目标。
+                        selectedSceneId = it.sceneId,
                         error = e.sessionMessage("加载自由对话失败")
                     )
                 }
@@ -360,22 +380,19 @@ class FreeDialogueViewModel @Inject constructor(
         // 评分 ref 走 scoringRefText() 的兜底 (最后一条 assistant 台词)。
         if (!current.isRecording) return
         viewModelScope.launch {
-            // §4-2: 先清再填。等接口的这段时间里, 卡片上不该还挂着上一轮的参考句 ——
-            // 那句已经"展示过"了 ([pendingUser.shownSuggestion] 留着它), 但这一轮的新句
-            // 还没到。不先清就只是"覆盖", 观感上学员会以为旧的仍有效。
-            _state.update {
-                it.copy(
-                    isRecording = false,
-                    isSubmitting = true,
-                    suggestedReply = "",
-                    suggestedReplyCn = ""
-                )
-            }
+            // 录音态先归位 (手感同旧行为), 但参考句**先别清**: 清空是属于"这一轮真的在跑"
+            // 的, 而下面 `stop()` 可能根本给不出文件。
+            _state.update { it.copy(isRecording = false, isSubmitting = true) }
             val file = audioRecorder.stop()
             if (file == null) {
                 _state.update { it.copy(isSubmitting = false, error = "录音失败，请重试") }
                 return@launch
             }
+            // §4-2: 先清再填 —— 这一段在途窗口里, 卡片上不该还挂着上一轮的参考句。
+            // 那句已经"展示过"了 ([pendingUser.shownSuggestion] 留着它), 而这一轮的新句
+            // 还没到。清在**拿到录音之后**而不是之前: 早退路径上清掉只会白丢一句
+            // (审查 I2 —— 原来那条 `file == null` 的出入口就是这样, 学员连参考句都没了)。
+            _state.update { it.copy(suggestedReply = "", suggestedReplyCn = "") }
             val lineId = "free-${current.scores.size + 1}"
             val saved = retainRecording(lineId, file)
             // 学员开口那一刻, 卡片上显示的参考句就是"已展示过的"那一句 (§A4/A5)。
@@ -397,7 +414,6 @@ class FreeDialogueViewModel @Inject constructor(
                     audioBase64 = base64,
                     mode = "free_dialogue"
                 )
-                collectMistakeWords(lineId, result)
                 val history = turnHistory(current.messages + pendingUser)
                 val next = repository.dialogueTurn(
                     current.sceneId,
@@ -406,6 +422,10 @@ class FreeDialogueViewModel @Inject constructor(
                     settingsStore.getSelectedModelId(),
                     shownSuggestions(current.messages + pendingUser)
                 )
+                // 弱词入账 (审查 I3) 放在**台词拿回来之后**: 它是一条"学员说过这句"的
+                // 证据, 而 503 的语义是"这一轮没有发生"。旧顺序 (打分完就记) 会在 turn
+                // 失败时留下一条孤证 —— UI 说这轮没发生, 现实里错词账本已经多了一笔。
+                collectMistakeWords(lineId, result)
                 val recognized = next.recognizedText.orEmpty()
                 _state.update {
                     it.copy(
@@ -524,6 +544,9 @@ class FreeDialogueViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        // 显式取消在途的场景生成 (viewModelScope 也会收, 但这里点名更清楚: 生成结果
+        // 只对**这一份** state 有意义, VM 走了它就不该再写任何东西)。
+        generateJob?.cancel()
         audioPlayer.release()
         if (_state.value.isRecording) audioRecorder.cancel()
     }
@@ -561,6 +584,11 @@ internal fun turnHistory(messages: List<FreeDialogueMessage>): List<DialogueMess
  * 每条用户气泡记着它产生时卡片上的那句 ([FreeDialogueMessage.shownSuggestion]), 取最近
  * 去重后的 8 句。去重是必要的: 同一句连着展示两轮, 报两遍只会白占 prompt 预算。
  *
+ * **方向差异要小心** (审查 M9): 服务端 `dialogue._shown_suggestions` 取的是列表的**前 8**
+ * (`raw[:_SHOWN_SUGGESTIONS_MAX]`, 也是 8), 而这里送的是**最近 8**。两者只在"客户端先截到
+ * 8 条"时才等价 —— 顺序是旧→新, 客户端截完 ≤8 条, 服务端的前 8 就是全部。若哪天这里改成
+ * 送多于 8 条, 服务端会静默丢掉**最新**的那几句, 正好是防复写最要紧的部分。
+ *
  * 空串/纯空白不参与 (那是"当时没有参考回答", 不是一句已展示的句子)。
  */
 internal fun shownSuggestions(messages: List<FreeDialogueMessage>): List<String> =
@@ -574,5 +602,26 @@ internal const val CUSTOM_SCENE_MIN_CHARS = 4
 /** 长度门上限: 与后端 `Field(max_length=200)` 同一个数 (再长 prompt 也吃不消)。 */
 internal const val CUSTOM_SCENE_MAX_CHARS = 200
 
-/** 上面那张清单的上限 —— 与服务端 `shown_suggestions` 的截断口径一致。 */
+/** 上面那张清单的上限 —— 与服务端 `shown_suggestions` 的截断口径一致 (M9, 见上)。 */
 internal const val SHOWN_SUGGESTIONS_LIMIT = 8
+
+/**
+ * 「最新一次请求胜」门 (审查 I4)。
+ *
+ * 快速连切场景时, 慢响应会把新场景**整包**覆盖掉 (`generate` 写的是会话/气泡/台词那一
+ * 整份 state)。取消在途协程能砍掉还没回来的旧请求, 但它砍不掉"响应已经到手、正在写
+ * state"那几行 —— 那几行不在挂起点上, 观察不到取消。所以取消 + 这道令牌双保险: 每次发起
+ * 自增一次, 只有令牌仍是最新的那一次才许写 state。
+ *
+ * 抽成一个小类是为了能测: 真协程取消要 Android 依赖 (VM 的构造签名里有 AudioRecorder
+ * 之类的硬件对象), 而这里锁的是**判据**本身。
+ */
+internal class LatestRequestGate {
+    private var latest = 0L
+
+    /** 发起一次请求: 返回本次令牌, 同时让此前所有令牌失效。 */
+    fun begin(): Long = ++latest
+
+    /** 这次令牌还作不作数 (false = 已经有更新的请求在位, 不许写 state)。 */
+    fun isCurrent(token: Long): Boolean = token == latest
+}
