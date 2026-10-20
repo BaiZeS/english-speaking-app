@@ -124,6 +124,35 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon
 
+      - name: Install pinned build-tools (apksigner 与本机同版)
+        run: |
+          # 断言用的 apksigner 必须与本机/门禁脚本同版：run#20 用了镜像里更新的版本，
+          # --print-certs 的措辞与 sed 模式对不上，把「签名正确」误判成「读不出证书」。
+          # 路径不猜死：AGP 能构建成功说明 build-tools 存在，只是未必在 $ANDROID_HOME 下。
+          FOUND=""
+          for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" /usr/local/lib/android/sdk /opt/android-sdk; do
+            [ -n "$d" ] && [ -d "$d" ] || continue
+            c=$(ls "$d"/build-tools/34.0.0/apksigner 2>/dev/null || true)
+            if [ -n "$c" ]; then FOUND="$c"; break; fi
+          done
+          if [ -n "$FOUND" ]; then
+            echo "已有 34.0.0: $FOUND"
+            exit 0
+          fi
+          MGR=""
+          for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" /usr/local/lib/android/sdk; do
+            [ -n "$d" ] || continue
+            for c in "$d"/cmdline-tools/latest/bin/sdkmanager "$d"/cmdline-tools/bin/sdkmanager; do
+              [ -x "$c" ] && MGR="$c" && break 2
+            done
+          done
+          if [ -z "$MGR" ]; then
+            echo "::warning::找不到 sdkmanager，跳过安装；断言步会自行定位 apksigner"
+            exit 0
+          fi
+          echo "sdkmanager: $MGR"
+          yes | "$MGR" --sdk_root="$(dirname "$(dirname "$MGR")")" "build-tools;34.0.0" 2>&1 | tail -5
+
       - name: Assert signing certificate fingerprint
         env:
           EXPECTED: ${{ vars.RELEASE_CERT_SHA256 }}
@@ -131,16 +160,35 @@ jobs:
           # 产物证书必须是那把长期密钥。历史上这里什么都没有, 于是「每版换证书」
           # 的包一路绿灯发到了手机上才炸。
           APK=android/app/build/outputs/apk/release/app-release.apk
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          APKSIGNER="$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
-          if [ -z "$APKSIGNER" ]; then
-            echo "::error::runner 上找不到 apksigner ($SDK/build-tools/*/apksigner)"
+          if [ ! -f "$APK" ]; then
+            echo "::error::找不到产物 $APK (构建没出 release 包?)"
+            ls -l "$(dirname "$APK")" 2>/dev/null || true
             exit 1
           fi
-          ACTUAL="$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          # apksigner 不猜死路径: AGP 能构建成功说明 build-tools 存在, 但未必在 $ANDROID_HOME 下
+          # (run#21 的 ls /usr/local/lib/android/sdk/build-tools/* 就是空的)。
+          APKSIGNER=""
+          for d in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Android/Sdk" /usr/local/lib/android/sdk /opt/android-sdk; do
+            [ -n "$d" ] || continue
+            c="$d/build-tools/34.0.0/apksigner"
+            if [ -x "$c" ]; then APKSIGNER="$c"; break; fi
+            if [ -z "$APKSIGNER" ]; then
+              alt="$(ls "$d"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+              [ -n "$alt" ] && APKSIGNER="$alt"
+            fi
+          done
+          echo "apksigner = ${APKSIGNER:-<未找到>}"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::runner 上没有 apksigner (build-tools 没装上), 无法断言签名"
+            exit 1
+          fi
+          # 原始输出先落日志: 措辞再变也看得到, 不再让 sed 空转伪装成「没签名」。
+          RAW="$("$APKSIGNER" verify --print-certs "$APK" 2>&1 || true)"
+          printf '%s\n' "$RAW"
+          ACTUAL="$(printf '%s\n' "$RAW" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr -d ' ')"
           echo "actual certificate SHA-256 = $ACTUAL"
           if [ -z "$ACTUAL" ]; then
-            echo "::error::读不出产物签名证书 (构建没签名?)"
+            echo "::error::读不出产物签名证书 (上面的原始输出就是原因)"
             exit 1
           fi
           if [ -n "$EXPECTED" ]; then
