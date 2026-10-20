@@ -213,7 +213,10 @@ class BriefingViewModel @Inject constructor(
             _isPlayingRef.value = true
             try {
                 val tts = englishRepository.getTtsAudio(text, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) { _isPlayingRef.value = false }
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg -> _state.update { it.copy(error = msg) } }
+                ) { _isPlayingRef.value = false }
             } catch (_: Exception) {
                 _isPlayingRef.value = false
             }

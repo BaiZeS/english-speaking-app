@@ -297,7 +297,12 @@ class PlayerViewModel @Inject constructor(
                     }
                     return@launch
                 }
-                audioPlayer.play(tts.audioUrl) {
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { it.copy(isPlayingReference = false, error = msg) }
+                    }
+                ) {
                     _state.update { current -> current.copy(isPlayingReference = false) }
                 }
             } catch (e: Exception) {
@@ -313,7 +318,10 @@ class PlayerViewModel @Inject constructor(
         val path = _state.value.lastRecordingPath ?: return
         if (_state.value.isPlayingReference || _state.value.isRecording) return
         _state.update { it.copy(isPlayingReference = true, error = null) }
-        audioPlayer.play(Uri.fromFile(File(path)).toString()) {
+        audioPlayer.play(
+            Uri.fromFile(File(path)).toString(),
+            onError = { msg -> _state.update { it.copy(error = msg) } }
+        ) {
             _state.update { current -> current.copy(isPlayingReference = false) }
         }
     }
@@ -340,6 +348,7 @@ class PlayerViewModel @Inject constructor(
                 audioPlayer.playSequence(
                     items = listOf(tts.audioUrl, Uri.fromFile(File(path)).toString()),
                     gapMs = COMPARE_GAP_MS,
+                    onError = { msg -> _state.update { it.copy(error = msg) } },
                     onComplete = {
                         _state.update { it.copy(isPlayingReference = false) }
                     }
@@ -599,6 +608,7 @@ class PlayerViewModel @Inject constructor(
             items = references.map { it.audioUrl },
             gapMs = SHADOW_GAP_MS,
             onIndex = { index -> _state.update { it.copy(shadowCurrentIndex = index) } },
+            onError = { msg -> _state.update { it.copy(error = msg) } },
             onComplete = {
                 // Keep recording briefly past the last line so the user's
                 // final word is not cut off.

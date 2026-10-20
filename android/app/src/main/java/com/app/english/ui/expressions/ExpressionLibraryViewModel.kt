@@ -122,7 +122,10 @@ class ExpressionLibraryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val tts = englishRepository.getTtsAudio(entry.polished, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) { }
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg -> _state.update { it.copy(snackbar = msg) } }
+                ) { }
             } catch (e: Exception) {
                 Timber.w(e, "expression tts failed")
                 _state.update { it.copy(snackbar = "语音播放失败") }

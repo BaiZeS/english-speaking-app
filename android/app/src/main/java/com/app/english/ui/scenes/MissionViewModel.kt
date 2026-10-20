@@ -560,7 +560,12 @@ class MissionViewModel @Inject constructor(
             _state.update { it.copy(isPlaying = true) }
             try {
                 val tts = englishRepository.getTtsAudio(text, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) { _state.update { s -> s.copy(isPlaying = false) } }
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { s -> s.copy(isPlaying = false, snackbar = msg) }
+                    }
+                ) { _state.update { s -> s.copy(isPlaying = false) } }
             } catch (e: Exception) {
                 Timber.w(e, "mission tts failed")
                 _state.update { it.copy(isPlaying = false, snackbar = "语音播放失败") }

@@ -94,7 +94,14 @@ class MistakeDrillViewModel @Inject constructor(
                     _state.update { it.copy(isPlayingDemo = false, error = STUB_TTS_ERROR) }
                     return@launch
                 }
-                audioPlayer.play(tts.audioUrl) {
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { current ->
+                            current.copy(isPlayingDemo = false, error = msg)
+                        }
+                    }
+                ) {
                     _state.update { current -> current.copy(isPlayingDemo = false) }
                 }
             } catch (e: Exception) {

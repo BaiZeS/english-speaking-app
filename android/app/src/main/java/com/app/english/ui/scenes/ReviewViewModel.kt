@@ -205,7 +205,12 @@ class ReviewViewModel @Inject constructor(
             _state.update { it.copy(isPlayingLine = true) }
             try {
                 val tts = englishRepository.getTtsAudio(text, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) {
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { s -> s.copy(isPlayingLine = false, error = msg) }
+                    }
+                ) {
                     _state.update { s -> s.copy(isPlayingLine = false) }
                 }
             } catch (e: Exception) {

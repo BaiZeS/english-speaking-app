@@ -151,7 +151,12 @@ class SceneDetailViewModel @Inject constructor(
             _state.update { it.copy(playingText = text) }
             try {
                 val tts = englishRepository.getTtsAudio(text, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) {
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { it.copy(playingText = null, error = msg) }
+                    }
+                ) {
                     _state.update { it.copy(playingText = null) }
                 }
             } catch (_: Exception) {

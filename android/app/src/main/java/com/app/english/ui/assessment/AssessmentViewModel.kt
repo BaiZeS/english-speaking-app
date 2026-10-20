@@ -249,7 +249,10 @@ class AssessmentViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val tts = englishRepository.getTtsAudio(text, settingsStore.getVoice())
-                audioPlayer.play(tts.audioUrl) { }
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg -> _flow.update { it.copy(error = msg) } }
+                ) { }
             } catch (e: Exception) {
                 Timber.w(e, "assessment tts failed")
             }

@@ -347,7 +347,14 @@ class FreeDialogueViewModel @Inject constructor(
                     }
                     return@launch
                 }
-                audioPlayer.play(tts.audioUrl) {
+                audioPlayer.play(
+                    tts.audioUrl,
+                    onError = { msg ->
+                        _state.update { current ->
+                            current.copy(isPlayingReference = false, error = msg)
+                        }
+                    }
+                ) {
                     _state.update { current -> current.copy(isPlayingReference = false) }
                 }
             } catch (e: Exception) {
