@@ -6,8 +6,8 @@
 
 旧版（1.4.0 等）收不到 OTA 提示属预期——装一次新包即可，此后自动更新：
 1. 手机浏览器打开最新版（**优先用服务器直链**，走服务器加速；GitHub 出口在本机实测只有 10-40KB/s，同一个包要下 10-30 分钟）：
-   - 服务器直链（**当前唯一可靠来源**）：`http://118.89.58.84:5173/static/apk/EnglishAssistant-2.3.1.apk`
-   - GitHub Releases：**v2.3.1 的资产尚未产出** —— `Release APK` workflow 按设计停在「缺发布签名 Secrets」那一步（见 `docs/operations.md` §3.1.1），配好 Secrets 后重推 tag 才会出包。在此之前不要从 GitHub 拿旧版装：旧包证书与 2.3.1 不同，装上后任何新包都会报「签名不一致」。
+   - 服务器直链（**推荐：走服务器加速**）：`http://118.89.58.84:5173/static/apk/EnglishAssistant-2.3.1.apk`
+   - GitHub Releases：`https://github.com/BaiZeS/english-speaking-app/releases/tag/v2.3.1` 已有资产 `EnglishAssistant-2.3.1.apk`（由 CI 用长期签名密钥构建并断言过证书指纹）。**GitHub 出口在本机实测只有 10-40KB/s，手机下载请优先用上面那条服务器直链**，两边是同一个版本、同一把签名。
 2. 安装时允许「未知来源」。首次启动不需要任何设置，直接可用。
 3. 之后开 App 若提示新版本 → 点更新 → 下载走服务器加速（不再是 GitHub 龟速），装完即最新版。
 
