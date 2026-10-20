@@ -27,7 +27,9 @@
 - 后端四门：`ruff check` / `ruff format --check` 全过；`mypy app`（清缓存后）65 文件无问题；`pytest` **653 passed**（新增 9 条采样率/上采样/时长换算/缓存键回归）。
 - Android 三门：`ktlint.sh` exit 0；`testDebugUnitTest` **384 passed / 0 failed**（基线 374 增 10 条，只增不减）；detekt 与基线**逐条一致零新增**（103 → 103，唯一差异是 3 条既有 `LargeClass` 的行数量度漂移）。
 - 签名链路：`assembleRelease` 连续两次（gradle.properties 通道 / env 通道且带 `clean`）证书 SHA-256 均为 **`d76d7f035b4243af9da97363ab0101382fc37af34d4659a032d0cff00eef5532`**，与长期密钥逐位一致；产物 `android:debuggable` 已消失（此前的 OTA 包是 `true`）；`check_apk_cert.sh` 对线上 2.3.0 包如实拒绝（`actual=ac1b92fe…`，exit 1）、对新签包放行（exit 0）。
-- ⏳ **待办**：① GitHub Secrets 配好后 `Release APK` workflow 实跑（本盒无 `gh`，需网页配置；Secrets 未就位时 workflow 会按设计**直接红**，届时走 `docs/operations.md` §3.1.1 的本机签名旁路交付）；② 华为/鸿蒙真机复听（示范音 / AI 朗读 / 录音回放 / 影子跟读）与「卸载→装 2.3.1→此后 OTA 直接装」走查 —— **本盒没有该设备，48kHz 是基于「该机所有播放通道都是非强制采样率 + 用户回报全盘无声」的推断，不是真机结论**。若更新后仍无声，屏幕会直接给出错误码，按码归因，不再靠猜。
+- ✅ **OTA 已上线 2.3.1**（restart 后公网实测）：`/app/version` = `latest=2.3.1 / min=2.2.0 / source=env`，`release_notes` 内含「必须先卸载再装」那句；服务端 APK 全量下载 sha256 前缀 `4f0032ed`（与本机产物逐字节一致）、`aapt2` = `versionCode=15 / versionName=2.3.1`、证书 SHA-256 = `d76d7f03…`、`debuggable` 计数 0。
+- ✅ **线上 TTS 已是 48kHz**：同一条 text+voice 的缓存键从 `cf390dde30d2cabe.wav`（24k 时代）变成 `00606e2dfa6fc341.wav`，证明历史缓存整体失效不命中；响应头 `rate=48000 / byteRate=96000`，`dataSize/96 == duration_ms == 3360`（时长没翻倍），RMS 5922 是真语音。`docker logs` 同窗口出现 1 条 `mimo tts ok`（确系新合成而非读旧盘）。
+- ⏳ **待办**：① GitHub Secrets 配好后重推 tag 补出 `Release APK` 资产。**已实跑一次并有结论**：run#19（tag `v2.3.1`）恰好在新增的 `Require release signing secrets` 步骤失败、下游四步全部 skipped —— 即「缺 Secrets 就拒绝跑出一条可能换证书的流水线」按设计生效，这是门在咬合，不是回归；本盒无 `gh`，Secrets 需网页配置。本版 OTA 走 §3.1.1 登记的本机签名旁路上线；② 华为/鸿蒙真机复听（示范音 / AI 朗读 / 录音回放 / 影子跟读）与「卸载→装 2.3.1→此后 OTA 直接装」走查 —— **本盒没有该设备，48kHz 是基于「该机所有播放通道都是非强制采样率 + 用户回报全盘无声」的推断，不是真机结论**。若更新后仍无声，屏幕会直接给出错误码，按码归因，不再靠猜。
 
 ## v2.3.0 — 2026-10-19 · 对话升级：LLM 实时台词 + 双语参考 + 判分异步 + 自定义场景
 
