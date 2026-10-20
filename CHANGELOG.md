@@ -1,5 +1,34 @@
 # Changelog
 
+## v2.3.1 — 2026-10-19 · 修「OTA 装不上（签名不一致）」与「华为/鸿蒙全部声音不出声」
+
+性质：发布链路加固 + 音频采样率统一 + 播放失败可见性。Android 侧以 versionCode 15 / versionName 2.3.1 随本批发版；后端 48kHz 落盘已合入（生产加载在发版收口时随 restart 生效）。
+
+### ⚠ 一次性代价（必读）
+
+**本版更换了应用签名证书。** Android 不允许不同证书的包覆盖安装，**强更也绕不过**，所以存量设备升级 2.3.1 必须先卸载旧版再装（本机录音回放随卸载丢失；服务端已同步的进度/画像/历史不受影响）。装完之后 OTA 恢复正常。这条已写进 `APP_RELEASE_NOTES`（弹窗直接可见）与 `docs/usage-guide.md`「安装升级」。
+
+### 用户可感知
+
+- **修「更新包与已安装应用的签名不一致」**：下载成功但装不上是这轮 OTA 的真实表现。根因实测在案 —— `release.yml` 一直跑 `assembleDebug`，CI 临时 runner 每次**新生成一把 debug.keystore**，7 个在役包实测 **5 种证书**（2.1.0 `bc389138…` / 2.2.0 `64f4fd59…` / 2.2.1+2.2.3 `ee3842b9…`=本机 key / 2.2.2 `be86c9dd…` / 2.2.4 `b742c20c…` / 2.3.0 `ac1b92fe…`）。现改为长期密钥 + CI 从 Actions Secrets 还原 + 出包后断言证书指纹，另有 `publish_apk.sh` 发布前的第二道门（缺 `APP_APK_CERT_SHA256` 或指纹不符即拒绝翻转 OTA）。
+- **修华为/鸿蒙「App 里所有声音都不出声」**：所有播放通道交给 ExoPlayer 的 PCM 都是非强制采样率（TTS 24kHz、录音回放 16kHz），而 Android 只强制设备支持 44.1k/48k 播放 —— 该机起不了 AudioTrack，表现就是全盘静音。后端 TTS 与客户端回放现统一到 **48kHz**（容器仍是 WAV，零新依赖；**采集侧仍是 16k**，讯飞 ISE 链路一字未动）。
+- **播放失败不再骗人**：以前 `onPlayerError` 只写日志再走「播完」语义，屏幕什么都不出现（而 release 构建连 Timber 都没 plant，现场也没有日志）。现在 12 处播放调用点都会给出中文原因 + Media3 错误码；错误码就是下一轮定位的取证通道（5001/5002=本机放不了这规格、2001/2004/2005=网络或找不到、2007=明文被禁、3003=容器不支持）。
+
+### 工程摘要
+
+- `android/app/build.gradle.kts`：新增 release `signingConfig`（`RELEASE_*` 走 gradle.properties → env 两级）；**缺凭据时 `assembleRelease` 在配置期直接失败**（实测 18s 就报）。守卫只在请求 release 任务时触发，CI 的 ktlint/detekt/testDebugUnitTest/assembleDebug 与本地 debug 三连不受影响。
+- `.github/workflows/release.yml`：`assembleDebug` 改 `assembleRelease`，新增 `Require release signing secrets` / `Restore release keystore` / `Assert signing certificate fingerprint` 三步；资产路径与 `Rename` 步骤随产物目录调整。
+- `backend/app/services/wav.py`：`SYNTH_SAMPLE_RATE` / `PLAYBACK_SAMPLE_RATE` 双常量 + `upsample_to_playback` + `wav_duration_ms`（**时长改读 WAV 头**，否则 1s 会被算成 2s，客户端进度条与跟读节拍跟着错位）；TTS 磁盘缓存键带上采样率，24k 时代的历史音频整体失效重建。
+- `backend/scripts/check_apk_cert.sh` 新增；`publish_apk.sh` 在落地文件之后、写 `.env` 之前调用它。
+- `audio/PcmResample.kt`（整数比上采样，纯函数）/ `audio/AudioErrors.kt`（错误码折叠成人话）/ `audio/AudioPlayer.kt` 加 `onError` 通道（`onCompletion` 保持末位参数，既有尾随 lambda 调用点语义不变）/ `audio/RecordingStore.kt` 存盘前上采样并写 48k 头。
+
+### 验证（实测留证）
+
+- 后端四门：`ruff check` / `ruff format --check` 全过；`mypy app`（清缓存后）65 文件无问题；`pytest` **653 passed**（新增 9 条采样率/上采样/时长换算/缓存键回归）。
+- Android 三门：`ktlint.sh` exit 0；`testDebugUnitTest` **384 passed / 0 failed**（基线 374 增 10 条，只增不减）；detekt 与基线**逐条一致零新增**（103 → 103，唯一差异是 3 条既有 `LargeClass` 的行数量度漂移）。
+- 签名链路：`assembleRelease` 连续两次（gradle.properties 通道 / env 通道且带 `clean`）证书 SHA-256 均为 **`d76d7f035b4243af9da97363ab0101382fc37af34d4659a032d0cff00eef5532`**，与长期密钥逐位一致；产物 `android:debuggable` 已消失（此前的 OTA 包是 `true`）；`check_apk_cert.sh` 对线上 2.3.0 包如实拒绝（`actual=ac1b92fe…`，exit 1）、对新签包放行（exit 0）。
+- ⏳ **待办**：① GitHub Secrets 配好后 `Release APK` workflow 实跑（本盒无 `gh`，需网页配置；Secrets 未就位时 workflow 会按设计**直接红**，届时走 `docs/operations.md` §3.1.1 的本机签名旁路交付）；② 华为/鸿蒙真机复听（示范音 / AI 朗读 / 录音回放 / 影子跟读）与「卸载→装 2.3.1→此后 OTA 直接装」走查 —— **本盒没有该设备，48kHz 是基于「该机所有播放通道都是非强制采样率 + 用户回报全盘无声」的推断，不是真机结论**。若更新后仍无声，屏幕会直接给出错误码，按码归因，不再靠猜。
+
 ## v2.3.0 — 2026-10-19 · 对话升级：LLM 实时台词 + 双语参考 + 判分异步 + 自定义场景
 
 后端已部署生产 `:5173` 并通过线上冒烟；Android 侧本批以 versionCode 14 / versionName 2.3.0 随发版批推送 CI，**GitHub Release 与 `publish_apk.sh` 收口（OTA 切 v2.3.0）在 CI 绿后另行执行**；真机走查 8 项仍未做（清单见 `docs/compose/reports/dialogue-live-generation.md`）。

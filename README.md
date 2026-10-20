@@ -1,6 +1,6 @@
 # English Speaking Assistant · 情境化英语口语练习 App
 
-预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.3.0**（后端已部署；Android 随发版批推送 CI，GitHub Release 与 OTA 收口在 CI 绿后执行；历史发布口径与真机验收状态见 [CHANGELOG.md](CHANGELOG.md)；生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)，App 使用指南见 [docs/usage-guide.md](docs/usage-guide.md)）。
+预存语料 + AI 动态生成场景，标准发音示范，APP 自动评分。**当前版本 v2.3.1**（本批修两件事：**OTA「更新包与已安装应用的签名不一致」装不上** —— 发布链路此前一直跑 `assembleDebug`，长期密钥 + CI/发布两侧证书指纹门禁已就位；**华为/鸿蒙「所有声音不出声」** —— TTS 与录音回放统一到 48kHz，播放失败改为上屏中文原因 + Media3 错误码。⚠ 换证书是一次性代价：**存量设备必须先卸载再装**，见 `docs/usage-guide.md`「安装升级」。历史发布口径与真机验收状态见 [CHANGELOG.md](CHANGELOG.md)，生产部署与发版 SOP 见 [docs/operations.md](docs/operations.md)。）
 
 ## 项目状态
 
@@ -32,6 +32,7 @@
 | **v2.0 Android（P5–P7）** | ✅ 四 Tab 信息架构（首页/课程/词汇/我的）重构、情景课全流程屏（画廊→打基础→实战→复盘→生成）、测评流程、能力雷达 + 轨迹（Canvas）、表达库、今日推荐联动画像 |
 | **v2.0.0 收尾（P8）** | ✅ 全链验证：alembic 空库 SQLite/PG16 双向可逆、双 CI 绿、500+ 后端测试 + 168 JVM 测试（**该口径止于 v2.0.0**，当前基线见下一行与 android/README.md）；死代码清除、协议去魔法字符串、OTA 非强更语义固化 |
 | **v2.1.0 生产中继（OTA 通道）** | ✅ release 包内置地址切 `:5173`（versionCode 8）；`/static/apk` 自托管分发 + `publish_apk.sh` 一条命令完成发版收尾（GitHub 出口仅 ~10-40KB/s，自托管走服务器出口）；`:8000` 桥退役；运维护栏脚本 + 双实例日志 + 冒烟命令全套（docs/operations.md）|
+| **v2.3.1 签名固定 + 48kHz 修复（OTA 装不上 / 华为鸿蒙无声）** | ✅ 发布链路：长期密钥 + `assembleRelease`（`assembleDebug` 出 OTA 包的时代结束，缺凭据即构建期失败）+ CI 与 `publish_apk.sh` 双证书指纹门禁；音频链路：后端 TTS 落盘 48kHz（24k 缓存键失效重建、时长改读头，不再翻倍）、客户端录音回放整数比上采样、播放失败上屏中文原因 + Media3 错误码。基线：**后端 653 / Android 384** 全绿（ktlint 0、detekt 103=103 零新增）；⏳ 华为/鸿蒙真机复听、GitHub Secrets 配好后的 workflow 实跑待做。**⚠ 换证书 → 存量设备必须先卸载再装** |
 | **v2.3.0 对话升级（实时台词+双语+判分异步+自定义场景）** | ✅ 后端已部署 :5173（实测台词路 thinking-off ≈2s，未知/别人的场景 404，自定义场景链 202→轮询→ready，判分后台作业 + `grading_status` 回填、失败静默可翻身、D5 拿不到台词 503 不再伪造）；Android 双页双语渲染 + 「+ 自定义场景」入口 + 503 保气泡 + LazyColumn 单调 id 崩溃锁修（本批发版链）。基线：**后端 644 / Android 374** 全绿（2026-10-19 实测，ktlint 0、detekt 103=100+4 体积类留档、2 条非功能观察）；⏳ 真机走查 8 项待做。
 | **v2.2.4 更新检查失败不再锁死 App** | ✅ 纯 Android 加固（2026-09-28 发布，versionCode 13）：失败弹窗点「知道了」不再立刻重查（旧版服务端不可用时就是「知道了 → 再失败 → 弹窗回来」的死循环，模态框把用户锁在任何页面之外、连改服务器地址的「设置」都进不去）+ 新增「进入设置」逃生门 + 失败文案可读化（原始异常/HTML 残片不再上屏，固定中文）+ 回前台自动重查改静默（失败只记日志）。后端零改动、非强更（`APP_MIN_SUPPORTED_VERSION` 维持 2.2.0）。基线：**Android 337 / 后端 583** 全绿（2026-09-28 实测）；⏳ v2.2.0~v2.2.4 **真机验收均尚未执行** |
 | **v2.2.3 Tab 恢复可见即刷新** | ✅ 修「测评完回『我的』看不到四维能力维度」：底部 Tab 用返回栈 `saveState/restoreState` 恢复、ViewModel 不重建，而「我的」/「首页」只在**首次进入**拉一次画像——本版给三屏加 `LifecycleResumeEffect` 重拉（同时让首页未测评引导卡即时消失、词汇 Tab 弱词数不再滞后；`MeViewModel` 画像兜底条件收紧）。后端零改动、非强更。基线：Android 326 JVM 单测 |
