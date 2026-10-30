@@ -124,8 +124,17 @@ data class DialogueScene(
     val description: String,
     val titleEn: String = "",
     val descriptionEn: String = "",
-    val kind: String = "catalog"
+    val kind: String = "catalog",
+    /** v3.0 群聊: 这一场的 AI 角色 (2-3 个), 决定头像、昵称与 TTS 音色。 */
+    val roles: List<SceneRole> = emptyList(),
+    val userRole: String = ""
 ) {
+    /** 气泡上的 `role_id` 找不到的那个角色 —— 服务端保证命中, 找不到就是解析 bug,
+     * 但渲染层不许崩: 落到第一个角色, 让这句话至少有人认领。 */
+    fun roleOf(roleId: String): SceneRole? = roles.firstOrNull { it.id == roleId }
+
+    fun displayRole(roleId: String): SceneRole = roleOf(roleId) ?: roles.firstOrNull() ?: SceneRole()
+
     /**
      * 非内置场景 (学员自己描的那种)。判据是 **`kind != "catalog"`** 而不是 `== "custom"`:
      * 语义是"这不是内置行", 而内置行的英文副标题/描述才是客户端该展示的那一份 ——
@@ -138,6 +147,14 @@ data class DialogueScene(
         const val KIND_CATALOG = "catalog"
     }
 }
+
+/** 群聊里的一个 AI 角色 (昵称上屏, `voice` 只透给 `/tts` 兜底请求)。 */
+data class SceneRole(
+    val id: String = "",
+    val name: String = "",
+    val nameEn: String = "",
+    val voice: String = ""
+)
 
 data class DailyScore(
     val date: String,

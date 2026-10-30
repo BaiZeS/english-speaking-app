@@ -13,6 +13,7 @@ import com.app.english.domain.model.SceneCatalog
 import com.app.english.domain.model.SceneCategoryStat
 import com.app.english.domain.model.SceneSummary
 import com.app.english.domain.model.ScoreResult
+import com.app.english.domain.model.SceneRole
 import com.app.english.domain.model.WordScore
 
 fun LessonSummaryDto.toDomain(): LessonSummary = LessonSummary(
@@ -135,7 +136,16 @@ fun DialogueSceneDto.toDomain(): DialogueScene = DialogueScene(
     description = description,
     titleEn = titleEn,
     descriptionEn = descriptionEn,
-    kind = kind
+    kind = kind,
+    roles = roles.map { it.toDomain() },
+    userRole = userRole
+)
+
+fun SceneRoleDto.toDomain(): SceneRole = SceneRole(
+    id = roleId,
+    name = name,
+    nameEn = nameEn,
+    voice = voice
 )
 
 fun DailyScoreDto.toDomain(): DailyScore = DailyScore(

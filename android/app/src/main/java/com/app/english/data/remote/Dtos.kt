@@ -219,7 +219,20 @@ data class DialogueSceneDto(
     val description: String,
     @SerialName("title_en") val titleEn: String = "",
     @SerialName("description_en") val descriptionEn: String = "",
-    val kind: String = "catalog"
+    val kind: String = "catalog",
+    /** v3.0 群聊: 这一场的 AI 角色 (2-3 个)。会话列表摆头像组、聊天页把气泡上的
+     * `role_id` 翻译成人, 都读这里。旧 APK `ignoreUnknownKeys`, 多出来的键不炸解析。 */
+    val roles: List<SceneRoleDto> = emptyList(),
+    @SerialName("user_role") val userRole: String = ""
+)
+
+/** 群聊里的一个 AI 角色; `voice` 是后端 TTS 音色, 客户端只透传给 `/tts` 兜底请求。 */
+@Serializable
+data class SceneRoleDto(
+    @SerialName("role_id") val roleId: String = "",
+    val name: String = "",
+    @SerialName("name_en") val nameEn: String = "",
+    val voice: String = ""
 )
 
 @Serializable
