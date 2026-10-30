@@ -204,6 +204,8 @@ _GENERATION_SHAPE_MARKER = '"reply_cn"'
 _GRADING_SHAPE_MARKER = '"polish"'
 _REVIEW_SHAPE_MARKER = '"highlights"'
 _SCENE_SHAPE_MARKER = '"opener_cn"'
+#: v3.0 会话线程的每轮评分形状 (三轴 + 是否推进议程)。
+_THREAD_GRADING_SHAPE_MARKER = '"relevance"'
 
 
 def _prompt_text(kwargs: Mapping[str, Any]) -> str:
@@ -237,12 +239,14 @@ class _FakeOpenAI:
         grading: list[Any] | None = None,
         review: list[Any] | None = None,
         scene: list[Any] | None = None,
+        thread_grading: list[Any] | None = None,
     ) -> None:
         self._replies = list(replies)
         self._generation = list(generation or [])
         self._grading = list(grading or [])
         self._review = list(review or [])
         self._scene = list(scene or [])
+        self._thread_grading = list(thread_grading or [])
         self.requests: list[dict[str, Any]] = []
         self.chat = _FakeChat(self)
 
@@ -256,6 +260,8 @@ class _FakeOpenAI:
             shaped = self._review
         elif _SCENE_SHAPE_MARKER in prompt:
             shaped = self._scene
+        elif _THREAD_GRADING_SHAPE_MARKER in prompt:
+            shaped = self._thread_grading
         else:
             shaped = []
         if shaped:
@@ -277,6 +283,7 @@ def install_llm(
     grading: list[Any] | None = None,
     review: list[Any] | None = None,
     scene: list[Any] | None = None,
+    thread_grading: list[Any] | None = None,
 ) -> _FakeOpenAI:
     """配好"有 LLM 凭据"的环境并把客户端换成假的 (与 test_llm_endpoints 同套路).
 
@@ -294,6 +301,7 @@ def install_llm(
         grading=grading,
         review=review,
         scene=scene,
+        thread_grading=thread_grading,
     )
     monkeypatch.setattr(llm_provider, "AsyncOpenAI", lambda **kwargs: client)
     llm_provider.reset_llm_provider_for_tests()

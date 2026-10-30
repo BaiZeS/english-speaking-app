@@ -130,6 +130,10 @@ class TurnGeneration(BaseModel):
     一次调用既写台词又判分就是撞墙的那个旧形状 (§0)。所有字段可缺省且上限照仓内
     既有 ``a_cn``/``b_cn``/``hint_cn`` 的中文口径 (500), 不自造一套; 空串表示
     "这一行不渲染" (D5: 绝不机翻占位)。
+
+    后两个字段是 v3.0 群聊**专用**: 实战轮 (mission) 没有 roles 也没有议程游标,
+    它的 prompt 不问这两格, 于是恒为默认空 —— 共用同一个类, 才有"一次调用不会漂成
+    两份实现"的形狀。
     """
 
     reply: str = Field(default="", max_length=500)
@@ -137,10 +141,19 @@ class TurnGeneration(BaseModel):
     suggestion: str = Field(default="", max_length=500)
     suggestion_cn: str = Field(default="", max_length=500)
     learner_cn: str = Field(default="", max_length=500)
+    #: 本轮开口角色的 ``SceneRole.role_id`` (群聊); 实战轮留空。
+    speaker: str = Field(default="", max_length=8)
+    #: 学员这句把议程推进到哪一条 (回显 beats 原文; 没推进留空)。
+    next_beat: str = Field(default="", max_length=160)
 
     @field_validator("reply", "reply_cn", "suggestion", "suggestion_cn", "learner_cn")
     @classmethod
     def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("speaker", "next_beat")
+    @classmethod
+    def _strip_group(cls, v: str) -> str:
         return v.strip()
 
 
@@ -334,12 +347,27 @@ _JUDGE_RULES = (
     "每项 {{id, done, evidence(一句中文/英文依据)}}, id 只能用清单里给定的。"
 )
 
+#: 台词生成**必填之外还该产出**的字段清单 —— JSON 形状由它拼, 不许再手写第二份字面量
+#: (自由对话与实战轮各写一段形状就是漂移的开始, 见 §A4 的裁决)。
+GENERATION_FIELDS: tuple[str, ...] = (
+    "reply",
+    "reply_cn",
+    "suggestion",
+    "suggestion_cn",
+    "learner_cn",
+)
+#: v3.0 群聊在这五格之外多问两格 (谁说这句 / 议程推进到哪)。
+GROUP_GENERATION_EXTRA_FIELDS: tuple[str, ...] = ("speaker", "next_beat")
+
+
+def _json_shape(fields: Sequence[str]) -> str:
+    body = ", ".join(f'"{name}": "..."' for name in fields)
+    return f"只输出 JSON: {{{body}}}"
+
+
 #: 生成侧 JSON 形状 (TurnGeneration 五字段)。**公开**: 自由对话那条路由自己拼 prompt
 #: (``dialogue._scene_messages``), 但它必须引这一份 —— 两边各写一段形状就是漂移的开始。
-GENERATION_JSON_SHAPE = (
-    '只输出 JSON: {"reply": "...", "reply_cn": "...", "suggestion": "...", '
-    '"suggestion_cn": "...", "learner_cn": "..."}'
-)
+GENERATION_JSON_SHAPE = _json_shape(GENERATION_FIELDS)
 
 #: 生成侧的行为要求 (五件事), 同样公开给自由对话复用。
 GENERATION_RULES = (

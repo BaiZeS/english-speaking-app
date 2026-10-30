@@ -65,8 +65,6 @@ def new_doc(scene: dialogue_scenes.DialogueScene) -> dict[str, Any]:
         )
     return {
         "scene_id": scene.id,
-        #: 下一条消息的序号 —— 气泡 id 的单调来源 (v2.3.0 的重复 key 崩溃教训).
-        "seq": len(messages),
         "messages": messages,
         #: 已经聊到的议程下标 (``scene.beats`` 的游标, 由台词生成的 next_beat 推进).
         "beat_index": 0,
@@ -149,6 +147,32 @@ def unread_role_lines(doc: dict[str, Any], *, seen_seq: int) -> int:
 def _seq_of(message: dict[str, Any]) -> int:
     raw = str(message.get("id") or "")
     return int(raw[1:]) if raw[1:].isdigit() else 0
+
+
+def last_seq(doc: dict[str, Any]) -> int:
+    """最后一颗气泡的序号 (读红点水位用; 解析不出就当 0, 不许崩了读路径)."""
+    messages = messages_of(doc)
+    return _seq_of(messages[-1]) if messages else 0
+
+
+def pending_grade_age_s(doc: dict[str, Any]) -> float | None:
+    """最老的那颗还在 ``pending`` 的评分卡挂了多久 (秒); 没有 pending 就 ``None``.
+
+    判"要不要重派作业"用的是**内容自己的时间戳**: ``updated_at`` 会被标已读这类
+    无关写刷新, 拿它当水位等于每次打开聊天都把计时清零。
+    """
+    for message in messages_of(doc):
+        grade = message.get("grade")
+        if isinstance(grade, dict) and grade.get("status") == GRADING_PENDING:
+            stamped = str(message.get("at") or "")
+            try:
+                moment = datetime.fromisoformat(stamped)
+            except ValueError:
+                return None
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=UTC)
+            return (datetime.now(UTC) - moment).total_seconds()
+    return None
 
 
 def grading_status_of(doc: dict[str, Any]) -> str:
@@ -265,3 +289,79 @@ async def save_doc(
         await db.rollback()
         return False
     return True
+
+
+def append_round(
+    doc: dict[str, Any],
+    scene: dialogue_scenes.DialogueScene,
+    *,
+    learner_text: str,
+    spoke: str,
+    recording_ref: str,
+    reply: str,
+    reply_cn: str,
+    suggestion: str,
+    suggestion_cn: str,
+    role_id: str,
+    audio_url: str | None,
+    audio_ms: int,
+    audio_pending: bool,
+    pronunciation: float | None,
+) -> list[dict[str, Any]]:
+    """把一轮的四颗气泡按上屏顺序落进 doc, 返回**新增的那几颗**.
+
+    顺序是有意义的 (客户端直接把它当列表渲染): 学员那句 -> 角色台词 -> 建议回答 ->
+    评分占位。评分卡先以 ``pending`` 落一颗, 后台作业回填时只改这一颗的 ``grade``,
+    不新增气泡 —— 否则聊天里每轮会长出两条记录。
+
+    ``pronunciation`` 为 ``None`` 时**不写这一轴** (不是写 0): 说中文或打字的那一轮没有
+    发音证据, 画 0 分等于把"没测"说成"测了且很差"。
+    """
+    messages = doc.setdefault("messages", [])
+    added: list[dict[str, Any]] = []
+    added.append(
+        append_message(
+            messages,
+            scene,
+            kind=KIND_USER,
+            text=learner_text,
+            spoke=spoke,
+            recognized_text=learner_text,
+            local_recording=recording_ref,
+        )
+    )
+    added.append(
+        append_message(
+            messages,
+            scene,
+            kind=KIND_LINE,
+            role_id=role_id,
+            text=reply,
+            text_cn=reply_cn,
+            audio_url=audio_url,
+            audio_ms=audio_ms,
+            audio_pending=audio_pending,
+        )
+    )
+    if suggestion.strip():
+        added.append(
+            append_message(
+                messages,
+                scene,
+                kind=KIND_HINT,
+                text=suggestion,
+                text_cn=suggestion_cn,
+            )
+        )
+    axes: dict[str, float] = {}
+    if pronunciation is not None:
+        axes["pronunciation"] = float(pronunciation)
+    added.append(
+        append_message(
+            messages,
+            scene,
+            kind=KIND_GRADE,
+            grade={"status": GRADING_PENDING, "score": 0, "axes": axes, "comment_cn": ""},
+        )
+    )
+    return added

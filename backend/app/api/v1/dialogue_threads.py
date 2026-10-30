@@ -11,10 +11,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
 from typing import Any, NoReturn
 from urllib.parse import urljoin
 
 from fastapi import APIRouter, Depends, Query, Request
+from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,10 +26,31 @@ from app.api.v1.deps import get_db
 from app.api.v1.dialogue import _resolve_scene
 from app.core.errors import AppError
 from app.models.db import DialogueThread, User
-from app.services import thread_audio, thread_store, users
+from app.services import (
+    mission_engine,
+    thread_audio,
+    thread_grading,
+    thread_store,
+    thread_turn,
+)
+from app.services import users as users_service
 from app.services.dialogue_scenes import DialogueScene
+from app.services.drill_grader import LlmUnavailableError, turn_generation_unavailable
+from app.services.xunfei_iat import XunfeiIatProvider
 
 router = APIRouter(tags=["dialogue"])
+
+#: 听写只走这一条路: 讯飞 ``zh_cn`` 原生吃中英混读 (实测见方案 S2.4)。
+_IAT_LANGUAGE = "zh_cn"
+_iat = XunfeiIatProvider()
+
+# ====== 时延预算 (与 tests/test_latency_budget.py 的求和表同批改) ======
+#
+# 这条请求里唯一的一次 LLM 是台词生成; 判分在后台作业 (S2.6), 发音分与它并行。
+# 求和: IAT 8.0 + max(ISE 8.5, GEN 14.0) + TTS 3.0 = 25.0, 客户端 readTimeout 30
+# 减 5.0 余量 = 25.0 —— **顶格零余量**, 任何一处放宽都必须同步削减他处。
+IAT_TURN_BUDGET_S = 8.0
+ISE_TURN_BUDGET_S = 8.5
 
 
 # ====== DTO ======
@@ -111,12 +136,44 @@ async def _require_user(
             message="device_id or user_id is required for dialogue threads",
             code="IDENTITY_REQUIRED",
         )
-    user = await users.lookup_user(db, device_id=device_id, user_id=user_id, create=True)
+    user = await users_service.lookup_user(db, device_id=device_id, user_id=user_id, create=True)
     if user is None:
         raise AppError(
             status_code=404, message=f"unknown user_id: {user_id}", code="USER_NOT_FOUND"
         )
     return user
+
+
+async def _transcribe(audio_bytes: bytes) -> str:
+    """语音 -> 文本; 超时/没配凭据/空结果一律回空串 (调用方据此 422, 不硬编一句)."""
+    try:
+        recognized = await asyncio.wait_for(
+            _iat.transcribe(audio_bytes, language=_IAT_LANGUAGE), timeout=IAT_TURN_BUDGET_S
+        )
+    except TimeoutError:
+        logger.warning("thread iat budget exceeded | budget_s={}", IAT_TURN_BUDGET_S)
+        return ""
+    return (recognized or "").strip()
+
+
+async def _collect_pronunciation(task: asyncio.Task[Any] | None) -> Any:
+    """收发音分的账: 没起跑就 None, 超时/失败也 None —— **没有发音证据 ≠ 0 分**."""
+    if task is None:
+        return None
+    try:
+        return await asyncio.wait_for(task, timeout=ISE_TURN_BUDGET_S)
+    except TimeoutError:
+        logger.warning("thread anchored ise budget exceeded | budget_s={}", ISE_TURN_BUDGET_S)
+        task.cancel()
+        return None
+    except Exception as exc:
+        logger.warning("thread anchored ise failed: {}: {}", type(exc).__name__, exc)
+        return None
+
+
+def _spawn_grading(thread_id: str, user_id: str) -> None:
+    """把这一轮的判分交给后台作业 (S2.6) —— 请求内不等它。"""
+    thread_grading.spawn_thread_grading(thread_id, user_id)
 
 
 def _thread_not_found(thread_id: str) -> NoReturn:
@@ -264,16 +321,30 @@ async def get_thread(
     user = await _require_user(db, device_id, user_id)
     row = await _load(db, thread_id, user)
     doc = thread_store.load_doc(row)
-    messages = doc.get("messages") or []
-    last_seq = (
-        int(messages[-1].get("id")[1:])
-        if messages and str(messages[-1].get("id", ""))[1:].isdigit()
-        else 0
-    )
+    last_seq = thread_store.last_seq(doc)
     if last_seq != int(doc.get("last_read_seq") or 0):
         doc["last_read_seq"] = last_seq
         await thread_store.save_doc(db, row, doc)
+    _redispatch_if_stale(row, doc, user.id)
     return _view(row, request)
+
+
+def _redispatch_if_stale(row: DialogueThread, doc: dict[str, Any], user_id: str) -> None:
+    """挂着 ``pending`` 又没有作业在跑、且已过水位 -> 重派一次。
+
+    进程重启后作业句柄 (活在进程内存里) 全没了, 而没有作业来翻这颗气泡, 它会永远停在
+    「评分生成中…」。
+
+    水位读**那颗评分卡自己的** ``at``, 不是 ``row.updated_at`` —— 后者会被"标已读"这类
+    与内容无关的写刷新, 于是每打开一次聊天就把时钟拨回零点, 永远够不到水位。
+    """
+    if row.grading_status != thread_store.GRADING_PENDING or thread_grading.in_flight(row.id):
+        return
+    age = thread_store.pending_grade_age_s(doc)
+    if age is None or age < thread_grading.REDISPATCH_AFTER_S:
+        return
+    logger.info("thread grading redispatch after watermark | thread={} age_s={:.0f}", row.id, age)
+    thread_grading.spawn_thread_grading(row.id, user_id)
 
 
 @router.delete("/dialogue/threads/{thread_id}", response_model=ThreadDeleted)
@@ -290,3 +361,186 @@ async def delete_thread(
     await db.delete(row)
     await db.commit()
     return ThreadDeleted(id=thread_id)
+
+
+# ====== 一轮 ======
+
+
+class TurnRequest(BaseModel):
+    """学员这一句: 语音或文字二选一.
+
+    **没有 ``lang`` 字段** —— 语音一律走讯飞 ``zh_cn`` 中英混读听写 (实测见方案 S2.4),
+    学员说了中文还是英文由服务端**事后**从转写文本判, 判出来只决定一件事: 要不要跑
+    英文逐词发音分。让学员在开口前先声明语言, 是把一个系统能自己做的事推给用户。
+    """
+
+    mode: str = Field(pattern="^(voice|text)$")
+    audio_b64: str = ""
+    text: str = Field(default="", max_length=1000)
+    #: 本机录音文件名, 服务端**不存音频**、只回显, 供气泡回放本地文件。
+    recording_ref: str = Field(default="", max_length=128)
+    model_id: str | None = Field(default=None, max_length=64)
+
+
+class TurnResponse(BaseModel):
+    """这一轮写进会话的全部气泡 (学员那颗 + 台词 + 建议 + 评分占位)。"""
+
+    thread_id: str
+    turn_count: int
+    grading_status: str
+    beat_index: int
+    #: 本轮新增的气泡, 顺序即上屏顺序。
+    messages: list[ThreadMessage] = Field(default_factory=list)
+
+
+def _decode_audio(b64: str) -> bytes:
+    if not b64:
+        return b""
+    try:
+        return base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise AppError(
+            status_code=422, message="audio_b64 is not valid base64", code="BAD_AUDIO"
+        ) from exc
+
+
+@router.post("/dialogue/threads/{thread_id}/turn", response_model=TurnResponse)
+async def submit_turn(
+    thread_id: str,
+    req: TurnRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    device_id: str | None = Query(default=None, min_length=1, max_length=128),
+    user_id: str | None = Query(default=None, min_length=1, max_length=36),
+) -> TurnResponse:
+    """提交一轮: 听写 -> 台词 (请求内合成语音条) -> 建议回答 -> 评分占位.
+
+    三条不能含糊的口径:
+
+    * **听不出来说话 = 不前进**: 语音模式转写为空 (没配讯飞 / 超时 / 真的没听清) 一律
+      422 ``VOICE_TRANSCRIPTION_FAILED``, 会话一个气泡都不多 —— 让教练"回应一句不知道
+      是什么的话"就是编造学员说过什么 (D5 同族)。文字模式是这里的逃生门。
+    * **拿不到台词 = 503, 整轮不落库** (v2.3.0 的裁决): 不回放目录句、不写兜底气泡。
+    * **语音条是快路**: 请求内合成不出来就 ``audio_pending=true``, 客户端按需 ``GET /tts``
+      兜底 —— 台词都已经生成了, 绝不能因为没声音而失败。
+    """
+    user = await _require_user(db, device_id, user_id)
+    row = await _load(db, thread_id, user)
+    scene = await _resolve_scene(db, row.scene_key, user)
+
+    if req.mode == "voice":
+        audio_bytes = _decode_audio(req.audio_b64)
+        if not audio_bytes:
+            raise AppError(
+                status_code=422, message="voice turn needs audio_b64", code="BAD_REQUEST"
+            )
+        recognized = await _transcribe(audio_bytes)
+        if not recognized:
+            raise AppError(
+                status_code=422,
+                message="speech could not be transcribed",
+                code="VOICE_TRANSCRIPTION_FAILED",
+            )
+        learner_text = recognized
+        spoke = thread_turn.detect_spoke(recognized)
+    else:
+        learner_text = req.text.strip()
+        if not learner_text:
+            raise AppError(status_code=422, message="text turn needs text", code="BAD_REQUEST")
+        # 打字没有发音可评, 这一轮永远不出发音轴 (不是 0 分, 是整轴不渲染)。
+        spoke = "zh" if thread_turn.contains_cjk(learner_text) else thread_turn.SPOKE_EN
+        audio_bytes = b""
+
+    # 发音分与台词生成互不依赖 -> 并行抢出来的只有 ISE 那 8.5s (求和见文件头)。
+    ise_task: asyncio.Task[Any] | None = None
+    if audio_bytes and spoke == thread_turn.SPOKE_EN:
+        ise_task = asyncio.create_task(
+            mission_engine.anchored_pronunciation(audio_bytes, learner_text)
+        )
+
+    doc = thread_store.load_doc(row)
+    try:
+        generation, _model = await mission_engine.generate_turn(
+            thread_turn.turn_messages(scene, doc, learner_text), model_id=req.model_id
+        )
+    except LlmUnavailableError as exc:
+        if ise_task is not None:
+            ise_task.cancel()
+        # D5: 这一轮**什么都没发生** —— 不 append、不 save, 会话回到提交前。
+        raise turn_generation_unavailable() from exc
+
+    role = thread_turn.resolve_speaker(scene, generation.speaker)
+    audio = await thread_audio.synthesize_line(generation.reply, role.voice)
+    pronunciation = await _collect_pronunciation(ise_task)
+
+    added = thread_store.append_round(
+        doc,
+        scene,
+        learner_text=learner_text,
+        spoke=spoke,
+        recording_ref=req.recording_ref,
+        reply=generation.reply,
+        reply_cn=generation.reply_cn,
+        suggestion=generation.suggestion,
+        suggestion_cn=generation.suggestion_cn,
+        role_id=role.role_id,
+        audio_url=audio.audio_url,
+        audio_ms=audio.audio_ms,
+        audio_pending=audio.audio_pending,
+        pronunciation=pronunciation.pronunciation if pronunciation is not None else None,
+    )
+    doc["beat_index"] = thread_turn.beat_cursor_after(
+        int(doc.get("beat_index") or 0), scene, generation.next_beat
+    )
+    doc["grading_status"] = thread_store.GRADING_PENDING
+
+    row = await _persist_round(db, row, user.id, doc, added)
+    _spawn_grading(row.id, user.id)
+
+    return TurnResponse(
+        thread_id=row.id,
+        turn_count=row.turn_count,
+        grading_status=thread_store.GRADING_PENDING,
+        beat_index=int((row.doc or {}).get("beat_index") or 0),
+        messages=[_message_dto(m, request) for m in added],
+    )
+
+
+async def _persist_round(
+    db: AsyncSession,
+    row: DialogueThread,
+    user_id: str,
+    doc: dict[str, Any],
+    added: list[dict[str, Any]],
+) -> DialogueThread:
+    """写回这一轮; 撞乐观锁就**重读后只补自己那几颗气泡**, 绝不覆盖别人的回填.
+
+    会撞车的另一方是评分作业: 它改的是**上一轮**那颗 grade 气泡。版本校验输掉说明
+    我手上这份 doc 已经旧了, 拿它整份写回会把刚回填好的分数抹掉 —— 所以重试必须
+    从新读出来的 doc 出发, 只追加本轮新增的气泡。
+    """
+    if await thread_store.save_doc(
+        db, row, doc, turn_count=row.turn_count + 1, grading_status=thread_store.GRADING_PENDING
+    ):
+        return row
+
+    fresh = await thread_store.get_thread(db, row.id, user_id)
+    if fresh is None:
+        _thread_not_found(row.id)
+    merged = thread_store.load_doc(fresh)
+    merged.setdefault("messages", []).extend(added)
+    merged["beat_index"] = doc.get("beat_index") or 0
+    merged["grading_status"] = thread_store.GRADING_PENDING
+    if not await thread_store.save_doc(
+        db,
+        fresh,
+        merged,
+        turn_count=fresh.turn_count + 1,
+        grading_status=thread_store.GRADING_PENDING,
+    ):
+        raise AppError(
+            status_code=409,
+            message="dialogue thread changed under this turn, retry",
+            code="THREAD_CONCURRENT_UPDATE",
+        )
+    return fresh
