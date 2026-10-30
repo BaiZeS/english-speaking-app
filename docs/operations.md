@@ -1,5 +1,18 @@
 # 运维与发版 SOP · english-speaking-app（v2.2.4）
 
+> **⚠ v3.0.0 未上线（2026-10-30）**：本批把产品重写成「只剩微信式情景对话」——后端路由面从
+> 40+ 收到 12 个（`/dialogue/*`、`/tts`、`/translate`、`/scenes/jobs/{job_id}`、`/llm/models`、
+> `/app/version`、`/health`），新表 `dialogue_threads`（迁移 `e7a2c4f0b913`）。
+> **但本盒生产（`:5173`）仍在跑 v2.3.1，本批一行都没部署**：没 push、没打 tag、没动 `backend/.env`、
+> 没 `deploy.sh restart`。下面所有关于 v2.3.1 的运维口径**当下依然有效**。
+>
+> 部署本批之前必须先解决两件事：① **旧包兼容** —— 大扫除后 ≤v2.3.1 的包调 `/lessons`、`/sessions`、
+> `/score` 等会 404，部生产前必须显式定 `APP_MIN_SUPPORTED_VERSION`（强更门槛），否则存量真机
+> 直接不可用；② **`dialogue_threads` 迁移** —— `deploy.sh` 启动即 `alembic upgrade head`，
+> 该迁移是**新增表**（双向可逆、不动旧表），但源码回滚跨迁移边界会失败（见 §6.1 那条既有纪律）。
+> 方案与裁决见 `docs/compose/spec/dialogue-chat-revamp.md`。
+
+
 部署机 = 本盒（公网 `118.89.58.84`，云防火墙当前仅映射 **TCP 5173/80/8080**）。仓库：`/home/ubuntu/mimo-workspace/english-speaking-app`，工作分支 main（origin==local）。
 ⚠️ **本盒是多项目共享机**，宿主 5173 是公开契约端口、也是争用点：2026-09-14~26 该端口被同机 data-collection 项目抢占过一整轮（详见第 6 节第一条与第 5 节 v2.2.4 上线实录）。**每次发版收尾必须按公网口径实测 `/app/version` 返回 JSON**，本地/容器 healthy 不足以证明用户拿得到。
 
