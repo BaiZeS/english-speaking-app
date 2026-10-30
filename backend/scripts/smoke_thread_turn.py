@@ -43,7 +43,7 @@ from app.services.users import lookup_user  # noqa: E402
 DEVICE = "smoke-device"
 SCENE = "restaurant"
 #: 学员这一句: 中文。真实用户说的就是这种带具体要求的短句。
-LEARNER_CHINESE = "我想要一份牛肉面，汤里不要放香菜。"
+LEARNER_CHINESE = "我想要一份牛肉面, 汤里不要放香菜。"
 
 
 async def chinese_pcm(text: str) -> bytes:
@@ -62,7 +62,11 @@ async def chinese_pcm(text: str) -> bytes:
 def show(kind: str, message: dict) -> None:
     role = message.get("role_id") or "我"
     audio = message.get("audio_url")
-    flag = f"音频={audio}" if audio else ("音频=待补(audio_pending)" if message.get("audio_pending") else "无音频")
+    flag = (
+        f"音频={audio}"
+        if audio
+        else ("音频=待补(audio_pending)" if message.get("audio_pending") else "无音频")
+    )
     print(f"  [{kind:<4}] {role:<3} {message.get('text', '')[:70]!r}  {flag}")
     if message.get("text_cn"):
         print(f"         中文: {message['text_cn'][:60]}")
@@ -120,7 +124,9 @@ async def main() -> None:
         # 评分作业: 请求内只落 pending, 这里当场驱动作业把那颗气泡翻成 ready。
         uid = await _uid()
         await thread_grading.run_thread_grading_job(thread["id"], uid)
-        after = await c.get(f"/api/v1/dialogue/threads/{thread['id']}", params={"device_id": DEVICE})
+        after = await c.get(
+            f"/api/v1/dialogue/threads/{thread['id']}", params={"device_id": DEVICE}
+        )
         final = after.json()
         print(f"\n判分回填后: grading_status={final['grading_status']}")
         g = [m for m in final["messages"] if m["kind"] == "grade"][-1]["grade"]
