@@ -1,6 +1,6 @@
 ---
 feature: dialogue-chat-revamp
-status: designed
+status: in-progress
 updated: 2026-10-30
 source: feat/dialogue-chat-revamp
 ---
@@ -40,6 +40,18 @@ source: feat/dialogue-chat-revamp
 保留（后端）：`/dialogue/*`（含改造）、`/tts`、`/translate`（新增）、`/llm/models`、`/app/version`、`/health`、**`GET /scenes/jobs/{job_id}`** —— 自定义场景骨架作业与整课生成共用这一个轮询端点（`scenes.py:213`，`generation_jobs` 表 `db.py:454`），大扫除时**只删 scenes.py 的 generate/detail/script/delete 与课程相关路由，jobs 路由必须留下**。
 
 讯飞 ISE（英文逐词评测）**不退役**：学员主动说英文时仍出发音分（S2.5）。
+
+**交付时服务层的实际收缩**（比计划删得更深，如实记在这里）：
+
+- `mission_engine.py`（1311 行）改名 **`turn_generation.py`**（约 250 行）：只剩 `generate_turn` + `anchored_pronunciation` + `coerce_bilingual` + 生成侧常量；判分/复盘/润色随各自端点删除。
+- `drill_grader.py`（1044 行）收缩到约 232 行：只剩 `_judge` 收口 + `LlmUnavailableError` + `turn_generation_unavailable` + 预算常量。
+- 整删 `course_generator` `scene_store` `ability_engine` `course_progress` `corpus_loader` `assessment_engine` `models/course.py`；`GenerationError`/`scene_key_for` 搬进 `scene_spec_generator`，`CEFR_LEVELS` 搬进 `models/scene_spec`。
+- `scenes.py` 从 8 条路由收缩成 1 条（只剩 jobs 轮询）。
+
+**两条实现期挖出来的硬坑（都有回归锁）**：
+
+- 写 `doc.messages` **必须**走 `thread_store.load_doc` / `save_doc`。浅拷贝 `dict(row.doc)` 会就地改掉 ORM 里那份旧值，写回时新旧内容相等 ⇒ SQLAlchemy 判定无变化 ⇒ **`doc` 列不进 UPDATE**，症状是"`turn_count` 写了、消息还是旧的"这种半行更新。`save_doc` 里 `flag_modified` 是保险。
+- 评分回填的水位读**那颗气泡自己的 `at`**，不读 `row.updated_at` —— 后者被"标已读"刷新，等于每次打开聊天都把时钟拨回零点，进程重启后那颗 pending 永远翻不了身。
 
 ### S2.2 场景目录：12 个生活场景 × 多角色
 
@@ -229,14 +241,14 @@ IAT 8.0 + max(ISE 8.5, GEN 14.0) + TTS 3.0 = 25.0 ≤ 25.0   ✓ 余量 0
 
 ## Tasks
 
-- [ ] T1: 后端场景目录重做 —— 12 个生活场景 + `SceneRole`/`OpeningLine` 多角色，自定义场景骨架同批产出 roles — acceptance: `GET /dialogue/scenes` 返回 12 场，静态校验逐场断言 roles≥2（voice ∈ 四音色、persona 中英齐）、beats 3-6、openings≥2（各带 role_id）、suggestions≥2 英中对，漏填即红 (covers: S2.2)
-- [ ] T2: IAT 语言参数化 — acceptance: `transcribe(pcm, *, language=…)` 落地；`zh_cn` 与 `en_us` 各有测试；既有 `test_dialogue_iat.py` 6 条英文用例**一字不改**仍绿 (covers: S2.4)
-- [ ] T3: `dialogue_threads` 表 + Alembic 迁移 + 线程端点 — acceptance: 迁移在 SQLite 与 PG16 双向可逆；同 owner+scene 二次 `POST /dialogue/threads` 返回同 id 且不重复落 openings；未知/越权 id 一律 404 `THREAD_NOT_FOUND` (covers: S2.3) (depends: T1)
-- [ ] T4: `POST /dialogue/threads/{id}/turn` —— 输入分派(voice/text) + 七字段台词（含 speaker/next_beat）+ 请求内 TTS 软失败 — acceptance: 语音轮一律走 `zh_cn` 听写；**转写含汉字则不跑 ISE、纯英文则跑 ISE**（各一条用例）；text 不跑 IAT；TTS 超预算 → 仍 200 + `audio_pending=true`；LLM 不可用 → 503 且本轮不落库不前进 (covers: S2.4, S2.5) (depends: T2, T3)
-- [ ] T5: 每轮评分后台作业 + `grading_status` 水位回填 — acceptance: `pending→ready` 翻转、终态 CAS 不双计、作业失败静默且过水位可翻身、重启水位重派 —— 各一条测试；中文轮不产出 `pronunciation` 轴 (covers: S2.5) (depends: T4)
-- [ ] T6: `POST /translate` — acceptance: `zh→en`、`en→zh` 各一例；缺凭据 → 503 `TRANSLATION_UNAVAILABLE`；预算是具名常量且被 AST 门点名 (covers: S2.7)
-- [ ] T7: 时延求和表纳入 TTS 并同批过门 — acceptance: `test_latency_budget.py` 求和式含 `TTS_TURN_BUDGET_S`，算式 `8 + max(8.5,14) + 3 = 25 ≤ 25` 全绿，三把锁均指向新常量名 (depends: T4, T6; covers: S2.6)
-- [ ] T8: 后端大扫除 —— 删课程/词汇/测评/统计端点及其服务层与测试 — acceptance: 保留清单（`/dialogue/*` `/tts` `/translate` `/scenes/jobs/{job_id}` `/llm/models` `/app/version` `/health`）之外一律不再注册，**`GET /scenes/jobs/{job_id}` 明确留在路由里**；`ruff check` / `ruff format --check` / `mypy app` / `pytest` 全绿；被删用例逐条登记在报告里 (covers: S2.1) (depends: T5, T6, T7)
+- [x] T1: 后端场景目录重做 —— 12 个生活场景 + `SceneRole`/`OpeningLine` 多角色，自定义场景骨架同批产出 roles — acceptance: `GET /dialogue/scenes` 返回 12 场，静态校验逐场断言 roles≥2（voice ∈ 四音色、persona 中英齐）、beats 3-6、openings≥2（各带 role_id）、suggestions≥2 英中对，漏填即红 (covers: S2.2)
+- [x] T2: IAT 语言参数化 — acceptance: `transcribe(pcm, *, language=…)` 落地；`zh_cn` 与 `en_us` 各有测试；既有 `test_dialogue_iat.py` 6 条英文用例**一字不改**仍绿 (covers: S2.4)
+- [x] T3: `dialogue_threads` 表 + Alembic 迁移 + 线程端点 — acceptance: 迁移在 SQLite 与 PG16 双向可逆；同 owner+scene 二次 `POST /dialogue/threads` 返回同 id 且不重复落 openings；未知/越权 id 一律 404 `THREAD_NOT_FOUND` (covers: S2.3) (depends: T1)
+- [x] T4: `POST /dialogue/threads/{id}/turn` —— 输入分派(voice/text) + 七字段台词（含 speaker/next_beat）+ 请求内 TTS 软失败 — acceptance: 语音轮一律走 `zh_cn` 听写；**转写含汉字则不跑 ISE、纯英文则跑 ISE**（各一条用例）；text 不跑 IAT；TTS 超预算 → 仍 200 + `audio_pending=true`；LLM 不可用 → 503 且本轮不落库不前进 (covers: S2.4, S2.5) (depends: T2, T3)
+- [x] T5: 每轮评分后台作业 + `grading_status` 水位回填 — acceptance: `pending→ready` 翻转、终态 CAS 不双计、作业失败静默且过水位可翻身、重启水位重派 —— 各一条测试；中文轮不产出 `pronunciation` 轴 (covers: S2.5) (depends: T4)
+- [x] T6: `POST /translate` — acceptance: `zh→en`、`en→zh` 各一例；缺凭据 → 503 `TRANSLATION_UNAVAILABLE`；预算是具名常量且被 AST 门点名 (covers: S2.7)
+- [x] T7: 时延求和表纳入 TTS 并同批过门 — acceptance: `test_latency_budget.py` 求和式含 `TTS_TURN_BUDGET_S`，算式 `8 + max(8.5,14) + 3 = 25 ≤ 25` 全绿，三把锁均指向新常量名 (depends: T4, T6; covers: S2.6)
+- [x] T8: 后端大扫除 —— 删课程/词汇/测评/统计端点及其服务层与测试 — acceptance: 保留清单（`/dialogue/*` `/tts` `/translate` `/scenes/jobs/{job_id}` `/llm/models` `/app/version` `/health`）之外一律不再注册，**`GET /scenes/jobs/{job_id}` 明确留在路由里**；`ruff check` / `ruff format --check` / `mypy app` / `pytest` 全绿；被删用例逐条登记在报告里 (covers: S2.1) (depends: T5, T6, T7)
 - [ ] T9: Android 导航收缩 + 会话列表屏 — acceptance: 根为会话列表、`Routes.kt` 只剩 4 个目的地、底部栏删除；更新失败弹窗「进入设置」仍能落到 Settings；`AppTabsTest` 按新导航重写并绿 (covers: S2.1) (depends: T8)
 - [ ] T10: Android 微信式群聊屏 —— 语音条 / 点击展开文字 / 长按翻译 / 建议折叠 / 评分卡 / 按住说话 + 文字输入（无语言切换控件） — acceptance: 气泡纯函数各有 JVM 单测（单调 key、时长格式化、双语空白不渲染、`audio_pending` 走 `/tts` 兜底、翻译本地切 vs 端点分派、grade 三态渲染）；`assembleDebug` 成功 (covers: S2.3, S2.5, S2.7, S2.8) (depends: T9)
 - [ ] T11: Android 删除单词/课程/跟读/测评/统计屏 + Room 留体删用 — acceptance: `ui/vocab` `ui/drill` `ui/expressions` `ui/assessment` `ui/lesson` `ui/player` `ui/home` `ui/me` `ui/history` 与 `ui/scenes/{Briefing,Drill,Review,SceneDetail,Generate,Mission}*` 不再存在；`AppDatabase.kt` 的 entities/version **逐字不变**；ktlint exit 0；detekt 相对基线 103 零新增 (covers: S2.9) (depends: T9)
