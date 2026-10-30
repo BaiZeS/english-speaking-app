@@ -1,108 +1,13 @@
 package com.app.english.data.remote
 
-import com.app.english.domain.model.Book
-import com.app.english.domain.model.DailyScore
 import com.app.english.domain.model.DialogueScene
-import com.app.english.domain.model.HistoryItem
-import com.app.english.domain.model.LessonDetail
-import com.app.english.domain.model.LessonSummary
-import com.app.english.domain.model.Line
-import com.app.english.domain.model.PracticeStats
-import com.app.english.domain.model.Role
-import com.app.english.domain.model.SceneCatalog
-import com.app.english.domain.model.SceneCategoryStat
 import com.app.english.domain.model.SceneRole
-import com.app.english.domain.model.SceneSummary
-import com.app.english.domain.model.ScoreResult
-import com.app.english.domain.model.WordScore
-
-fun LessonSummaryDto.toDomain(): LessonSummary = LessonSummary(
-    id = id,
-    book = book,
-    lessonNo = lessonNo,
-    title = title,
-    roleCount = roleCount,
-    durationS = durationS
-)
-
-fun LessonDetailDto.toDomain(): LessonDetail = LessonDetail(
-    id = id,
-    book = book,
-    lessonNo = lessonNo,
-    title = title,
-    roles = roles.map { role -> role.toDomainRole() }
-)
-
-private fun RoleDto.toDomainRole(): Role = Role(
-    name = name,
-    lines = lines.map { line -> line.toDomainLine() }
-)
-
-private fun LineDto.toDomainLine(): Line = Line(
-    id = id,
-    text = text,
-    translation = translation,
-    ipa = ipa
-)
-
-fun ScoreResponseDto.toDomain(): ScoreResult = ScoreResult(
-    total = total,
-    pronunciation = pronunciation,
-    fluency = fluency,
-    completeness = completeness,
-    wordDetails = wordDetails.map { WordScore(it.word, it.score, it.ipa) },
-    suggestion = suggestion,
-    source = source
-)
 
 fun TtsResponseDto.toDomain(): com.app.english.domain.model.TtsAudio =
     com.app.english.domain.model.TtsAudio(
         audioUrl = audioUrl,
         durationMs = durationMs,
         source = source
-    )
-
-fun HistoryItemDto.toDomain(): HistoryItem = HistoryItem(
-    id = id,
-    book = book,
-    lessonId = lessonId,
-    lineId = lineId,
-    kind = kind,
-    label = label,
-    scoreTotal = scoreTotal,
-    scorePronunciation = scorePronunciation,
-    scoreFluency = scoreFluency,
-    scoreCompleteness = scoreCompleteness,
-    createdAt = createdAt
-)
-
-fun DialogueLineDto.toDomain(): com.app.english.domain.model.DialogueLine =
-    com.app.english.domain.model.DialogueLine(
-        id = id,
-        role = role,
-        text = text,
-        translation = translation,
-        isUser = isUser
-    )
-
-fun DialogueGenerateResponseDto.toDomain(): com.app.english.domain.model.DialogueSession =
-    com.app.english.domain.model.DialogueSession(
-        sceneId = sceneId,
-        status = status,
-        title = title,
-        lines = lines.map { it.toDomain() },
-        suggestedReply = suggestedReply
-    )
-
-fun DialogueTurnResponseDto.toDomain(): com.app.english.domain.model.DialogueTurn =
-    com.app.english.domain.model.DialogueTurn(
-        replyText = replyText,
-        suggestedReply = suggestedReply,
-        recognizedText = recognizedText,
-        replyAudioUrl = replyAudioUrl,
-        replyCn = replyCn,
-        suggestionCn = suggestionCn,
-        learnerCn = learnerCn
     )
 
 fun LlmModelDto.toDomain(): com.app.english.domain.model.LlmModel =
@@ -122,14 +27,6 @@ fun AppVersionResponseDto.toDomain(): com.app.english.domain.model.AppVersion =
         forceUpdate = forceUpdate
     )
 
-fun BookDto.toDomain(): Book = Book(
-    id = id,
-    displayName = displayName,
-    description = description,
-    level = level,
-    lessonCount = lessonCount
-)
-
 fun DialogueSceneDto.toDomain(): DialogueScene = DialogueScene(
     id = id,
     title = title,
@@ -146,77 +43,4 @@ fun SceneRoleDto.toDomain(): SceneRole = SceneRole(
     name = name,
     nameEn = nameEn,
     voice = voice
-)
-
-fun DailyScoreDto.toDomain(): DailyScore = DailyScore(
-    date = date,
-    avgTotal = avgTotal,
-    avgPronunciation = avgPronunciation,
-    avgFluency = avgFluency,
-    avgCompleteness = avgCompleteness,
-    sessions = sessions
-)
-
-fun StatsResponseDto.toDomain(): PracticeStats = PracticeStats(
-    totalSessions = totalSessions,
-    avgTotal = avgTotal,
-    avgPronunciation = avgPronunciation,
-    avgFluency = avgFluency,
-    avgCompleteness = avgCompleteness,
-    bestTotal = bestTotal,
-    recentSessions = recentSessions,
-    streakDays = streakDays,
-    daily = daily.map { it.toDomain() },
-    lessonsAttempted = lessonsAttempted,
-    weakestLessons = weakestLessons.map { it.toDomain() }
-)
-
-fun LessonProgressDto.toDomain(): com.app.english.domain.model.LessonProgress =
-    com.app.english.domain.model.LessonProgress(
-        book = book,
-        lessonId = lessonId,
-        attemptCount = attemptCount,
-        bestScore = bestScore,
-        lastScore = lastScore,
-        lastPracticedAt = lastPracticedAt
-    )
-
-fun WeakestLessonDto.toDomain(): com.app.english.domain.model.WeakestLesson =
-    com.app.english.domain.model.WeakestLesson(
-        book = book,
-        lessonId = lessonId,
-        label = label,
-        bestScore = bestScore,
-        avgScore = avgScore,
-        attempts = attempts
-    )
-
-fun SceneSummaryDto.toDomain(): SceneSummary = SceneSummary(
-    id = id,
-    source = source,
-    category = category,
-    title = title,
-    subtitleEn = subtitleEn,
-    level = level,
-    estMinutes = estMinutes,
-    briefCn = briefCn,
-    skills = skills,
-    vocabCount = vocabCount,
-    briefingCount = briefingCount,
-    taskCount = taskCount,
-    requiredTaskCount = requiredTaskCount,
-    maxTurns = maxTurns,
-    cleared = cleared,
-    bestTotal = bestTotal,
-    attempts = attempts
-)
-
-fun SceneCategoryStatDto.toDomain(): SceneCategoryStat =
-    SceneCategoryStat(id = id, labelCn = labelCn, count = count)
-
-fun ScenesResponseDto.toDomain(): SceneCatalog = SceneCatalog(
-    categories = categories.map { it.toDomain() },
-    scenes = scenes.map { it.toDomain() },
-    total = total,
-    defaultSceneId = defaultScene
 )

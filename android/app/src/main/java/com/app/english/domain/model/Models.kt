@@ -61,36 +61,6 @@ data class HistoryItem(
     val createdAt: String
 )
 
-data class DialogueLine(
-    val id: String,
-    val role: String,
-    val text: String,
-    val translation: String? = null,
-    val isUser: Boolean = false
-)
-
-data class DialogueSession(
-    val sceneId: String,
-    val status: String,
-    val title: String,
-    val lines: List<DialogueLine>,
-    val suggestedReply: String
-)
-
-data class DialogueTurn(
-    val replyText: String,
-    val suggestedReply: String,
-    val recognizedText: String? = null,
-    val replyAudioUrl: String? = null,
-    /**
-     * §A4 (D4 双语): 台词/示范句的中文意思, 以及学员刚那句的中文 (「我」气泡的「译」)。
-     * 空串 = 那一行不渲染 —— 缺字段就是缺字段, 界面不机翻也不放占位。
-     */
-    val replyCn: String = "",
-    val suggestionCn: String = "",
-    val learnerCn: String = ""
-)
-
 data class LlmModel(
     val id: String,
     val displayName: String,
@@ -155,52 +125,6 @@ data class SceneRole(
     val name: String = "",
     val nameEn: String = "",
     val voice: String = ""
-)
-
-data class DailyScore(
-    val date: String,
-    val avgTotal: Double,
-    val avgPronunciation: Double,
-    val avgFluency: Double,
-    val avgCompleteness: Double,
-    val sessions: Int
-)
-
-data class PracticeStats(
-    val totalSessions: Int,
-    val avgTotal: Double,
-    val avgPronunciation: Double,
-    val avgFluency: Double,
-    val avgCompleteness: Double,
-    val bestTotal: Double,
-    val recentSessions: Int,
-    val streakDays: Int,
-    val daily: List<DailyScore>,
-    val lessonsAttempted: List<Int>,
-    val weakestLessons: List<WeakestLesson> = emptyList()
-) {
-    val hasData: Boolean get() = totalSessions > 0
-}
-
-data class LessonProgress(
-    val book: String = "nce1",
-    val lessonId: Int,
-    val attemptCount: Int,
-    val bestScore: Double,
-    val lastScore: Double,
-    val lastPracticedAt: String? = null
-) {
-    val isPracticed: Boolean get() = attemptCount > 0
-}
-
-data class WeakestLesson(
-    val book: String = "nce1",
-    val lessonId: Int,
-    // P8·2b: 服务端人读标题 (book|lesson 不再裸 id); 空 = 回退裸 id 渲染。
-    val label: String = "",
-    val bestScore: Double,
-    val avgScore: Double,
-    val attempts: Int
 )
 
 /**
