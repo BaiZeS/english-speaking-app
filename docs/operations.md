@@ -139,6 +139,46 @@ curl -s http://118.89.58.84:5173/api/v1/app/version   # 核对 min_supported_ver
 
 回滚：`scripts/publish_apk.sh v<上一个好版本>`（秒切，GitHub/GCP 双源自动降级）；或临时 `APP_LATEST_VERSION` 回旧值 + restart；强更要求见上一条的同步回滚。
 
+### 3.6 v3.0.0 发布 runbook（用户已裁决，2026-10-30）
+
+**前置事实**：分支 `feat/dialogue-chat-revamp` 已 push（head `ce76e55`），PR 需在网页创建：
+`https://github.com/BaiZeS/english-speaking-app/pull/new/feat/dialogue-chat-revamp`
+（本盒 `~/.git-credentials` 里那个 `x-access-token` 只对 git-over-HTTPS 有效，REST API 返 401，
+所以命令行开不了 PR。）
+
+**用户已给的三项裁决**：① 先开 PR、等 CI 绿再合；② `APP_MIN_SUPPORTED_VERSION=3.0.0`（强更）；
+③ 授权改 `backend/.env` + `deploy.sh restart`。
+
+**顺序（2 与 3 必须连着做）**：
+
+1. CI 绿后合 main，打 tag：`git tag v3.0.0 && git push origin v3.0.0` → `release.yml` 跑
+   `assembleRelease`（长期 key 来自 Actions Secrets）+ 证书指纹断言。
+2. `cd backend && bash scripts/publish_apk.sh v3.0.0` —— 拉 GitHub 资产到 `static/apk/`、
+   写 `.env` 的 `APP_LATEST_VERSION` / `APP_APK_URL`，发布前会再验一次证书指纹。
+3. 同一次改动里把 `.env` 的 `APP_MIN_SUPPORTED_VERSION` 置为 `3.0.0`，然后
+   `bash scripts/deploy.sh restart`（启动自动 `alembic upgrade head` 建 `dialogue_threads`）。
+4. 公网核验：`/app/version` 应返回 `latest=3.0.0 / min=3.0.0`；`/api/v1/dialogue/scenes`
+   应给 12 场且每场带 `roles`；`/api/v1/lessons`、`/api/v1/sessions` 应为 404（这是**设计如此**，
+   不是回归 —— 那些端点随功能一起退役了）。
+
+**为什么必须强更**：新 APK 需要新后端，新后端会打死旧包 —— 旧包调 `/lessons`、`/sessions`、
+`/score` 一律 404。与其让存量设备静默坏掉，不如一纸强更把入口叫回来。
+**窗口**：步骤 2 之后、步骤 3 之前，设备若已更到 v3.0.0 而后端仍是 v2.3.1，调
+`/dialogue/threads` 会 404 —— 所以 2、3 之间不要留时间。
+**好消息**：签名沿用 v2.3.1 那把长期 key，**存量设备正常覆盖安装，不需要再卸载重装**。
+
+**回滚**：APK 侧把 `APP_LATEST_VERSION` 降回 `2.3.1`、`APP_MIN_SUPPORTED_VERSION` 降回 `2.2.0`
+并 restart；源码侧 `git checkout v2.3.1 -- backend/ && deploy.sh restart` —— ⚠ 但本批**新增了
+迁移** `e7a2c4f0b913`，跨这条边界的源码回滚会因库 revision 比旧代码新而失败
+（`Can't locate revision`），回滚前先 `git diff --name-only v2.3.1..HEAD -- backend/app/db/migrations/`
+确认，必要时先 `alembic downgrade -1`（该迁移双向可逆，只 drop 自己新建的表）。
+
+**发版前仍未做的事**（本盒没有设备、也没有第二双眼睛）：真机走查 8 项；独立代码审查
+（子代理通路连续 6 次因基础设施故障未产出，已改为自审 + 逐条取证，但并发段
+`version_id_col` 在评分回填与学员提交撞车时的重试路径值得人工复核）；
+首轮评分偏严的裁决（真火实测学员第一句正确点单得 36 分，见 spec 的 Journey log）。
+
+
 ## 4. 密钥启用清单（当前环境 → 真机全功能）
 
 | 服务 | 填 env 键 | 解锁 |
