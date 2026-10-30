@@ -20,10 +20,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.course import CEFR_LEVELS
-
 #: 自定义场景对外的 id 前缀 (§3 C3b): ``custom_<DialogueSceneRow.id>``。
 #: 43 字符 < ``DialogueTurnRequest.scene_id`` 的 max 64, 且不会撞静态目录 id。
+#: 场景难度锚 (CEFR)。以前住在 ``models.course`` —— 那个模块随整课生成一起退役了,
+#: 而它是自定义场景骨架还在校验的一件事, 所以搬到这里 (唯一读者就是这里)。
+CEFR_LEVELS: tuple[str, ...] = ("A1", "A2", "B1", "B2", "C1", "C2")
+
 CUSTOM_SCENE_PREFIX = "custom_"
 
 #: beats 议程条数 (§3 C2: 轻量场景的议程深度, 同 MissionSpec tasks 的 3-6 先例).

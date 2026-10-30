@@ -5,7 +5,7 @@
 另开一条数据面 —— 回填只是把同一颗气泡从 ``pending`` 重绘成 ``ready``。
 
 本模块只做**纯数据形状 + DB 读写**, 不碰 LLM、不碰 TTS、不碰路由: 台词生成在
-``mission_engine``, 编排在 ``api/v1/dialogue``。这样"消息长什么样"这件事只有一处定义。
+``turn_generation``, 编排在 ``api/v1/dialogue_threads``。这样"消息长什么样"这件事只有一处定义。
 """
 
 from __future__ import annotations

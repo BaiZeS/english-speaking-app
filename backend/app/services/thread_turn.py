@@ -1,6 +1,6 @@
 """v3.0 群聊单轮的 prompt 与语言判定.
 
-台词生成本身仍然只有**一次** LLM 调用 —— :func:`mission_engine.generate_turn`,
+台词生成本身仍然只有**一次** LLM 调用 —— :func:`turn_generation.generate_turn`,
 与实战轮共用同一个 ``_judge`` 收口、同一组 ``GEN_*`` 常量。本模块只负责**拼 prompt**:
 把"这场都有谁、议程走到哪、刚才聊了什么、学员这句是什么语言"摊给模型。
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from app.services import dialogue_scenes, mission_engine, thread_store
+from app.services import dialogue_scenes, thread_store, turn_generation
 from app.services.llm_provider import LlmMessage
 
 #: 学员说了中文 (转写里出现汉字) —— 这一轮**不跑**英文逐词 ISE。
@@ -63,7 +63,7 @@ def _agenda_block(scene: dialogue_scenes.DialogueScene, beat_index: int) -> str:
     lines = []
     for number, beat in enumerate(scene.beats, 1):
         mark = "已聊" if number <= beat_index else "待聊"
-        lines.append(f"{number}. [{mark}] {beat[: mission_engine.LINE_MAX_CHARS]}")
+        lines.append(f"{number}. [{mark}] {beat[: turn_generation.LINE_MAX_CHARS]}")
     return (
         "## 议程\n" + "\n".join(lines) + "\n"
         "按议程往下走, 聊过的方向不回头。若学员这句**确实推进了**下一条, 就在 next_beat "
@@ -106,8 +106,8 @@ def turn_messages(
        这是"保持场景对话流畅"的落地方式 (方案 S2.4 已裁决: 角色听得懂中文)。
     2. **每轮要交一个 speaker** —— 群聊里谁开口决定头像与音色。
     """
-    shape = mission_engine._json_shape(
-        mission_engine.GENERATION_FIELDS + mission_engine.GROUP_GENERATION_EXTRA_FIELDS
+    shape = turn_generation.json_shape(
+        turn_generation.GENERATION_FIELDS + turn_generation.GROUP_GENERATION_EXTRA_FIELDS
     )
     system = (
         "你是情景对话里的教练角色组, 学员是中文母语、能读写但开口少的英语初学者 (CEFR A2-B1)。"
@@ -119,8 +119,8 @@ def turn_messages(
         + _roster_block(scene)
         + (f"情境: {scene.context}。" if scene.context else "")
         + _agenda_block(scene, int(doc.get("beat_index") or 0))
-        + mission_engine.GENERATION_RULES
-        + mission_engine.ANTI_REPEAT_RULES
+        + turn_generation.GENERATION_RULES
+        + turn_generation.ANTI_REPEAT_RULES
         + " 学员刚说的可能是中文, 也可能是英文: **照常理解并用英文继续推进**, "
         "不要要求学员说英文、不要纠错、不要停下来教语法。"
         " speaker 填本轮开口的那个角色 id (可以换人说话, 也可以连续同一人)。" + "\n\n" + shape

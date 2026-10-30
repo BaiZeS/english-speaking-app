@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -18,6 +19,63 @@ def _reset_llm_provider() -> Iterator[None]:
     llm_provider.reset_llm_provider_for_tests()
     yield
     llm_provider.reset_llm_provider_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_thread_turn_honors_an_allowed_model_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """客户端选的模型在**目录内**就被尊重 —— 接缝从旧的 ``/dialogue/generate`` 换到群聊轮。
+
+    台词是纯文本用途, 允许跟随 ``model_id`` (D2); 判分不吃它 (恒服务端默认), 那是另一条
+    路的纪律。
+    """
+    from tests.test_drill_grader import install_llm
+
+    client = install_llm(
+        monkeypatch,
+        generation=[json.dumps({"reply": "How was your weekend?", "reply_cn": "周末过得如何?"})],
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        opened = await c.post(
+            "/api/v1/dialogue/threads",
+            json={"scene_key": "small_talk"},
+            params={"device_id": "dev-model"},
+        )
+        assert opened.status_code == 201, opened.text
+        res = await c.post(
+            f"/api/v1/dialogue/threads/{opened.json()['id']}/turn",
+            json={"mode": "text", "text": "It was good", "model_id": "qwen-turbo"},
+            params={"device_id": "dev-model"},
+        )
+        assert res.status_code == 200, res.text
+    assert client.requests[-1]["model"] == "qwen-turbo"
+
+
+@pytest.mark.asyncio
+async def test_thread_turn_rejects_an_unlisted_model_id_without_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """不在目录里的 ``model_id`` 回落到服务端默认, 而不是 400 —— 老客户端可能还在传历史值。"""
+    from tests.test_drill_grader import install_llm
+
+    client = install_llm(
+        monkeypatch,
+        generation=[json.dumps({"reply": "Any plans this weekend?", "reply_cn": "周末有安排吗?"})],
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        opened = await c.post(
+            "/api/v1/dialogue/threads",
+            json={"scene_key": "small_talk"},
+            params={"device_id": "dev-ghost"},
+        )
+        res = await c.post(
+            f"/api/v1/dialogue/threads/{opened.json()['id']}/turn",
+            json={"mode": "text", "text": "No plans", "model_id": "gpt-9-mega"},
+            params={"device_id": "dev-ghost"},
+        )
+        assert res.status_code == 200, res.text
+    assert client.requests[-1]["model"] != "gpt-9-mega"
 
 
 @pytest.mark.asyncio
@@ -76,176 +134,3 @@ async def test_app_version_force_update_false_when_min_unset(
     data = r.json()
     assert data["force_update"] is False
     assert data["min_supported_version"] == "0.0.0"
-
-
-@pytest.mark.asyncio
-async def test_dialogue_generate_falls_back_to_stub_without_credentials() -> None:
-    payload = {"scene": "small_talk", "mode": "adult", "model_id": "qwen-plus"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.post("/api/v1/dialogue/generate", json=payload)
-    data = r.json()
-    assert r.status_code == 200
-    assert data["status"] == "stub"
-    assert data["model_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_dialogue_generate_uses_mock_llm_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Stub the AsyncOpenAI client and ensure dialogue/generate consumes it."""
-    monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_base_url", "https://example.com/v1")
-    monkeypatch.setattr(settings, "llm_default_model", "qwen-plus")
-
-    class _Choice:
-        def __init__(self, content: str) -> None:
-            self.message = type("M", (), {"content": content})()
-
-    class _Resp:
-        model = "qwen-plus"
-
-        def __init__(self, content: str) -> None:
-            self.choices = [_Choice(content)]
-
-    class _Completions:
-        async def create(self, **_: object) -> _Resp:
-            return _Resp("Hello there! How is your day going?")
-
-    class _Chat:
-        completions = _Completions()
-
-    captured: dict[str, object] = {}
-
-    class _Client:
-        def with_options(self, **kwargs: object) -> _Client:
-            captured["with_options"] = kwargs
-            return self
-
-        @property
-        def chat(self) -> _Chat:
-            return _Chat()
-
-    def _factory(**_: object) -> _Client:
-        return _Client()
-
-    import app.services.llm_provider as lp
-
-    monkeypatch.setattr(lp, "AsyncOpenAI", _factory)
-    llm_provider.reset_llm_provider_for_tests()
-
-    payload = {"scene": "small_talk", "mode": "adult", "model_id": "qwen-turbo"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.post("/api/v1/dialogue/generate", json=payload)
-    data = r.json()
-    assert r.status_code == 200
-    assert data["status"] == "ready"
-    # qwen-turbo is in the curated catalog, so the requested id is honored.
-    assert data["model_id"] == "qwen-turbo"
-    assert "How is your day" in data["lines"][0]["text"]
-
-
-@pytest.mark.asyncio
-async def test_dialogue_turn_parses_llm_json_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_base_url", "https://example.com/v1")
-    monkeypatch.setattr(settings, "llm_default_model", "qwen-plus")
-
-    class _Choice:
-        def __init__(self, content: str) -> None:
-            self.message = type("M", (), {"content": content})()
-
-    class _Resp:
-        model = "qwen-plus"
-
-        def __init__(self, content: str) -> None:
-            self.choices = [_Choice(content)]
-
-    class _Completions:
-        async def create(self, **_: object) -> _Resp:
-            return _Resp('{"reply": "Great!", "suggestion": "I am glad to hear that."}')
-
-    class _Chat:
-        completions = _Completions()
-
-    class _Client:
-        def with_options(self, **_: object) -> _Client:
-            return self
-
-        @property
-        def chat(self) -> _Chat:
-            return _Chat()
-
-    def _factory(**_: object) -> _Client:
-        return _Client()
-
-    import app.services.llm_provider as lp
-
-    monkeypatch.setattr(lp, "AsyncOpenAI", _factory)
-    llm_provider.reset_llm_provider_for_tests()
-
-    payload = {
-        "scene_id": "small_talk",
-        "history": [
-            {"role": "assistant", "text": "Hi!"},
-            {"role": "user", "text": "I am fine."},
-        ],
-        "model_id": "qwen-plus",
-    }
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.post("/api/v1/dialogue/turn", json=payload)
-    data = r.json()
-    assert r.status_code == 200
-    assert data["status"] == "ready"
-    assert data["reply_text"] == "Great!"
-    assert data["suggested_reply"] == "I am glad to hear that."
-    assert data["model_id"] == "qwen-plus"
-
-
-@pytest.mark.asyncio
-async def test_dialogue_turn_reports_503_when_llm_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """上游炸了 -> **503 TURN_GENERATION_UNAVAILABLE**, 不再返回 fabricated 气泡 (D5).
-
-    旧行为是 200 + ``status="stub"`` + 目录里的下一句/写死的那两句 —— 它不但冒充生成,
-    还让第 3 轮起永远是同一句 (§0 根因三)。现在明说不可用, 客户端按码表给中文文案。
-    """
-    monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_base_url", "https://example.com/v1")
-
-    class _Completions:
-        async def create(self, **_: object) -> None:
-            raise RuntimeError("upstream down")
-
-    class _Chat:
-        completions = _Completions()
-
-    class _Client:
-        def with_options(self, **_: object) -> _Client:
-            return self
-
-        @property
-        def chat(self) -> _Chat:
-            return _Chat()
-
-    def _factory(**_: object) -> _Client:
-        return _Client()
-
-    import app.services.llm_provider as lp
-
-    monkeypatch.setattr(lp, "AsyncOpenAI", _factory)
-    llm_provider.reset_llm_provider_for_tests()
-
-    payload = {
-        "scene_id": "small_talk",
-        "history": [{"role": "user", "text": "Hi"}],
-        "model_id": "qwen-plus",
-    }
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        r = await c.post("/api/v1/dialogue/turn", json=payload)
-    assert r.status_code == 503, r.text
-    assert r.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
-    assert "reply_text" not in r.json().get("error", {})

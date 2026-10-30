@@ -3,7 +3,11 @@
 钉住四张新表 (``generation_jobs`` / ``assessment_attempts`` / ``assessment_answers``
 / ``course_progress``) 的「模型 == 迁移 == 两种方言都建得出来」这层关系; 行为契约
 (生成 job 状态机 / 测评 / 进度 upsert) 分别在 ``test_course_generator`` /
-``test_assessment`` / ``test_course_progress``。
+``test_course_progress`` (已随课程产品线退役)。
+
+v3.0 之后 ``course_progress`` 的**写入服务**随端点一起删了, 但**表与 ORM 模型故意留着**
+(这次不删表: drop 不可逆, 而产品改动并不需要它) —— 所以这里的表形状/迁移断言仍然有效,
+只有"服务怎么写这行"那部分失去了对象。
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
@@ -29,7 +33,6 @@ from app.models.db import (
     GenerationJob,
     User,
 )
-from app.services.course_progress import record_finished_session
 
 M2_REVISION = "f3b8d0716c52"
 M3_REVISION = "9d2e4c6a8f01"
@@ -137,49 +140,6 @@ async def test_generation_job_defaults(db: AsyncSession) -> None:
     await db.commit()
     assert (job.status, job.progress, job.stage_text, job.scene_id) == ("running", 0.0, "", "")
     assert job.error is None
-
-
-@pytest.mark.asyncio
-async def test_course_progress_upsert_is_dialect_native(db: AsyncSession) -> None:
-    """写侧走 ON CONFLICT: 同 (user, scene) 第二次收工是 UPDATE, 行数恒 1."""
-    user = User(device_id="dev-cp")
-    db.add(user)
-    await db.flush()
-    await record_finished_session(
-        db,
-        user_id=user.id,
-        scene_id="scene_x",
-        session_id="s1",
-        cleared=False,
-        best_total=66.0,
-        last_stage="review",
-        session_seconds=120.0,
-    )
-    await record_finished_session(
-        db,
-        user_id=user.id,
-        scene_id="scene_x",
-        session_id="s2",
-        cleared=True,
-        best_total=50.0,  # 更低 -> best_total 单调不回退
-        last_stage="review",
-        session_seconds=30.0,
-    )
-    await db.commit()
-    rows = (
-        (await db.execute(select(CourseProgressRow).where(CourseProgressRow.user_id == user.id)))
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1
-    row = rows[0]
-    assert (row.attempts, row.cleared) == (2, True)
-    assert row.best_total == 66.0
-    assert row.estimated_seconds == 150.0
-    assert row.last_session_id == "s2"
-
-
-# ------------------------------------------------------------------ 迁移正反
 
 
 def _alembic_config() -> Config:

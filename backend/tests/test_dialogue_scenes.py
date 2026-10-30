@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import User
-from app.services import dialogue_scenes
+from app.services import dialogue_scenes, thread_turn
 
 #: 身份注册用例的 device id (T4 I-1 回归; 每个用例一张全新内存库, 不与别处相撞)。
 DEV = "dev-generate-registers"
@@ -198,66 +198,75 @@ def test_derived_views_are_pure_projections_of_the_lines() -> None:
         assert scene.first_role is scene.roles[0], scene.id
 
 
-def test_scene_messages_consumes_persona_beats_and_material() -> None:
-    """扩容素材必须**有消费者** (否则素材只是一堆进不了 prompt 的死数据, §A5 的初衷)."""
-    from app.api.v1 import dialogue
+def test_group_prompt_consumes_persona_beats_and_material() -> None:
+    """扩容素材必须**有消费者** (否则素材只是一堆进不了 prompt 的死数据, §A5 的初衷).
+
+    消费者从旧的 ``dialogue._scene_messages`` 换成了 ``thread_turn.turn_messages`` ——
+    契约一个字没变: 角色表、议程、学员这句都得进 prompt。
+    """
+    from app.services import thread_store, thread_turn
 
     scene = dialogue_scenes.resolve_scene("team_meeting")
     assert scene is not None
-    system = str(dialogue._scene_messages(scene, [], [])[0].content)
-    assert scene.persona in system and scene.user_role in system
-    tail = str(dialogue._scene_messages(scene, [], [])[-1].content)
+    doc = thread_store.new_doc(scene)
+    msgs = thread_turn.turn_messages(scene, doc, "I think we should ship it.")
+    system = str(msgs[0].content)
+    tail = str(msgs[-1].content)
+
+    for role in scene.roles:
+        assert role.role_id in system and role.persona_cn in system, role.role_id
+    assert scene.user_role in system
+    assert scene.description in system
     for beat in scene.beats:
-        assert beat in tail
-    for line in scene.suggestions:
-        assert line in tail
-    # 参考句素材的**取材**措辞 (不是台本): 显式禁令在 prompt 里。
-    assert "不许原样复述" in tail
-    # openings 是开场白 (generate) 的素材, 不进台词 prompt —— 台词没有"开场"可言。
-    assert scene.openings[0] not in system
+        assert beat in system  # 议程整块进 system
+    # 群聊的两条行为契约: 谁开口 + 学员可以说中文。
+    assert "speaker" in system
+    assert "不要要求学员说英文" in system
+    assert "I think we should ship it." in tail
 
 
-def test_opening_prompt_carries_persona_and_alternates() -> None:
-    """``/dialogue/generate`` 的 LLM 分支同样吃素材: 人设 + **≥2 开场候补**都进 prompt."""
-    from app.api.v1 import dialogue
+def test_group_shape_asks_for_the_five_shared_fields_plus_two() -> None:
+    """七字段形状 = 共用的五字段 + 群聊多问的两格, 且**派生**自同一份清单 (不许漂)."""
+    from app.services import turn_generation as tg
 
-    scene = dialogue_scenes.resolve_scene("team_meeting")
+    scene = dialogue_scenes.resolve_scene("restaurant")
     assert scene is not None
-    joined = "\n".join(str(m.content) for m in dialogue._opening_prompt(scene))
-    assert scene.persona in joined
-    for opening in scene.openings:
-        assert opening in joined
-    # 措辞纪律: 候选是"自己改写"的素材, 不是播第一句的台本。
-    assert "never quote verbatim" in joined
+    doc = __import__("app.services.thread_store", fromlist=["x"]).new_doc(scene)
+    system = str(thread_turn.turn_messages(scene, doc, "hi")[0].content)
+    five = tg.json_shape(tg.GENERATION_FIELDS)
+    assert five[:-1] in system, "五字段那一份形状必须原样出现在群聊 prompt 里"
+    for extra in tg.GROUP_GENERATION_EXTRA_FIELDS:
+        assert f'"{extra}"' in system
 
 
 # ============================================================ 身份注册 (写侧落 commit)
 
 
-@pytest.mark.asyncio
-async def test_generate_registers_new_device_identity(
+async def test_opening_a_thread_commits_the_registered_device(
     client: httpx.AsyncClient, db: AsyncSession
 ) -> None:
-    """I-1 回归: ``POST /dialogue/generate`` 承诺的 device 注册必须**落库**。
+    """I-1 回归 (换到新入口): 承诺的 device 注册必须**落库**。
 
-    handler 收 ``device_id`` 就经 :func:`dialogue._identity_user` 找/建 User, 但
-    ``deps.get_db`` 的会话**不自动 commit** —— 没有显式 commit 时, ``flush`` 出来的
-    那一行随请求结束一起回滚 (探针: generate 之后新会话查 ``users`` 是 0 行)。
-    写侧先例是 ``POST /history``: 建行的路由自己 commit。
+    ``deps.get_db`` 的会话**不自动 commit** —— 没有显式 commit 时, ``flush`` 出来的那一行
+    随请求结束一起回滚 (当年的探针: 请求之后另开会话查 ``users`` 是 0 行)。写侧先例是
+    ``POST /history``: 建行的路由自己 commit。现在建 User 的是开会话这条路。
     """
     res = await client.post(
-        "/api/v1/dialogue/generate", json={"scene": "coffee_shop", "device_id": DEV}
+        "/api/v1/dialogue/threads",
+        json={"scene_key": "coffee_shop"},
+        params={"device_id": DEV},
     )
-    assert res.status_code == 200, res.text
+    assert res.status_code == 201, res.text
     rows = (await db.execute(select(User).where(User.device_id == DEV))).scalars().all()
     assert [row.device_id for row in rows] == [DEV]
 
 
 @pytest.mark.asyncio
-async def test_generate_without_identity_writes_no_user(
+async def test_thread_without_identity_is_refused_and_registers_nothing(
     client: httpx.AsyncClient, db: AsyncSession
 ) -> None:
-    """不带身份 = 旧客户端的纯无状态行为: 零建行 (注册口径只对显式给身份的请求生效)。"""
-    res = await client.post("/api/v1/dialogue/generate", json={"scene": "coffee_shop"})
-    assert res.status_code == 200, res.text
+    """会话是个人数据: 没有匿名态 (旧的 ``/dialogue/generate`` 可以, 线程端点不行)。"""
+    res = await client.post("/api/v1/dialogue/threads", json={"scene_key": "coffee_shop"})
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "IDENTITY_REQUIRED"
     assert (await db.execute(select(User))).scalars().all() == []

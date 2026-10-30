@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_sessionmaker
 from app.models.db import DialogueThread
-from app.services import dialogue_scenes, mission_engine, scene_spec_generator, thread_store
+from app.services import dialogue_scenes, scene_spec_generator, thread_store, turn_generation
 from app.services.drill_grader import GRADING_TURN_BUDGET_S, LlmUnavailableError, _judge
 from app.services.llm_provider import LlmMessage, no_thinking_body
 
@@ -263,7 +263,7 @@ def _grade_payload(judgement: ThreadGradeJudgement | None) -> dict[str, Any]:
         "score": judgement.score,
         "axes": axes,
         "comment": judgement.comment,
-        "comment_cn": mission_engine.coerce_bilingual(judgement.comment_cn),
+        "comment_cn": turn_generation.coerce_bilingual(judgement.comment_cn),
     }
 
 

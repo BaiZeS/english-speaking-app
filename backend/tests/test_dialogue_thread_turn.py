@@ -30,7 +30,7 @@ from app.api.v1 import dialogue_threads as dt
 from app.config import settings
 from app.models.db import DialogueThread
 from app.services import llm_provider, thread_audio, thread_grading, thread_store
-from app.services.mission_engine import AnchoredPronunciation
+from app.services.turn_generation import AnchoredPronunciation
 from app.services.users import lookup_user
 from tests.test_dialogue_threads import DEV_A as DEV
 from tests.test_dialogue_threads import SCENE, _open, _q
@@ -193,7 +193,7 @@ async def test_voice_turn_uses_zh_cn_and_does_not_run_ise_for_chinese(
         ise_calls.append(transcript)
         return None
 
-    monkeypatch.setattr("app.services.mission_engine.anchored_pronunciation", _no_ise)
+    monkeypatch.setattr("app.services.turn_generation.anchored_pronunciation", _no_ise)
 
     resp = await _post_turn(
         client,
@@ -233,7 +233,7 @@ async def test_voice_turn_in_english_runs_ise_and_records_pronunciation(
             word_details=[],
         )
 
-    monkeypatch.setattr("app.services.mission_engine.anchored_pronunciation", _fake_ise)
+    monkeypatch.setattr("app.services.turn_generation.anchored_pronunciation", _fake_ise)
 
     resp = await _post_turn(
         client,

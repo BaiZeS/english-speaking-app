@@ -27,11 +27,11 @@ from app.api.v1.dialogue import _resolve_scene
 from app.core.errors import AppError
 from app.models.db import DialogueThread, User
 from app.services import (
-    mission_engine,
     thread_audio,
     thread_grading,
     thread_store,
     thread_turn,
+    turn_generation,
 )
 from app.services import users as users_service
 from app.services.dialogue_scenes import DialogueScene
@@ -455,12 +455,12 @@ async def submit_turn(
     ise_task: asyncio.Task[Any] | None = None
     if audio_bytes and spoke == thread_turn.SPOKE_EN:
         ise_task = asyncio.create_task(
-            mission_engine.anchored_pronunciation(audio_bytes, learner_text)
+            turn_generation.anchored_pronunciation(audio_bytes, learner_text)
         )
 
     doc = thread_store.load_doc(row)
     try:
-        generation, _model = await mission_engine.generate_turn(
+        generation, _model = await turn_generation.generate_turn(
             thread_turn.turn_messages(scene, doc, learner_text), model_id=req.model_id
         )
     except LlmUnavailableError as exc:

@@ -15,7 +15,7 @@ session / 每次推进即 commit / 终态必落), 但**只有一步**: 产出的
 * **拆+关思考口径**: ``extra_body=no_thinking_body()`` (与台词/判分那三条新调用同一
   纪律); 生成可跟随客户端模型 (D2: 场景 spec 是生成类), 但 job 表没有承载 model id 的
   列, 所以这里恒走服务端默认 —— 课程生成作业的既有口径;
-* ``opener_cn`` (开场白的中文对照) 过 :func:`mission_engine.coerce_bilingual` 可信度门;
+* ``opener_cn`` (开场白的中文对照) 过 :func:`turn_generation.coerce_bilingual` 可信度门;
   persona/context 这类**定义性中文素材**不过门 (同 MissionSpec 的待遇)。
 
 **JSON 列纪律** (T3 钉死): ``doc`` 读要 deepcopy、写要整体换对象。
@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import re
 from datetime import UTC, datetime
 
 from loguru import logger
@@ -40,8 +42,7 @@ from app.models.scene_spec import (
     custom_scene_id,
     row_id_from_scene_id,
 )
-from app.services import mission_engine
-from app.services.course_generator import GenerationError, scene_key_for
+from app.services import turn_generation
 from app.services.dialogue_scenes import VOICES, DialogueScene, OpeningLine, SceneRole
 from app.services.drill_grader import (
     SCENE_BRIEF_JOB_BUDGET_S,
@@ -58,6 +59,21 @@ from app.services.llm_provider import LlmMessage, no_thinking_body
 SCENE_BRIEF_MAX_TOKENS = 1200
 #: 结构化生成 (定人设/排议程) 的温度 = 课程骨架同一档 (0.4); 台词的 0.7 是另一回事。
 SCENE_BRIEF_TEMPERATURE = 0.4
+
+
+class GenerationError(Exception):
+    """生成链路失败 (LLM 不可用 / 输出两次都不合规 / 内容校验不过)."""
+
+
+#: ``scene_key`` 的列宽与指纹长度 (同一用户同一段描述复用同一行, upsert 不堆场景).
+_SCENE_KEY_LEN = 40
+
+
+def scene_key_for(goal_text: str) -> str:
+    """goal_text -> 去重键 (同一用户同一目标复用同一行, upsert 不堆场景)."""
+    normalized = re.sub(r"\s+", " ", goal_text.strip().lower())
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:_SCENE_KEY_LEN]
+
 
 _JOBS: set[asyncio.Task[None]] = set()
 
@@ -119,7 +135,7 @@ async def generate_scene_spec(brief: str) -> CustomDialogueScene:
         )
     except LlmUnavailableError as exc:
         raise GenerationError(str(exc)) from exc
-    return spec.model_copy(update={"opener_cn": mission_engine.coerce_bilingual(spec.opener_cn)})
+    return spec.model_copy(update={"opener_cn": turn_generation.coerce_bilingual(spec.opener_cn)})
 
 
 # ====== job runner (照 course_generator 的骨架) ======

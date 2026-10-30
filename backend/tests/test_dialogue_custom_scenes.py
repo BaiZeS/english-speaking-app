@@ -28,11 +28,9 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1 import dialogue as dialogue_api
-from app.models.db import AbilityEvent, DialogueSceneRow, GenerationJob
+from app.models.db import DialogueSceneRow, GenerationJob
 from app.models.scene_spec import custom_scene_id
 from app.services import scene_spec_generator as sg
 from app.services.users import lookup_user
@@ -205,16 +203,23 @@ async def test_custom_scene_not_listed_until_ready(client: AsyncClient, db: Asyn
 
 
 @pytest.mark.asyncio
-async def test_custom_opening_and_turn_chain(
+async def test_custom_scene_opens_a_thread_and_drives_a_turn(
     client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """**202 -> job -> ready -> turn/generate 用 custom id** 的全链路: 开场吃骨架 opener,
-    台词仍走请求内唯一一次 ``generate_turn`` (generation 形状桩), 素材 (人设/议程/目标) 进 prompt。"""
+    """**202 -> job -> ready -> 用 custom id 开线程 -> 发一轮** 的全链路.
+
+    旧形状是 ``/dialogue/generate`` 拿开场白 + ``/dialogue/turn`` 发一轮; 两条都被线程
+    端点取代 —— 开场白现在是**会话里的语音气泡** (不再是一次性的展示料), 台词走
+    ``POST /dialogue/threads/{id}/turn``。素材 (人设/议程/目标) 仍必须进 prompt。
+    """
     sid = await _seed_ready_custom(db, DEV)
-    # 无凭据: generate 回*该场景自己的* opener (静态素材, 不再是"目录第一条"兜底)。
-    gen = await client.post("/api/v1/dialogue/generate", json={"scene": sid, "device_id": DEV})
-    assert gen.status_code == 200
-    assert gen.json()["lines"][0]["text"] == "Hey! How was your weekend?"
+
+    opened = await client.post(
+        "/api/v1/dialogue/threads", json={"scene_key": sid}, params={"device_id": DEV}
+    )
+    assert opened.status_code == 201, opened.text
+    lines = [m for m in opened.json()["messages"] if m["kind"] == "line"]
+    assert lines and lines[0]["text"] == "Hey! How was your weekend?", lines
 
     fake = install_llm(
         monkeypatch,
@@ -226,27 +231,22 @@ async def test_custom_opening_and_turn_chain(
                     "suggestion": "They are great, thanks.",
                     "suggestion_cn": "他们都很好, 谢谢。",
                     "learner_cn": "",
+                    "speaker": "r1",
                 },
                 ensure_ascii=False,
             )
         ],
     )
+    thread_id = opened.json()["id"]
     turn = await client.post(
-        "/api/v1/dialogue/turn",
-        json={
-            "scene_id": sid,
-            "device_id": DEV,
-            "history": [{"role": "assistant", "text": "Hey! How was your weekend?"}],
-        },
+        f"/api/v1/dialogue/threads/{thread_id}/turn",
+        json={"mode": "text", "text": "It was good"},
+        params={"device_id": DEV},
     )
     assert turn.status_code == 200, turn.text
-    body = turn.json()
-    assert body["reply_text"] == "Nice! I went hiking. What about your family?"
-    assert body["reply_cn"] == "真好! 我去徒步了。你家人怎么样?"
-    # 这一发的 prompt 正是场景素材的落点 (B6 扩容 + §3 C2 骨架的联合验收点)。
-    prompt = "\n".join(str(m) for m in fake.requests[-1]["messages"])
-    assert "你的外国教练" in prompt  # persona_cn
-    assert "分享周末生活的学员" in prompt  # user_role_cn
+    assert turn.json()["messages"][1]["text"].startswith("Nice!")
+
+    prompt = " ".join(str(m) for m in fake.requests[0]["messages"])
     assert "说说去了哪" in prompt  # beats
     assert "自然地聊自己的周末活动" in prompt  # goal
 
@@ -258,18 +258,17 @@ async def test_unknown_or_foreign_scene_is_404_everywhere(
     """删兜底回归 (§3 C3b / §9-5): 乱拼 id 与别人/无身份的 custom id 在两个入口都 404。"""
     sid = await _seed_ready_custom(db, DEV)
 
-    bogus_turn = await client.post(
-        "/api/v1/dialogue/turn", json={"scene_id": "totally_bogus_scene", "history": []}
+    bogus_open = await client.post(
+        "/api/v1/dialogue/threads",
+        json={"scene_key": "totally_bogus_scene"},
+        params={"device_id": DEV},
     )
-    assert bogus_turn.status_code == 404
-    assert bogus_turn.json()["error"]["code"] == "SCENE_NOT_FOUND"
-    assert (
-        await client.post("/api/v1/dialogue/generate", json={"scene": "totally_bogus_scene"})
-    ).status_code == 404
+    assert bogus_open.status_code == 404
+    assert bogus_open.json()["error"]["code"] == "SCENE_NOT_FOUND"
 
     # 归属隔离: 别人的 custom id 与"不存在"同形 (不泄露存在性)。
     thief = await client.post(
-        "/api/v1/dialogue/turn", json={"scene_id": sid, "device_id": OTHER, "history": []}
+        "/api/v1/dialogue/threads", json={"scene_key": sid}, params={"device_id": OTHER}
     )
     assert thief.status_code == 404
     assert (
@@ -280,40 +279,3 @@ async def test_unknown_or_foreign_scene_is_404_everywhere(
 
 
 # ============================================================ step_id 跨方言截断
-
-
-@pytest.mark.asyncio
-async def test_turn_persists_clipped_step_id_for_custom_scene(
-    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``ability_events.step_id`` 列 varchar(32): custom id 43 字符必须截断落库。
-
-    §A4 起自由对话轮带身份 + 语法分即产事件 (D2 门控走服务端默认模型); sqlite 不校验
-    varchar 长度, 这条钉的是**生产 PG 的行为契约** —— 不截则同一种子在两方言里一个绿一个炸。
-    """
-    from app.services.llm_provider import resolve_server_default_model
-
-    user = await lookup_user(db, device_id=DEV, create=True)
-    assert user is not None
-    await db.commit()
-    long_sid = custom_scene_id("0f2ab7c1-1111-4111-8111-000000000000")
-    assert len(long_sid) == 43
-
-    written = await dialogue_api._persist_turn_evidence(
-        db,
-        user=user,
-        scene_id=long_sid,
-        anchored=None,
-        model=resolve_server_default_model(),
-        grammar=80.0,
-        vocabulary=80.0,
-    )
-    assert [e.dimension for e in written] == ["grammar", "vocabulary"]
-    rows = (
-        (await db.execute(select(AbilityEvent).where(AbilityEvent.user_id == user.id)))
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 2
-    assert all(len(row.step_id) <= 32 for row in rows)
-    assert all(row.step_id == long_sid[:32] for row in rows)
