@@ -3,7 +3,11 @@
 钉住四张新表 (``generation_jobs`` / ``assessment_attempts`` / ``assessment_answers``
 / ``course_progress``) 的「模型 == 迁移 == 两种方言都建得出来」这层关系; 行为契约
 (生成 job 状态机 / 测评 / 进度 upsert) 分别在 ``test_course_generator`` /
-``test_assessment`` / ``test_course_progress``。
+``test_course_progress`` (已随课程产品线退役)。
+
+v3.0 之后 ``course_progress`` 的**写入服务**随端点一起删了, 但**表与 ORM 模型故意留着**
+(这次不删表: drop 不可逆, 而产品改动并不需要它) —— 所以这里的表形状/迁移断言仍然有效,
+只有"服务怎么写这行"那部分失去了对象。
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
@@ -29,12 +33,13 @@ from app.models.db import (
     GenerationJob,
     User,
 )
-from app.services.course_progress import record_finished_session
 
 M2_REVISION = "f3b8d0716c52"
 M3_REVISION = "9d2e4c6a8f01"
 #: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
 T4_REVISION = "c3b7e5a91d24"
+V3_REVISION = "e7a2c4f0b913"  # v3.0 dialogue_threads: 当前链尾
+
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
@@ -137,49 +142,6 @@ async def test_generation_job_defaults(db: AsyncSession) -> None:
     assert job.error is None
 
 
-@pytest.mark.asyncio
-async def test_course_progress_upsert_is_dialect_native(db: AsyncSession) -> None:
-    """写侧走 ON CONFLICT: 同 (user, scene) 第二次收工是 UPDATE, 行数恒 1."""
-    user = User(device_id="dev-cp")
-    db.add(user)
-    await db.flush()
-    await record_finished_session(
-        db,
-        user_id=user.id,
-        scene_id="scene_x",
-        session_id="s1",
-        cleared=False,
-        best_total=66.0,
-        last_stage="review",
-        session_seconds=120.0,
-    )
-    await record_finished_session(
-        db,
-        user_id=user.id,
-        scene_id="scene_x",
-        session_id="s2",
-        cleared=True,
-        best_total=50.0,  # 更低 -> best_total 单调不回退
-        last_stage="review",
-        session_seconds=30.0,
-    )
-    await db.commit()
-    rows = (
-        (await db.execute(select(CourseProgressRow).where(CourseProgressRow.user_id == user.id)))
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1
-    row = rows[0]
-    assert (row.attempts, row.cleared) == (2, True)
-    assert row.best_total == 66.0
-    assert row.estimated_seconds == 150.0
-    assert row.last_session_id == "s2"
-
-
-# ------------------------------------------------------------------ 迁移正反
-
-
 def _alembic_config() -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
@@ -229,7 +191,7 @@ def test_m3_upgrade_downgrade_on_sqlite(tmp_path: Path, monkeypatch: pytest.Monk
     command.upgrade(cfg, "head")
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) | set(M3_TABLES) <= names
-    assert _version(url) == T4_REVISION  # head = T4 (M3 之上还有一步)
+    assert _version(url) == V3_REVISION  # head = v3.0 (M3 + T4 之上还有一步)
     assert "ux_assessment_answers_attempt_question" in indexes
     assert "error" in columns["generation_jobs"]
     assert "estimated_seconds" in columns["course_progress"]
@@ -264,7 +226,7 @@ def test_m3_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_single_head_chains_m1_m2_m3() -> None:
     """单 head + 挂链正确: T4 修 M3(T5), M3 修 M2(T4), M2 修 M1, M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [T4_REVISION]
+    assert script.get_heads() == [V3_REVISION]
     assert script.get_revision(T4_REVISION).down_revision == M3_REVISION
     assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == "c9a1f4e7b208"

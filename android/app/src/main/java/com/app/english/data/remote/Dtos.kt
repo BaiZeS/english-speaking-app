@@ -4,152 +4,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class LessonSummaryDto(
-    val id: Int,
-    val book: String,
-    @SerialName("lesson_no") val lessonNo: Int,
-    val title: String,
-    @SerialName("role_count") val roleCount: Int,
-    @SerialName("duration_s") val durationS: Double
-)
-
-@Serializable
-data class LineDto(
-    val id: String,
-    val text: String,
-    val translation: String? = null,
-    val ipa: String? = null
-)
-
-@Serializable
-data class RoleDto(val name: String, val lines: List<LineDto>)
-
-@Serializable
-data class LessonDetailDto(
-    val id: Int,
-    val book: String,
-    @SerialName("lesson_no") val lessonNo: Int,
-    val title: String,
-    val roles: List<RoleDto>
-)
-
-@Serializable
 data class TtsResponseDto(
     @SerialName("audio_url") val audioUrl: String,
     @SerialName("duration_ms") val durationMs: Int,
     // "mimo"=真实合成, "stub"=占位假音频 (未配 MIMO_API_KEY). 旧后端无此字段时取默认值.
     val source: String = "stub"
-)
-
-@Serializable
-data class WordScoreDto(val word: String, val score: Double, val ipa: String? = null)
-
-/**
- * Score request. Backend declares `audio: bytes` which, in a JSON body,
- * Pydantic decodes from a base64-encoded string. We therefore send audio
- * as a base64 string (Base64.NO_WRAP), capped at 10MB decoded.
- *
- * `lessonId`/`lineId` are optional: the word drill submits a bare word with
- * `category = "read_word"` and no lesson context, while line-based practice
- * keeps the existing shape.
- */
-@Serializable
-data class ScoreRequestDto(
-    @SerialName("lesson_id") val lessonId: Int? = null,
-    @SerialName("line_id") val lineId: String? = null,
-    @SerialName("ref_text") val refText: String,
-    val mode: String = "k12",
-    val category: String = "read_sentence",
-    val audio: String
-)
-
-@Serializable
-data class ScoreResponseDto(
-    val total: Double,
-    val pronunciation: Double,
-    val fluency: Double,
-    val completeness: Double,
-    @SerialName("word_details") val wordDetails: List<WordScoreDto>,
-    val suggestion: String? = null,
-    // "xunfei"=真实讯飞评测, "stub"=占位假分 (未配凭据/调用失败). 旧后端无此字段时取默认值.
-    val source: String = "stub"
-)
-
-@Serializable
-data class DialogueLineDto(
-    val id: String,
-    val role: String,
-    val text: String,
-    val translation: String? = null,
-    @SerialName("is_user") val isUser: Boolean = false
-)
-
-@Serializable
-data class DialogueGenerateRequestDto(
-    val scene: String,
-    val mode: String = "adult",
-    @SerialName("model_id") val modelId: String? = null,
-    // §3 C3b add-only (B4 身份线): 打开**自定义场景**的开场白需要归属身份; 目录场景
-    // 不带也能开 (服务端 `_identity_user` 缺两个键就是旧客户端的纯无状态行为)。
-    @SerialName("device_id") val deviceId: String? = null,
-    @SerialName("user_id") val userId: String? = null
-)
-
-@Serializable
-data class DialogueGenerateResponseDto(
-    @SerialName("scene_id") val sceneId: String,
-    val status: String,
-    val title: String,
-    val lines: List<DialogueLineDto>,
-    @SerialName("suggested_reply") val suggestedReply: String,
-    @SerialName("model_id") val modelId: String? = null
-)
-
-@Serializable
-data class DialogueMessageDto(val role: String, val text: String)
-
-@Serializable
-data class DialogueTurnRequestDto(
-    @SerialName("scene_id") val sceneId: String,
-    val history: List<DialogueMessageDto>,
-    @SerialName("user_audio_b64") val userAudioB64: String = "",
-    @SerialName("model_id") val modelId: String? = null,
-    // v2.0 P3 add-only: 带身份则本轮证据进能力画像, 不带与旧版逐字节一致。
-    @SerialName("device_id") val deviceId: String? = null,
-    @SerialName("user_id") val userId: String? = null,
-    /**
-     * §A4/A5 add-only (D5 裁决): 回**最近已经展示过的参考句** (≤8, 服务端还会再截断)。
-     * 自由对话没有会话表、`suggestedReply` 每轮被覆盖, 所以只能由客户端把这句带回去,
-     * 服务端才知道"哪几句已经给过了"才能真防复写。不带也能跑 (退化成只看 Coach 台词)。
-     */
-    @SerialName("shown_suggestions") val shownSuggestions: List<String> = emptyList()
-)
-
-@Serializable
-data class DialogueTurnResponseDto(
-    val status: String,
-    @SerialName("reply_text") val replyText: String,
-    @SerialName("reply_audio_url") val replyAudioUrl: String? = null,
-    @SerialName("suggested_reply") val suggestedReply: String,
-    @SerialName("recognized_text") val recognizedText: String? = null,
-    @SerialName("model_id") val modelId: String? = null,
-    // ---- §A4 (D4 双语) add-only: 空串 = 那一行不渲染, 绝不机翻占位 ----
-    @SerialName("reply_cn") val replyCn: String = "",
-    @SerialName("suggestion_cn") val suggestionCn: String = "",
-    @SerialName("learner_cn") val learnerCn: String = ""
-)
-
-@Serializable
-data class HistoryWriteRequestDto(
-    @SerialName("device_id") val deviceId: String,
-    @SerialName("book") val book: String = "nce1",
-    @SerialName("lesson_id") val lessonId: Int,
-    @SerialName("line_id") val lineId: String,
-    @SerialName("audio_path") val audioPath: String,
-    @SerialName("score_total") val scoreTotal: Double,
-    @SerialName("score_pronunciation") val scorePronunciation: Double,
-    @SerialName("score_fluency") val scoreFluency: Double,
-    @SerialName("score_completeness") val scoreCompleteness: Double
 )
 
 @Serializable
@@ -176,50 +35,26 @@ data class AppVersionResponseDto(
 )
 
 @Serializable
-data class HistoryItemDto(
-    val id: String,
-    @SerialName("book") val book: String = "nce1",
-    @SerialName("lesson_id") val lessonId: Int,
-    @SerialName("line_id") val lineId: String,
-    // P8·2f (§5.7): "lesson" | "scene_course"; 旧后端没有这两个键 -> 默认值兜底。
-    val kind: String = "lesson",
-    // 人读标题: 情景课行 = 「课名 · 实战对话」, 课本行 = line_id。空 = 后端未升级。
-    val label: String = "",
-    @SerialName("score_total") val scoreTotal: Double,
-    @SerialName("score_pronunciation") val scorePronunciation: Double,
-    @SerialName("score_fluency") val scoreFluency: Double,
-    @SerialName("score_completeness") val scoreCompleteness: Double,
-    @SerialName("created_at") val createdAt: String
-)
-
-@Serializable
-data class BookDto(
-    val id: String,
-    @SerialName("display_name") val displayName: String,
-    val description: String,
-    val level: String,
-    @SerialName("lesson_count") val lessonCount: Int
-)
-
-@Serializable
-data class BooksResponseDto(
-    val books: List<BookDto>,
-    @SerialName("default_book") val defaultBook: String
-)
-
-/**
- * `GET /dialogue/scenes` 的目录条目。`title`/`description` 是中文卡片文案,
- * `title_en`/`description_en` 是 D4 要求的英文对照 (自定义场景那两格是空串 =
- * 那一行不渲染); `kind` 区分内置目录与学员自己描的场景 (§3 C3b)。
- */
-@Serializable
 data class DialogueSceneDto(
     val id: String,
     val title: String,
     val description: String,
     @SerialName("title_en") val titleEn: String = "",
     @SerialName("description_en") val descriptionEn: String = "",
-    val kind: String = "catalog"
+    val kind: String = "catalog",
+    /** v3.0 群聊: 这一场的 AI 角色 (2-3 个)。会话列表摆头像组、聊天页把气泡上的
+     * `role_id` 翻译成人, 都读这里。旧 APK `ignoreUnknownKeys`, 多出来的键不炸解析。 */
+    val roles: List<SceneRoleDto> = emptyList(),
+    @SerialName("user_role") val userRole: String = ""
+)
+
+/** 群聊里的一个 AI 角色; `voice` 是后端 TTS 音色, 客户端只透传给 `/tts` 兜底请求。 */
+@Serializable
+data class SceneRoleDto(
+    @SerialName("role_id") val roleId: String = "",
+    val name: String = "",
+    @SerialName("name_en") val nameEn: String = "",
+    val voice: String = ""
 )
 
 @Serializable
@@ -237,94 +72,4 @@ data class CustomSceneRequestDto(
     @SerialName("scene_brief") val sceneBrief: String,
     @SerialName("device_id") val deviceId: String? = null,
     @SerialName("user_id") val userId: String? = null
-)
-
-@Serializable
-data class DailyScoreDto(
-    val date: String,
-    @SerialName("avg_total") val avgTotal: Double,
-    @SerialName("avg_pronunciation") val avgPronunciation: Double,
-    @SerialName("avg_fluency") val avgFluency: Double,
-    @SerialName("avg_completeness") val avgCompleteness: Double,
-    val sessions: Int
-)
-
-@Serializable
-data class StatsResponseDto(
-    @SerialName("total_sessions") val totalSessions: Int,
-    @SerialName("avg_total") val avgTotal: Double,
-    @SerialName("avg_pronunciation") val avgPronunciation: Double,
-    @SerialName("avg_fluency") val avgFluency: Double,
-    @SerialName("avg_completeness") val avgCompleteness: Double,
-    @SerialName("best_total") val bestTotal: Double,
-    @SerialName("recent_sessions") val recentSessions: Int,
-    @SerialName("streak_days") val streakDays: Int,
-    val daily: List<DailyScoreDto>,
-    @SerialName("lessons_attempted") val lessonsAttempted: List<Int>,
-    @SerialName("weakest_lessons") val weakestLessons: List<WeakestLessonDto> = emptyList()
-)
-
-@Serializable
-data class LessonProgressDto(
-    @SerialName("book") val book: String = "nce1",
-    @SerialName("lesson_id") val lessonId: Int,
-    @SerialName("attempt_count") val attemptCount: Int,
-    @SerialName("best_score") val bestScore: Double,
-    @SerialName("last_score") val lastScore: Double,
-    @SerialName("last_practiced_at") val lastPracticedAt: String? = null
-)
-
-@Serializable
-data class WeakestLessonDto(
-    @SerialName("book") val book: String = "nce1",
-    @SerialName("lesson_id") val lessonId: Int,
-    // P8·2b: 服务端给的人读标题 (「书名 · 第N课」/「课名 · 实战对话」), 可选键。
-    val label: String = "",
-    @SerialName("best_score") val bestScore: Double,
-    @SerialName("avg_score") val avgScore: Double,
-    val attempts: Int
-)
-
-/**
- * `GET /scenes` 载荷(计划 §5.3 目录与画廊)。后端契约:
- * `backend/app/services/scene_store.py::ScenesPage`。
- *
- * 所有可选字段都带默认值 —— 存量后端没有 /scenes 时整段会 404(仓库层报错),
- * 而后端后续加/减字段时客户端不该因此解码失败。
- */
-@Serializable
-data class ScenesResponseDto(
-    val categories: List<SceneCategoryStatDto> = emptyList(),
-    val scenes: List<SceneSummaryDto> = emptyList(),
-    val total: Int = 0,
-    // 计划里提到 default_scene, 当前后端 ScenesPage 尚未返回该键 —— 保持可选。
-    @SerialName("default_scene") val defaultScene: String? = null
-)
-
-@Serializable
-data class SceneCategoryStatDto(
-    val id: String,
-    @SerialName("label_cn") val labelCn: String = "",
-    val count: Int = 0
-)
-
-@Serializable
-data class SceneSummaryDto(
-    val id: String,
-    val source: String = "curated",
-    val category: String = "",
-    val title: String = "",
-    @SerialName("subtitle_en") val subtitleEn: String = "",
-    val level: String = "",
-    @SerialName("est_minutes") val estMinutes: Int = 0,
-    @SerialName("brief_cn") val briefCn: String = "",
-    val skills: List<String> = emptyList(),
-    @SerialName("vocab_count") val vocabCount: Int = 0,
-    @SerialName("briefing_count") val briefingCount: Int = 0,
-    @SerialName("task_count") val taskCount: Int = 0,
-    @SerialName("required_task_count") val requiredTaskCount: Int = 0,
-    @SerialName("max_turns") val maxTurns: Int = 0,
-    val cleared: Boolean = false,
-    @SerialName("best_total") val bestTotal: Double = 0.0,
-    val attempts: Int = 0
 )

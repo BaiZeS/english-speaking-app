@@ -61,46 +61,25 @@ def _hermetic_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_detached_review_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """收工 (202) 不真的 ``create_task`` 派生总评文案作业: 测试自己 ``await`` runner.
+def _no_detached_thread_grading_jobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """v3.0 每轮评分作业不真的 ``create_task`` 派生 —— 口径与其余作业替身完全一致.
 
-    §P6 之后 ``POST /sessions/{id}/finish-mission`` 与到轮次上限的自动收工都会派生一个
-    后台任务。让它真跑起来会在**用例结束、内存 sqlite 被 dispose 之后**仍然去开一个
-    AsyncSession, 于是收到的是 ``no active connection`` 这种和的产品无关的噪声 (踩过一次:
-    报错出现在 teardown 栈里, 看着像数据库坏了)。换成 no-op 之后:
+    * 断言"这一轮派生了判分作业"的用例: 直接用本 fixture 返回的调用清单;
+    * 断言判分终态的用例: 自己 ``await thread_grading.run_thread_grading_job(id, uid)``。
 
-    * 断言"202 派生了作业"的用例: 自己 monkeypatch 本函数记调用 (:func:`_record_spawns`);
-    * 断言作业终态的用例: 直接 ``await course_sessions.run_review_copy_job(sid)``
-      —— 与 ``test_course_generator`` 驱动 ``run_generation_job`` 的同一手法。
+    让它真跑起来会在用例结束、内存 sqlite 被 dispose 之后再去开一个 AsyncSession,
+    收到的报错长得像"数据库坏了" (同 ``_no_detached_scene_brief_jobs`` 记的那次踩坑);
+    更糟的是它会和用例自己的直接调用**抢同一颗评分卡**。
     """
-    from app.api.v1 import course_sessions
+    from app.api.v1 import dialogue_threads
 
-    monkeypatch.setattr(course_sessions, "spawn_review_copy_job", lambda session_id: False)
-
-
-@pytest.fixture(autouse=True)
-def _no_detached_grading_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """实战轮判分作业 (§A3) 同理不真的 ``create_task`` 派生: 口径与上面那个替身完全一致.
-
-    * 断言"派生了一个判分作业"的用例: 自己 monkeypatch 记调用;
-    * 断言判分终态的用例: 直接 ``await course_sessions.run_mission_grading_job(sid)``
-      —— 这也是 ``tests/test_grading_async.py`` 的手法。
-    """
-    from app.api.v1 import course_sessions
-
-    monkeypatch.setattr(course_sessions, "spawn_mission_grading_job", lambda session_id: False)
-
-
-@pytest.fixture(autouse=True)
-def _no_detached_judge_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
-    """判级 (202) 不真的 ``create_task`` 派作业: 口径同上面的总评作业替身.
-
-    * 断言"202 派生了判级作业"的用例: 自己 monkeypatch 记调用;
-    * 断言判级终态的用例: 直接 ``await assessment.run_assessment_judge_job(attempt_id)``。
-    """
-    from app.api.v1 import assessment
-
-    monkeypatch.setattr(assessment, "spawn_assessment_judge_job", lambda attempt_id: False)
+    spawned: list[str] = []
+    monkeypatch.setattr(
+        dialogue_threads.thread_grading,
+        "spawn_thread_grading",
+        lambda tid, uid: spawned.append(tid),
+    )
+    return spawned
 
 
 @pytest.fixture(autouse=True)

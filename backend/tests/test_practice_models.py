@@ -54,6 +54,8 @@ M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_dif
 M3_REVISION = "9d2e4c6a8f01"
 #: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
 T4_REVISION = "c3b7e5a91d24"
+V3_REVISION = "e7a2c4f0b913"  # v3.0 dialogue_threads: 当前链尾
+
 M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "app" / "db" / "migrations"
@@ -324,7 +326,7 @@ def test_m1_then_m2_upgrade_downgrade_on_sqlite(
     command.upgrade(cfg, "head")  # M2 + (T5 的) M3 + (T4 的) 场景表 一起上来
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) | set(M3_TABLES) <= names
-    assert _version(url) == T4_REVISION
+    assert _version(url) == V3_REVISION
     assert "ix_ability_events_user_created" in indexes
     assert "ix_expressions_user_normalized" in indexes
 
@@ -383,7 +385,7 @@ def test_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_single_head_chains_m1_then_m2() -> None:
     """单 head + 挂链正确: T4 修 M3(T5), M3 修 M2(T4), M2 修 M1(T3), M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [T4_REVISION]
+    assert script.get_heads() == [V3_REVISION]
     assert script.get_revision(T4_REVISION).down_revision == M3_REVISION
     assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == M1_REVISION

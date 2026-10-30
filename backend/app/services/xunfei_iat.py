@@ -69,17 +69,22 @@ def _build_auth_url() -> str:
     return f"{_IAT_URL}?{params}"
 
 
-def _build_first_frame(first_chunk: bytes, *, last: bool) -> dict[str, object]:
+def _build_first_frame(
+    first_chunk: bytes, *, last: bool, language: str = "en_us"
+) -> dict[str, object]:
     """第一帧: 建会话 + 首块音频.
 
     文档要求第一块音频必须随首帧上传且带 format/encoding (否则 10165
     status 非法). accent 为必传字段, 非中文统一 mandarin. 音频只有一帧时
     首帧即末帧, status 直接给 2.
+
+    language 默认 en_us: 既有调用方 (自由对话旧链路 / mission 轮) 全靠默认
+    值, 零改动保持原行为; 需要中英混读听写的链路显式传 zh_cn.
     """
     return {
         "common": {"app_id": settings.xunfei_app_id},
         "business": {
-            "language": "en_us",
+            "language": language,
             "domain": "iat",
             "accent": "mandarin",
         },
@@ -135,7 +140,7 @@ def finalize_wpgs(segments: dict[int, str]) -> str:
 class XunfeiIatProvider:
     """讯飞 IAT 语音听写 provider. 缺凭证/空音频/任何失败一律返回 None."""
 
-    async def transcribe(self, pcm: bytes) -> str | None:
+    async def transcribe(self, pcm: bytes, *, language: str = "en_us") -> str | None:
         if not (settings.xunfei_app_id and settings.xunfei_api_key and settings.xunfei_api_secret):
             logger.debug("xunfei iat skipped: credentials not configured")
             return None
@@ -143,7 +148,7 @@ class XunfeiIatProvider:
             return None
 
         try:
-            text = await self._transcribe(pcm)
+            text = await self._transcribe(pcm, language=language)
         except Exception as e:
             logger.error("xunfei iat call failed: {}", e)
             return None
@@ -154,7 +159,7 @@ class XunfeiIatProvider:
         logger.info("xunfei iat ok text={!r}", text[:60])
         return text
 
-    async def _transcribe(self, pcm: bytes) -> str:
+    async def _transcribe(self, pcm: bytes, *, language: str = "en_us") -> str:
         """流式发送 PCM 到 IAT, 用 wpgs 规则累积并返回最终文本."""
         frames = _audio_frames(pcm)
         if not frames:
@@ -191,7 +196,11 @@ class XunfeiIatProvider:
             recv_task = asyncio.create_task(receiver())
             try:
                 # 1. 首帧: 建会话 + 首块音频 (status=0; 单帧音频直接 status=2)
-                await ws.send(json.dumps(_build_first_frame(frames[0], last=len(frames) == 1)))
+                await ws.send(
+                    json.dumps(
+                        _build_first_frame(frames[0], last=len(frames) == 1, language=language)
+                    )
+                )
                 await asyncio.sleep(_FRAME_PACE_S)
                 # 2. 后续音频帧: data.status 1=中间帧, 2=末帧; 每帧必带 format/encoding
                 for idx, chunk in enumerate(frames[1:], start=1):

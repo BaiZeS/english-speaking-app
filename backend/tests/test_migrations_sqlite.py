@@ -24,8 +24,10 @@ from app.config import settings
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 #: T4 新增的那个 revision (dialogue_scenes + generation_jobs.kind); 它必须接在
-#: T4 动手时的 head ``9d2e4c6a8f01`` 之后, 且是当前唯一 head。
+#: T4 动手时的 head ``9d2e4c6a8f01`` 之后。
 T4_REVISION = "c3b7e5a91d24"
+#: v3.0 会话线程 (dialogue_threads) —— 当前 head, 父节点是 T4 那个 revision。
+V3_REVISION = "e7a2c4f0b913"
 
 EXPECTED_TABLES = {
     "users",
@@ -44,6 +46,7 @@ EXPECTED_TABLES = {
     "assessment_attempts",
     "assessment_answers",
     "course_progress",
+    "dialogue_threads",
     "alembic_version",
 }
 
@@ -100,17 +103,19 @@ def _unique_indexes(db_path: Path, table: str) -> set[tuple[str, ...]]:
 
 
 def test_alembic_head_is_the_t4_revision(monkeypatch: pytest.MonkeyPatch) -> None:
-    """链条必须仍是**单线**, 且 T4 的 revision 挂在当时的 head 上 (§3 C1 的硬要求).
+    """链条必须仍是**单线**, 且 v3.0 的 revision 挂在 T4 那个 head 上。
 
-    计划原文: ``down_revision = "9d2e4c6a8f01"`` (T4 动手时的 head)。这条不写死父节点
-    字符串去对, 而是问 ScriptDirectory 要真值: head 只要不是这一个 (有人插了分支 /
-    改了父节点 / 又叠了迁移却没改本用例) 就红 —— 顺便钉住"新 revision 真的接进去了"。
+    head 只要不是这一个 (有人插了分支 / 改了父节点 / 又叠了迁移却没改本用例) 就红 ——
+    顺便钉住"新 revision 真的接进去了"。父节点写死对撞: ``e7a2c4f0b913`` 必须直接接在
+    ``c3b7e5a91d24`` 之后, 中间不许有人插队 (插队会让生产 auto-upgrade 的链路形状
+    与本仓测试的形状不再是同一张图)。
     """
     from alembic.script import ScriptDirectory
 
     cfg = _alembic_config("sqlite://", monkeypatch)
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_heads() == [T4_REVISION], f"heads={script.get_heads()}"
+    assert script.get_heads() == [V3_REVISION], f"heads={script.get_heads()}"
+    assert script.get_revision(V3_REVISION).down_revision == T4_REVISION
     assert script.get_revision(T4_REVISION).down_revision == "9d2e4c6a8f01"
 
 
@@ -125,7 +130,8 @@ def test_sqlite_new_dialogue_scene_table_and_job_kind_column(
     """
     db = tmp_path / "t4.db"
     cfg = _alembic_config(f"sqlite:///{db}", monkeypatch)
-    command.upgrade(cfg, "head")
+    # 定点升降而不是 ``head`` + ``-1``: head 已经轮到 v3.0 了, "-1" 降的是那一层。
+    command.upgrade(cfg, T4_REVISION)
 
     assert "dialogue_scenes" in _table_names(db)
     index_cols = _unique_indexes(db, "dialogue_scenes")
@@ -134,11 +140,11 @@ def test_sqlite_new_dialogue_scene_table_and_job_kind_column(
     assert kind is not None and kind[0].upper() == "VARCHAR(32)"
     assert "course" in kind[1], f"kind 的 server_default 丢了: {kind}"
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "9d2e4c6a8f01")
     assert "dialogue_scenes" not in _table_names(db)
     assert "kind" not in _table_columns(db, "generation_jobs")
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, T4_REVISION)
     assert "dialogue_scenes" in _table_names(db)
     assert "kind" in _table_columns(db, "generation_jobs")
 
@@ -195,3 +201,30 @@ def test_sqlite_fk_downgrade_recreates_constraint_and_keeps_rows(
 
     command.upgrade(cfg, "head")
     assert ("lesson_id", "lessons") not in _history_fks(db)
+
+
+def test_sqlite_v3_dialogue_threads_table_roundtrip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``dialogue_threads`` 单独一步的升/降/再升 (v3.0 会话线程).
+
+    钉三件生产会踩的事:
+    * ``(user_id, scene_key)`` 唯一索引在 —— 幂等开会话 ("一个场景一条会话") 的前提;
+    * ``revision`` 有 ``server_default`` 且 NOT NULL —— 乐观锁列空着建不出行;
+    * 降一步表真的没了、再升真的回来 (双向可逆)。
+    """
+    db = tmp_path / "v3.db"
+    cfg = _alembic_config(f"sqlite:///{db}", monkeypatch)
+    command.upgrade(cfg, "head")
+
+    assert "dialogue_threads" in _table_names(db)
+    assert ("user_id", "scene_key") in _unique_indexes(db, "dialogue_threads")
+    revision_col = _table_columns(db, "dialogue_threads").get("revision")
+    assert revision_col is not None and revision_col[0].upper() == "INTEGER", revision_col
+    assert "1" in revision_col[1], f"revision 的 server_default 丢了: {revision_col}"
+
+    command.downgrade(cfg, "-1")
+    assert "dialogue_threads" not in _table_names(db)
+
+    command.upgrade(cfg, "head")
+    assert "dialogue_threads" in _table_names(db)

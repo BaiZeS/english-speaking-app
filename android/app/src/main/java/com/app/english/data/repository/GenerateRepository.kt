@@ -1,55 +1,35 @@
 package com.app.english.data.repository
 
-import com.app.english.data.local.CourseCacheDao
-import com.app.english.data.local.CourseCacheEntity
 import com.app.english.data.local.SettingsStore
 import com.app.english.data.remote.CustomSceneRequestDto
 import com.app.english.data.remote.EnglishApi
-import com.app.english.data.remote.GenerateSceneRequestDto
-import com.app.english.data.remote.SceneCourseDto
 import com.app.english.data.remote.toDomain
 import com.app.english.domain.model.GenerationJob
-import com.app.english.domain.model.SceneCourseDetail
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 /**
- * 课程生成链路(计划 §5.3): 一句目标 -> 202 + job_id -> 轮询 jobs -> ready。
+ * 自定义场景的生成链路: 一句话描述 -> 202 + job_id -> 轮询 -> ready。
  *
- * 生成课就绪时把整课 JSON 快照进 Room `course_cache`(T5 报告: 本机配额下全课
- * 5-10 分钟, 生成一次不容易), 详情页断网时可以从缓存回落。
+ * 轮询端点 `GET /scenes/jobs/{jobId}` 与已退役的整课生成共用同一张 job 表, 所以
+ * [pollJob] 是**唯一**的轮询通道 —— 别再为自定义场景开第二条。就绪后重打一次
+ * 场景目录就能看到新场景 (目录按归属合并 `kind="custom"`)。
+ *
+ * 整课生成时代的 `course_cache` 本地快照回落已经随课程产品线删除: 生成一门课要
+ * 5-10 分钟所以当年值得缓存, 生成一页对话骨架只要几十秒且失败可以重描。
  */
 interface GenerateRepository {
-    suspend fun startGeneration(goalText: String): String
-
-    /**
-     * 描一个自定义**对话场景** -> job id (§3 C3)。与整课生成共用 job 表与轮询端点,
-     * 所以接着调 [pollJob] 就是全部轮询机制 (没有第二条轮询通道)。
-     */
+    /** 描一个自定义对话场景 -> job id。 */
     suspend fun startCustomScene(sceneBrief: String): String
 
     suspend fun pollJob(jobId: String): GenerationJob
-
-    /** 详情读路径: 网络优先, 失败回落 course_cache 快照(没有缓存则原样抛)。 */
-    suspend fun getScene(sceneId: String): SceneCourseDetail
-
-    /** 删除自己的生成课并清本地快照。 */
-    suspend fun deleteScene(sceneId: String)
 }
 
 @Singleton
 class GenerateRepositoryImpl @Inject constructor(
     private val api: EnglishApi,
-    private val settingsStore: SettingsStore,
-    private val courseCacheDao: CourseCacheDao,
-    private val json: Json
+    private val settingsStore: SettingsStore
 ) : GenerateRepository {
-
-    override suspend fun startGeneration(goalText: String): String = api.generateScene(
-        GenerateSceneRequestDto(deviceId = settingsStore.deviceId, goalText = goalText)
-    ).jobId
 
     override suspend fun startCustomScene(sceneBrief: String): String = api.createCustomScene(
         CustomSceneRequestDto(sceneBrief = sceneBrief, deviceId = settingsStore.deviceId)
@@ -57,26 +37,4 @@ class GenerateRepositoryImpl @Inject constructor(
 
     override suspend fun pollJob(jobId: String): GenerationJob =
         api.getGenerationJob(jobId, settingsStore.deviceId).toDomain()
-
-    override suspend fun getScene(sceneId: String): SceneCourseDetail = try {
-        api.getScene(sceneId, settingsStore.deviceId).also { cacheDto(sceneId, it) }.toDomain()
-    } catch (e: Exception) {
-        val cached = courseCacheDao.get(sceneId) ?: throw e
-        json.decodeFromString<SceneCourseDto>(cached.docJson).toDomain()
-    }
-
-    private suspend fun cacheDto(sceneId: String, dto: SceneCourseDto) {
-        courseCacheDao.put(
-            CourseCacheEntity(
-                sceneId = sceneId,
-                docJson = json.encodeToString(dto),
-                savedAtMillis = System.currentTimeMillis()
-            )
-        )
-    }
-
-    override suspend fun deleteScene(sceneId: String) {
-        api.deleteScene(sceneId, settingsStore.deviceId)
-        courseCacheDao.delete(sceneId)
-    }
 }

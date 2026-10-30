@@ -45,6 +45,28 @@ class RecordingStore @Inject constructor(@ApplicationContext private val context
         return target
     }
 
+    /**
+     * 存一条**情景对话**里学员自己那句录音, 返回可回放的 wav。
+     *
+     * 与 [saveRecording] 同一条采样率纪律: 采集侧 16k 是讯飞的硬要求, 回放必须上采样到
+     * 48k, 否则华为/鸿蒙上"我说的话"点开没声音。聊天语音条要能回听自己的原话, 而
+     * v3.0 已经没有 book/lesson 这层坐标, 所以单独一个扁平目录 + 按数量截断。
+     */
+    fun saveChatTake(pcmFile: File): File {
+        val dir = File(File(context.filesDir, "recordings"), "chat")
+        if (!dir.exists()) dir.mkdirs()
+        val target = File(dir, "take-${System.currentTimeMillis()}.wav")
+        val pcm = pcmFile.readBytes()
+        val playable = upsamplePcm16(pcm, CAPTURE_SAMPLE_RATE, PLAYBACK_SAMPLE_RATE)
+        FileOutputStream(target).use { out ->
+            out.write(wavHeader(playable.size))
+            out.write(playable)
+        }
+        dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(MAX_PER_LINE)
+            ?.forEach { it.delete() }
+        return target
+    }
+
     private fun lineDir(book: String, lessonId: Int): File =
         File(File(File(context.filesDir, "recordings"), sanitize(book)), lessonId.toString())
 

@@ -186,6 +186,54 @@ class DialogueSceneRow(Base):
         super().__init__(**kwargs)
 
 
+class DialogueThread(Base):
+    """v3.0 微信式情景对话的**会话线程** (per-user, 一个场景一条).
+
+    存在的理由就是「回到这个场景接着聊」: 旧的 ``/dialogue/turn`` 无状态, 历史由客户端
+    攒 ``history[]`` 回传, 卸载重装即断 (而 v2.3.1 换证书恰恰要求存量设备重装)。
+
+    全部可变内容都在 ``doc`` 里 (见 ``app.services.thread_store`` 的 schema);
+    ``turn_count`` / ``grading_status`` 是 ``doc`` 内同名字段的**冗余列**, 只让会话列表
+    和评分轮询能走索引而不必解析 JSON, 由 ``thread_store`` 在同一笔 UPDATE 里写。
+
+    乐观锁: ``revision`` 是 ``version_id_col`` —— 连点两次发送、或评分作业与台词请求
+    同时回写时, 后到者拿 ``StaleDataError`` 而不是互相覆盖。
+
+    归属 = ``user_id``: 别人的行任何读写都当"不存在" (404, 不泄露存在性), 与
+    ``dialogue_scenes`` 同一口径。
+    """
+
+    __tablename__ = "dialogue_threads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    #: 场景 id (目录 id 或 ``custom_<row_id>``)。
+    scene_key: Mapped[str] = mapped_column(String(64), default="")
+    doc: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    #: 学员已提交的轮数 (会话列表展示 + 评分作业的水位判据).
+    turn_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: "" | pending | ready | failed —— 顶层指针, 逐轮态在 ``doc.messages[i].grade.status``.
+    grading_status: Mapped[str] = mapped_column(String(16), default="", index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    __mapper_args__ = {"version_id_col": revision}  # noqa: RUF012
+
+    __table_args__ = (
+        # 一个场景一条会话; 也覆盖"按 user 扫全部会话"的列表查询。
+        Index("ix_dialogue_threads_user_scene_key", "user_id", "scene_key", unique=True),
+        Index("ix_dialogue_threads_user_recency", "user_id", desc("updated_at")),
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("id", _uuid())
+        kwargs.setdefault("created_at", _utcnow())
+        kwargs.setdefault("updated_at", _utcnow())
+        # revision 由 version_id_col 机制在 INSERT 时置 1, 不在此处给默认值.
+        super().__init__(**kwargs)
+
+
 class PracticeSession(Base):
     """通关会话状态机快照 (计划 §5.3「通关会话状态机」).
 

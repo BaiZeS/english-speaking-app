@@ -8,10 +8,27 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.db import User
-from app.services import dialogue_scenes
+from app.services import dialogue_scenes, thread_turn
 
 #: 身份注册用例的 device id (T4 I-1 回归; 每个用例一张全新内存库, 不与别处相撞)。
 DEV = "dev-generate-registers"
+
+#: v3.0 目录的 12 场 (S2.2), 按目录顺序钉死 —— ``default_scene`` 取第一条, 顺序也是契约。
+#: id 一旦发布不许改: 它会写进存量会话线程。
+CATALOG_IDS: tuple[str, ...] = (
+    "restaurant",
+    "coffee_shop",
+    "airport_checkin",
+    "hotel_checkin",
+    "doctor",
+    "rental",
+    "shopping",
+    "asking_directions",
+    "pickup",
+    "small_talk",
+    "team_meeting",
+    "work_report",
+)
 
 
 def _ascii_letter_ratio(text: str) -> float:
@@ -27,9 +44,9 @@ async def test_dialogue_scenes_endpoint_returns_catalog(client: httpx.AsyncClien
     data = r.json()
     assert "scenes" in data
     assert "default_scene" in data
-    assert len(data["scenes"]) >= 4  # we ship at least the original 4 scenes
+    assert len(data["scenes"]) == 12
     # Default should be the first scene in the catalog.
-    assert data["default_scene"] == data["scenes"][0]["id"]
+    assert data["default_scene"] == data["scenes"][0]["id"] == "restaurant"
 
 
 @pytest.mark.asyncio
@@ -39,13 +56,16 @@ async def test_dialogue_scenes_ids_match_catalog(client: httpx.AsyncClient) -> N
     assert listed_ids == catalog_ids
 
 
-def test_list_scenes_returns_at_least_four() -> None:
-    assert len(dialogue_scenes.list_scenes()) >= 4
+def test_list_scenes_returns_exactly_twelve() -> None:
+    """目录恰好 12 场、顺序钉死 (S2.2 的十二场, 一场不多一场不少)。"""
+    scenes = dialogue_scenes.list_scenes()
+    assert len(scenes) == 12
+    assert tuple(s.id for s in scenes) == CATALOG_IDS
 
 
 def test_resolve_scene_known_returns_matching_scene() -> None:
-    scene = dialogue_scenes.resolve_scene("ordering_coffee")
-    assert scene is not None and scene.id == "ordering_coffee"
+    scene = dialogue_scenes.resolve_scene("coffee_shop")
+    assert scene is not None and scene.id == "coffee_shop"
     assert scene.opening
     assert scene.suggestion
     # §A4/D5: 那两个"LLM 拿不到就照本宣科"的兜底字段已删, 这里钉住它们**没被加回来**;
@@ -64,6 +84,17 @@ def test_resolve_scene_unknown_returns_none() -> None:
 def test_scene_catalog_only_contains_unique_ids() -> None:
     ids = [s.id for s in dialogue_scenes.list_scenes()]
     assert len(ids) == len(set(ids))
+
+
+def test_voices_match_the_tts_known_voices() -> None:
+    """``VOICES`` 与 ``mimo_tts._KNOWN_VOICES`` 同源钉死 (dialogue_scenes.py 头注的承诺)。
+
+    目录里出现一个 TTS 侧不认识的音色 = 合成时静默回落默认音色, 群聊"听不出是谁在说"
+    的防线就塌了; 加音色必须两处一起加。
+    """
+    from app.services import mimo_tts
+
+    assert set(dialogue_scenes.VOICES) == set(mimo_tts._KNOWN_VOICES)
 
 
 @pytest.mark.asyncio
@@ -98,103 +129,144 @@ async def test_dialogue_scenes_expose_english_display_pair(
     assert (await db.execute(select(User))).scalars().all() == []
 
 
-def test_catalog_scenes_carry_full_prompt_material_b6() -> None:
-    """§3 B6 九场景扩容: 素材字段全员到位 (dataclass 已删默认值, 漏填直接构造 TypeError).
+def test_every_scene_carries_roles_voices_and_material() -> None:
+    """v3.0 群聊素材 (S2.2): 逐场钉死多角色形状, 漏一条就红。
 
-    钉的是**下限与锚点**而不是内容本身: beats 3-6 条、开场候补 ≥2 (含旧 ``opening``,
-    选择器播的那句永远可以再多一句)、示范素材 ≥2 (含旧 ``suggestion``)、英文展示对非空。
-
-    成对性 (M-5): 只断"非空"的话, 把中文抄进 ``title_en`` 也能过 —— 那是"英文字段"
-    名存实亡; 中文标题 + 英文展示对是两个字段的**成对**契约, 所以这里同时断
-    ``title_en != title`` 与英文素材的 ASCII 字母占比 (中文占比 0.0, 一眼抓出)。
+    * ``roles`` 2-3 个, ``role_id`` 依序 r1/r2/r3, 音色 ∈ ``VOICES`` 且**场内不重复**
+      (重复就听不出是谁在说), 名字与人设中英两格齐;
+    * ``opening_lines`` ≥2, 每条的 ``role_id`` 必须被 :meth:`role_of` **精确命中** ——
+      命中不了就是 bug, 不许回落第一个角色 (``role_of`` 对未知 id 返回 ``None``);
+    * ``suggestion_lines`` ≥2、``beats`` 3-6 条;
+    * 中英展示格 (title/description/user_role 及每条 line 的两格) 全部非空白,
+      英文格还得真是英文 (M-5 成对性: 只查非空的话, 抄成中文也能过)。
     """
     scenes = dialogue_scenes.list_scenes()
-    assert {s.id for s in scenes} == {
-        "business_meeting",
-        "work_report",
-        "negotiation",
-        "daily_conversation",
-        "ordering_coffee",
-        "job_interview",
-        "travel",
-        "shopping",
-        "doctor",
-    }
+    assert {s.id for s in scenes} == set(CATALOG_IDS)
     for scene in scenes:
-        assert scene.title_en.strip() and scene.description_en.strip(), scene.id
-        assert scene.title_en != scene.title, scene.id
-        assert scene.description_en != scene.description, scene.id
-        assert scene.persona.strip() and scene.user_role.strip(), scene.id
+        for field in (
+            scene.title,
+            scene.title_en,
+            scene.description,
+            scene.description_en,
+            scene.user_role,
+            scene.user_role_en,
+        ):
+            assert field.strip(), (scene.id, field)
+        assert _ascii_letter_ratio(scene.title_en) >= 0.6, scene.id
+        assert _ascii_letter_ratio(scene.description_en) >= 0.6, scene.id
+        assert _ascii_letter_ratio(scene.user_role_en) >= 0.6, scene.id
+
+        assert 2 <= len(scene.roles) <= 3, (scene.id, len(scene.roles))
+        assert [role.role_id for role in scene.roles] == [
+            f"r{index}" for index in range(1, len(scene.roles) + 1)
+        ], scene.id
+        voices = [role.voice for role in scene.roles]
+        assert all(voice in dialogue_scenes.VOICES for voice in voices), (scene.id, voices)
+        assert len(voices) == len(set(voices)), (scene.id, voices)
+        for role in scene.roles:
+            assert role.name.strip() and role.name_en.strip(), (scene.id, role.role_id)
+            assert role.persona.strip() and role.persona_cn.strip(), (scene.id, role.role_id)
+            assert _ascii_letter_ratio(role.persona) >= 0.6, (scene.id, role.role_id)
+
+        assert len(scene.opening_lines) >= 2, scene.id
+        for line in scene.opening_lines:
+            assert scene.role_of(line.role_id) is not None, (scene.id, line.role_id)
+            assert line.text.strip() and line.text_cn.strip(), (scene.id, line.text)
+            # 学员要开口/要听的英文句必须是英文 (0.6 留出标点/连字符的余地, 中文是 0.0)。
+            assert _ascii_letter_ratio(line.text) >= 0.6, (scene.id, line.text)
+
+        assert len(scene.suggestion_lines) >= 2, scene.id
+        for line in scene.suggestion_lines:
+            assert line.text.strip() and line.text_cn.strip(), (scene.id, line.text)
+            assert _ascii_letter_ratio(line.text) >= 0.6, (scene.id, line.text)
+
         assert 3 <= len(scene.beats) <= 6, scene.id
-        assert len(scene.openings) >= 2, scene.id
-        assert scene.opening in scene.openings
-        assert len(scene.suggestions) >= 2, scene.id
-        assert scene.suggestion in scene.suggestions
-        # 学员要开口说的那几句必须是英文 (0.6 留出标点/连字符的余地, 中文是 0.0)。
-        for line in (*scene.openings, *scene.suggestions):
-            assert _ascii_letter_ratio(line) >= 0.6, (scene.id, line)
+        for beat in scene.beats:
+            assert beat.strip(), (scene.id, beat)
 
 
-def test_scene_messages_consumes_persona_beats_and_material() -> None:
-    """扩容素材必须**有消费者** (否则 B6 只是一堆进不了 prompt 的死数据, §A5 的初衷)."""
-    from app.api.v1 import dialogue
+def test_derived_views_are_pure_projections_of_the_lines() -> None:
+    """``openings``/``suggestions``/``opening``/``suggestion``/``persona`` 全是派生读法:
+    素材只有一份真相 (``opening_lines``/``suggestion_lines``/``roles``), 派生器必须逐字一致。"""
+    for scene in dialogue_scenes.list_scenes():
+        assert len(scene.opening_lines) >= 2 and len(scene.suggestion_lines) >= 2, scene.id
+        assert scene.openings == tuple(line.text for line in scene.opening_lines), scene.id
+        assert scene.suggestions == tuple(line.text for line in scene.suggestion_lines), scene.id
+        assert scene.opening == scene.openings[0], scene.id
+        assert scene.suggestion == scene.suggestions[0], scene.id
+        assert scene.persona == " / ".join(role.persona_cn for role in scene.roles), scene.id
+        assert scene.first_role is scene.roles[0], scene.id
 
-    scene = dialogue_scenes.resolve_scene("business_meeting")
+
+def test_group_prompt_consumes_persona_beats_and_material() -> None:
+    """扩容素材必须**有消费者** (否则素材只是一堆进不了 prompt 的死数据, §A5 的初衷).
+
+    消费者从旧的 ``dialogue._scene_messages`` 换成了 ``thread_turn.turn_messages`` ——
+    契约一个字没变: 角色表、议程、学员这句都得进 prompt。
+    """
+    from app.services import thread_store, thread_turn
+
+    scene = dialogue_scenes.resolve_scene("team_meeting")
     assert scene is not None
-    system = str(dialogue._scene_messages(scene, [], [])[0].content)
-    assert scene.persona in system and scene.user_role in system
-    tail = str(dialogue._scene_messages(scene, [], [])[-1].content)
+    doc = thread_store.new_doc(scene)
+    msgs = thread_turn.turn_messages(scene, doc, "I think we should ship it.")
+    system = str(msgs[0].content)
+    tail = str(msgs[-1].content)
+
+    for role in scene.roles:
+        assert role.role_id in system and role.persona_cn in system, role.role_id
+    assert scene.user_role in system
+    assert scene.description in system
     for beat in scene.beats:
-        assert beat in tail
-    for line in scene.suggestions:
-        assert line in tail
-    # 参考句素材的**取材**措辞 (不是台本): 显式禁令在 prompt 里。
-    assert "不许原样复述" in tail
-    # openings 是开场白 (generate) 的素材, 不进台词 prompt —— 台词没有"开场"可言。
-    assert scene.openings[0] not in system
+        assert beat in system  # 议程整块进 system
+    # 群聊的两条行为契约: 谁开口 + 学员可以说中文。
+    assert "speaker" in system
+    assert "不要要求学员说英文" in system
+    assert "I think we should ship it." in tail
 
 
-def test_opening_prompt_carries_persona_and_alternates() -> None:
-    """``/dialogue/generate`` 的 LLM 分支同样吃素材: 人设 + **≥2 开场候补**都进 prompt."""
-    from app.api.v1 import dialogue
+def test_group_shape_asks_for_the_five_shared_fields_plus_two() -> None:
+    """七字段形状 = 共用的五字段 + 群聊多问的两格, 且**派生**自同一份清单 (不许漂)."""
+    from app.services import turn_generation as tg
 
-    scene = dialogue_scenes.resolve_scene("business_meeting")
+    scene = dialogue_scenes.resolve_scene("restaurant")
     assert scene is not None
-    joined = "\n".join(str(m.content) for m in dialogue._opening_prompt(scene))
-    assert scene.persona in joined
-    for opening in scene.openings:
-        assert opening in joined
-    # 措辞纪律: 候选是"自己改写"的素材, 不是播第一句的台本。
-    assert "never quote verbatim" in joined
+    doc = __import__("app.services.thread_store", fromlist=["x"]).new_doc(scene)
+    system = str(thread_turn.turn_messages(scene, doc, "hi")[0].content)
+    five = tg.json_shape(tg.GENERATION_FIELDS)
+    assert five[:-1] in system, "五字段那一份形状必须原样出现在群聊 prompt 里"
+    for extra in tg.GROUP_GENERATION_EXTRA_FIELDS:
+        assert f'"{extra}"' in system
 
 
 # ============================================================ 身份注册 (写侧落 commit)
 
 
-@pytest.mark.asyncio
-async def test_generate_registers_new_device_identity(
+async def test_opening_a_thread_commits_the_registered_device(
     client: httpx.AsyncClient, db: AsyncSession
 ) -> None:
-    """I-1 回归: ``POST /dialogue/generate`` 承诺的 device 注册必须**落库**。
+    """I-1 回归 (换到新入口): 承诺的 device 注册必须**落库**。
 
-    handler 收 ``device_id`` 就经 :func:`dialogue._identity_user` 找/建 User, 但
-    ``deps.get_db`` 的会话**不自动 commit** —— 没有显式 commit 时, ``flush`` 出来的
-    那一行随请求结束一起回滚 (探针: generate 之后新会话查 ``users`` 是 0 行)。
-    写侧先例是 ``POST /history``: 建行的路由自己 commit。
+    ``deps.get_db`` 的会话**不自动 commit** —— 没有显式 commit 时, ``flush`` 出来的那一行
+    随请求结束一起回滚 (当年的探针: 请求之后另开会话查 ``users`` 是 0 行)。写侧先例是
+    ``POST /history``: 建行的路由自己 commit。现在建 User 的是开会话这条路。
     """
     res = await client.post(
-        "/api/v1/dialogue/generate", json={"scene": "ordering_coffee", "device_id": DEV}
+        "/api/v1/dialogue/threads",
+        json={"scene_key": "coffee_shop"},
+        params={"device_id": DEV},
     )
-    assert res.status_code == 200, res.text
+    assert res.status_code == 201, res.text
     rows = (await db.execute(select(User).where(User.device_id == DEV))).scalars().all()
     assert [row.device_id for row in rows] == [DEV]
 
 
 @pytest.mark.asyncio
-async def test_generate_without_identity_writes_no_user(
+async def test_thread_without_identity_is_refused_and_registers_nothing(
     client: httpx.AsyncClient, db: AsyncSession
 ) -> None:
-    """不带身份 = 旧客户端的纯无状态行为: 零建行 (注册口径只对显式给身份的请求生效)。"""
-    res = await client.post("/api/v1/dialogue/generate", json={"scene": "ordering_coffee"})
-    assert res.status_code == 200, res.text
+    """会话是个人数据: 没有匿名态 (旧的 ``/dialogue/generate`` 可以, 线程端点不行)。"""
+    res = await client.post("/api/v1/dialogue/threads", json={"scene_key": "coffee_shop"})
+    assert res.status_code == 400, res.text
+    assert res.json()["error"]["code"] == "IDENTITY_REQUIRED"
     assert (await db.execute(select(User))).scalars().all() == []

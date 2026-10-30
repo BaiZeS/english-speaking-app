@@ -11,20 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.api.v1 import (
-    ability,
-    assessment,
-    books,
-    course_sessions,
     dialogue,
-    expressions,
+    dialogue_threads,
     health,
-    history,
-    lessons,
     llm,
-    polish,
     scene_specs,
     scenes,
-    score,
+    translate,
     tts,
     version,
 )
@@ -54,28 +47,21 @@ app = FastAPI(
 )
 
 install_error_handler(app)
-app.include_router(books.router, prefix="/api/v1")
+
+# v3.0 之后后端只剩"情景对话"这一条产品线: 场景目录 + 自定义场景 + 会话线程 +
+# 语音条 + 长按翻译。单词/课程/打基础/跟读/测评/统计/画像那批端点连同其服务层已整体
+# 退役 (方案 S2.1/S2.8); **数据库表一律保留**, 只删代码路径。
 app.include_router(dialogue.router, prefix="/api/v1")
+app.include_router(dialogue_threads.router, prefix="/api/v1")
 app.include_router(scene_specs.router, prefix="/api/v1")
+# 自定义场景骨架与整课生成共用这一条轮询路由 (``GET /scenes/jobs/{job_id}``) ——
+# 大扫除时只删 scenes.py 的 generate/detail/script/delete 与课程进度, 别把这里整删。
+app.include_router(scenes.router, prefix="/api/v1")
+app.include_router(tts.router, prefix="/api/v1")
+app.include_router(translate.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(version.router, prefix="/api/v1")
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
-app.include_router(history.router, prefix="/api/v1")
-app.include_router(lessons.router, prefix="/api/v1")
-app.include_router(tts.router, prefix="/api/v1")
-app.include_router(score.router, prefix="/api/v1")
-# 情景课 (任务通关闭环) 画廊/详情/剧本 —— 计划 §5.3, 纯新增只读端点
-app.include_router(scenes.router, prefix="/api/v1")
-# 通关会话状态机 + 打基础 drill 评分 —— 计划 §5.3/§5.4, P2
-# (P3/T4 在同一 router 补了 /mission、/hint、/finish-mission)
-app.include_router(course_sessions.router, prefix="/api/v1")
-# 能力画像 (EWMA 快照 + 雷达 + 轨迹) —— 计划 §5.6, P3
-app.include_router(ability.router, prefix="/api/v1")
-# 语法润色 / 个人表达库 —— 计划 §5.7, P3
-app.include_router(polish.router, prefix="/api/v1")
-app.include_router(expressions.router, prefix="/api/v1")
-# CEFR 摸底测评 (题库/start/answer/complete) —— 计划 §5.3/§5.5-3, P4
-app.include_router(assessment.router, prefix="/api/v1")
 
 # 挂载 /static/tts 提供下载 TTS 合成音频 (URL 前缀与 audio_url 一致, 避免路径拼接错位)
 app.mount(

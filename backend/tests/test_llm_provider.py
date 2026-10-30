@@ -264,17 +264,25 @@ def test_extra_models_join_the_roleplay_allowlist(monkeypatch: pytest.MonkeyPatc
     assert llm_provider.resolve_roleplay_model("private-gpt") == "private-gpt"
 
 
-def test_dialogue_resolve_model_delegates_to_provider_chain(
+def test_roleplay_model_chain_is_the_single_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """api 侧 ``_resolve_model`` 不再是第二套链: 全部收口到 llm_provider."""
-    from app.api.v1.dialogue import _resolve_model
+    """台词侧的模型解析只剩 ``llm_provider.resolve_roleplay_model`` 这一份.
+
+    旧形状里 ``api/v1/dialogue._resolve_model`` 是第二套链 (自己读白名单、自己挑默认),
+    和 provider 那份慢慢漂开。v3.0 删掉那些端点后那个函数不该在任何地方复活 ——
+    所以这里既测"只剩一份", 也测"没有第二套长出来"。
+    """
+    from app.api.v1 import dialogue, dialogue_threads
+
+    for mod in (dialogue, dialogue_threads):
+        assert not hasattr(mod, "_resolve_model"), f"{mod.__name__} 上又长出第二套模型链"
 
     _clear_model_settings(monkeypatch)
     monkeypatch.setattr(settings, "llm_allowed_models", "solo")
-    assert _resolve_model("solo") == "solo"
-    assert _resolve_model("ghost") == "solo"  # default 链: 无 default -> 首个 ALLOWED
-    assert _resolve_model(None) == "solo"
+    assert llm_provider.resolve_roleplay_model("solo") == "solo"
+    assert llm_provider.resolve_roleplay_model("ghost") == "solo"  # 无 default -> 首个 ALLOWED
+    assert llm_provider.resolve_roleplay_model(None) == "solo"
 
 
 @pytest.mark.asyncio
