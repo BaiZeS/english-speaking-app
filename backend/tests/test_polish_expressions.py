@@ -334,6 +334,6 @@ async def test_dialogue_turn_records_annotated_diff_only_when_polished(
     )
     await client.post(
         "/api/v1/dialogue/turn",
-        json={"scene_id": "daily_conversation", "history": [], "user_id": user.id},
+        json={"scene_id": "small_talk", "history": [], "user_id": user.id},
     )
     assert (await db.execute(select(AnnotatedDiff))).scalars().all() == []

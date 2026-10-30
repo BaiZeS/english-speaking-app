@@ -36,6 +36,8 @@ M2_REVISION = "f3b8d0716c52"
 M1_REVISION = "c9a1f4e7b208"
 #: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
 T4_REVISION = "c3b7e5a91d24"
+V3_REVISION = "e7a2c4f0b913"  # v3.0 dialogue_threads: 当前链尾
+
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 M1_TABLES = ("scene_courses", "practice_sessions", "practice_steps")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
@@ -256,7 +258,7 @@ def test_m2_migration_matches_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_m2_is_the_only_head_and_chains_from_m1() -> None:
     """链头断言随 T4 续链更新 (自定义对话场景那一步): M3 退居中间节点, M2 还在链上."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [T4_REVISION]
+    assert script.get_heads() == [V3_REVISION]
     assert script.get_revision(T4_REVISION).down_revision == "9d2e4c6a8f01"
     assert script.get_revision("9d2e4c6a8f01").down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == M1_REVISION

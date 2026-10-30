@@ -31,6 +31,37 @@ SCENE_BEATS_MIN = 3
 SCENE_BEATS_MAX = 6
 
 
+class CustomSceneRole(BaseModel):
+    """自定义场景里的一个 AI 角色 (v3.0 群聊: 一场至少两个人, 否则不成其为"群")."""
+
+    #: 台词 speaker 取它; 只在本场内唯一。
+    role_id: str = Field(min_length=1, max_length=8)
+    #: 气泡上显示的昵称 (中文).
+    name_cn: str = Field(min_length=1, max_length=30)
+    #: 这个角色的身份 (中文, prompt 素材).
+    persona_cn: str = Field(min_length=1, max_length=300)
+    #: 必须 ∈ :data:`app.services.dialogue_scenes.VOICES`; 同场内不得重复。
+    voice: str = Field(min_length=1, max_length=16)
+
+    @field_validator("name_cn", "persona_cn")
+    @classmethod
+    def _reject_blank(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("custom scene role text fields must not be blank")
+        return cleaned
+
+    @field_validator("voice")
+    @classmethod
+    def _check_voice(cls, v: str) -> str:
+        # 延迟 import: dialogue_scenes 是静态素材模块, 不该被模型层在导入期拖进来。
+        from app.services.dialogue_scenes import VOICES
+
+        if v not in VOICES:
+            raise ValueError(f"voice must be one of {list(VOICES)}")
+        return v
+
+
 class CustomDialogueScene(BaseModel):
     """学员自己描述的场景补全成的骨架 (后台作业一次 ``_judge`` 的产物形状)."""
 
@@ -39,6 +70,9 @@ class CustomDialogueScene(BaseModel):
     #: 场景一句话说明 (§3 C3: 轮询列表里的**展示面**素材).
     description: str = Field(min_length=1, max_length=300)
     #: AI 扮演谁 (中文人设, prompt 素材 —— 同 MissionSpec.persona_cn, 不过双语门).
+    #: v3.0 起群聊身份由 :attr:`roles` 承载; 这一格留给**没有 roles 的存量行**
+    #: (自定义场景的 doc 落在 DB 里, 加字段不会回填历史), 见
+    #: ``scene_spec_generator.dialogue_scene_view`` 的回落分支。
     persona_cn: str = Field(min_length=1, max_length=300)
     #: 学员演谁.
     user_role_cn: str = Field(min_length=1, max_length=300)
@@ -54,6 +88,19 @@ class CustomDialogueScene(BaseModel):
     opener_cn: str = Field(default="", max_length=500)
     #: CEFR 难度锚 (默认同 SceneCourse)。
     level: str = Field(default="A2", max_length=8)
+    #: 群聊角色 (1-3 个; 缺省 = 存量行, 由 ``persona_cn`` 合成一个角色).
+    roles: list[CustomSceneRole] = Field(default_factory=list, max_length=3)
+
+    @field_validator("roles")
+    @classmethod
+    def _check_roles(cls, v: list[CustomSceneRole]) -> list[CustomSceneRole]:
+        voices = [role.voice for role in v]
+        if len(voices) != len(set(voices)):
+            raise ValueError("two roles in one scene cannot share a voice")
+        ids = [role.role_id for role in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError("role_id must be unique within a scene")
+        return v
 
     @field_validator("title", "description", "persona_cn", "user_role_cn")
     @classmethod

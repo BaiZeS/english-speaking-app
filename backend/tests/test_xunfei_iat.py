@@ -213,3 +213,41 @@ async def test_transcribe_returns_none_on_error_response(monkeypatch: pytest.Mon
     _set_fake_credentials(monkeypatch)
 
     assert await XunfeiIatProvider().transcribe(b"\x00" * 2560) is None
+
+
+# ====== language 参数化 ======
+
+
+def test_build_first_frame_zh_cn_business() -> None:
+    frame = xunfei_iat._build_first_frame(b"\x00" * 640, last=True, language="zh_cn")
+    business = frame["business"]
+    assert business["language"] == "zh_cn"
+    assert business["domain"] == "iat"
+    assert business["accent"] == "mandarin"
+
+
+def test_build_first_frame_language_defaults_to_en_us() -> None:
+    """默认值不变量: 既有调用方不传 language, 首帧必须仍是 en_us."""
+    frame = xunfei_iat._build_first_frame(b"\x00" * 640, last=True)
+    business = frame["business"]
+    assert business["language"] == "en_us"
+    assert business["domain"] == "iat"
+    assert business["accent"] == "mandarin"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_passes_language_to_first_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [_iat_response(2, _chunk(1, ["你好"], last=True))]
+    fake_connect, opened = _make_fake_connect(responses)
+    monkeypatch.setattr("app.services.xunfei_iat.websockets.connect", fake_connect)
+    _set_fake_credentials(monkeypatch)
+
+    text = await XunfeiIatProvider().transcribe(b"\x00" * 640, language="zh_cn")
+
+    assert text == "你好"
+    first = json.loads(opened[0].sent[0])
+    assert first["business"]["language"] == "zh_cn"
+    assert first["business"]["domain"] == "iat"
+    assert first["business"]["accent"] == "mandarin"

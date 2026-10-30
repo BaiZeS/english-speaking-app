@@ -17,8 +17,8 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.services import dialogue_scenes, llm_provider
 from app.services import drill_grader as dg
-from app.services import llm_provider
 from app.services import mission_engine as me
 from tests.test_drill_grader import install_llm
 from tests.test_mission import generation_json
@@ -34,7 +34,7 @@ def _reset_llm_provider() -> None:
 @pytest.mark.asyncio
 async def test_dialogue_generate_still_uses_the_local_catalog() -> None:
     """开场白不走 D5: 目录里的 opening 是**静态素材**, 没有它就整页打不开。"""
-    payload = {"scene": "ordering_coffee", "mode": "k12"}
+    payload = {"scene": "coffee_shop", "mode": "k12"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/generate", json=payload)
     assert r.status_code == 200
@@ -48,7 +48,7 @@ async def test_dialogue_generate_still_uses_the_local_catalog() -> None:
 async def test_dialogue_turn_without_credentials_is_a_503() -> None:
     """D5: 没有凭据 -> 503, **不是** 200 + 目录里的下一句."""
     payload = {
-        "scene_id": "ordering_coffee",
+        "scene_id": "coffee_shop",
         "history": [{"role": "user", "text": "Hi"}],
         "user_audio_b64": "AAAA",
     }
@@ -65,12 +65,13 @@ async def test_dialogue_turn_without_credentials_is_a_503() -> None:
 
 @pytest.mark.asyncio
 async def test_dialogue_generate_includes_opening_and_suggested_reply() -> None:
-    payload = {"scene": "ordering_coffee", "mode": "adult"}
+    payload = {"scene": "coffee_shop", "mode": "adult"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/generate", json=payload)
     assert r.status_code == 200
     data = r.json()
-    assert data["title"] == "点咖啡"
+    # 对"目录里那一场的标题", 而不是对某句写死的中文 —— 素材措辞改了不该红。
+    assert data["title"] == dialogue_scenes.resolve_scene("coffee_shop").title
     assert data["lines"][0]["role"] == "assistant"
     assert data["suggested_reply"]
 
@@ -93,7 +94,7 @@ async def test_dialogue_turn_returns_bilingual_reply_and_suggestion(
         ],
     )
     payload = {
-        "scene_id": "ordering_coffee",
+        "scene_id": "coffee_shop",
         "history": [
             {"role": "assistant", "text": "Good morning!"},
             {"role": "user", "text": "I would like coffee."},
@@ -126,7 +127,7 @@ async def test_dialogue_turn_never_repeats_what_it_already_said(
     """
     fake = install_llm(monkeypatch, generation=[generation_json()])
     payload = {
-        "scene_id": "daily_conversation",
+        "scene_id": "small_talk",
         "history": [
             {"role": "assistant", "text": "How was your weekend?"},
             {"role": "user", "text": "It was nice."},
@@ -150,7 +151,7 @@ async def test_dialogue_turn_keeps_native_message_roles(
     """§A4: 历史按**原生 messages 数组**传 (system + user/assistant 交替), 不再压成一段文本."""
     fake = install_llm(monkeypatch, generation=[generation_json()])
     payload = {
-        "scene_id": "daily_conversation",
+        "scene_id": "small_talk",
         "history": [
             {"role": "user", "text": "Hi there."},
             {"role": "assistant", "text": "Hello! How are you?"},
@@ -180,7 +181,7 @@ async def test_monolingual_reply_cn_is_dropped(monkeypatch: pytest.MonkeyPatch) 
             )
         ],
     )
-    payload = {"scene_id": "daily_conversation", "history": [{"role": "user", "text": "Hi"}]}
+    payload = {"scene_id": "small_talk", "history": [{"role": "user", "text": "Hi"}]}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/turn", json=payload)
     data = r.json()

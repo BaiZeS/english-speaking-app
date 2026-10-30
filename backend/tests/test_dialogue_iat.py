@@ -66,7 +66,7 @@ async def test_turn_without_credentials_returns_200_and_no_recognized_text(
     _clear_xunfei_credentials(monkeypatch)
     install_llm(monkeypatch, generation=[generation_json()])
     payload = {
-        "scene_id": "ordering_coffee",
+        "scene_id": "coffee_shop",
         "history": [
             {"role": "assistant", "text": "Good morning!"},
             {"role": "user", "text": _PLACEHOLDER_USER_TEXT},
@@ -89,7 +89,7 @@ async def test_turn_with_invalid_audio_b64_still_succeeds(
     _clear_xunfei_credentials(monkeypatch)
     install_llm(monkeypatch, generation=[generation_json()])
     payload = {
-        "scene_id": "ordering_coffee",
+        "scene_id": "coffee_shop",
         "history": [{"role": "user", "text": _PLACEHOLDER_USER_TEXT}],
         "user_audio_b64": "!!!not-base64!!!",
     }
@@ -118,7 +118,7 @@ async def test_turn_returns_recognized_text_when_transcription_succeeds(
     install_llm(monkeypatch, generation=[generation_json()])
     audio = b"\x01" * 1600
     payload = {
-        "scene_id": "ordering_coffee",
+        "scene_id": "coffee_shop",
         "history": [
             {"role": "assistant", "text": "What would you like?"},
             {"role": "user", "text": _PLACEHOLDER_USER_TEXT},

@@ -411,5 +411,5 @@ async def test_find_ready_custom_scene_rejects_states_and_broken_doc(
 
     assert await sg.find_ready_custom_scene(db, uid, custom_scene_id(row.id)) is None
     assert await sg.find_ready_custom_scene(db, uid, custom_scene_id(broken.id)) is None
-    assert await sg.find_ready_custom_scene(db, uid, "ordering_coffee") is None
+    assert await sg.find_ready_custom_scene(db, uid, "coffee_shop") is None
     assert await sg.find_ready_custom_scene(db, uid, "custom_") is None

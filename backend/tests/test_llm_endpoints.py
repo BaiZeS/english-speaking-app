@@ -80,7 +80,7 @@ async def test_app_version_force_update_false_when_min_unset(
 
 @pytest.mark.asyncio
 async def test_dialogue_generate_falls_back_to_stub_without_credentials() -> None:
-    payload = {"scene": "daily_conversation", "mode": "adult", "model_id": "qwen-plus"}
+    payload = {"scene": "small_talk", "mode": "adult", "model_id": "qwen-plus"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/generate", json=payload)
     data = r.json()
@@ -134,7 +134,7 @@ async def test_dialogue_generate_uses_mock_llm_when_configured(
     monkeypatch.setattr(lp, "AsyncOpenAI", _factory)
     llm_provider.reset_llm_provider_for_tests()
 
-    payload = {"scene": "daily_conversation", "mode": "adult", "model_id": "qwen-turbo"}
+    payload = {"scene": "small_talk", "mode": "adult", "model_id": "qwen-turbo"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/v1/dialogue/generate", json=payload)
     data = r.json()
@@ -187,7 +187,7 @@ async def test_dialogue_turn_parses_llm_json_payload(
     llm_provider.reset_llm_provider_for_tests()
 
     payload = {
-        "scene_id": "daily_conversation",
+        "scene_id": "small_talk",
         "history": [
             {"role": "assistant", "text": "Hi!"},
             {"role": "user", "text": "I am fine."},
@@ -240,7 +240,7 @@ async def test_dialogue_turn_reports_503_when_llm_raises(
     llm_provider.reset_llm_provider_for_tests()
 
     payload = {
-        "scene_id": "daily_conversation",
+        "scene_id": "small_talk",
         "history": [{"role": "user", "text": "Hi"}],
         "model_id": "qwen-plus",
     }

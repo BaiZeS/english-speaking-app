@@ -35,6 +35,8 @@ M2_REVISION = "f3b8d0716c52"
 M3_REVISION = "9d2e4c6a8f01"
 #: 链尾: T4 的自定义对话场景迁移 (dialogue_scenes + generation_jobs.kind)。
 T4_REVISION = "c3b7e5a91d24"
+V3_REVISION = "e7a2c4f0b913"  # v3.0 dialogue_threads: 当前链尾
+
 M2_TABLES = ("ability_profiles", "ability_events", "expressions", "annotated_diffs")
 M3_TABLES = ("generation_jobs", "assessment_attempts", "assessment_answers", "course_progress")
 LEGACY_TABLES = ("users", "lessons", "history", "tts_cache")
@@ -229,7 +231,7 @@ def test_m3_upgrade_downgrade_on_sqlite(tmp_path: Path, monkeypatch: pytest.Monk
     command.upgrade(cfg, "head")
     names, columns, indexes = _inspect(url)
     assert set(M2_TABLES) | set(M3_TABLES) <= names
-    assert _version(url) == T4_REVISION  # head = T4 (M3 之上还有一步)
+    assert _version(url) == V3_REVISION  # head = v3.0 (M3 + T4 之上还有一步)
     assert "ux_assessment_answers_attempt_question" in indexes
     assert "error" in columns["generation_jobs"]
     assert "estimated_seconds" in columns["course_progress"]
@@ -264,7 +266,7 @@ def test_m3_migrations_match_orm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_single_head_chains_m1_m2_m3() -> None:
     """单 head + 挂链正确: T4 修 M3(T5), M3 修 M2(T4), M2 修 M1, M1 修 P1-era head."""
     script = ScriptDirectory.from_config(_alembic_config())
-    assert script.get_heads() == [T4_REVISION]
+    assert script.get_heads() == [V3_REVISION]
     assert script.get_revision(T4_REVISION).down_revision == M3_REVISION
     assert script.get_revision(M3_REVISION).down_revision == M2_REVISION
     assert script.get_revision(M2_REVISION).down_revision == "c9a1f4e7b208"

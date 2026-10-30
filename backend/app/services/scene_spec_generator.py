@@ -42,7 +42,7 @@ from app.models.scene_spec import (
 )
 from app.services import mission_engine
 from app.services.course_generator import GenerationError, scene_key_for
-from app.services.dialogue_scenes import DialogueScene
+from app.services.dialogue_scenes import VOICES, DialogueScene, OpeningLine, SceneRole
 from app.services.drill_grader import (
     SCENE_BRIEF_JOB_BUDGET_S,
     LlmUnavailableError,
@@ -55,7 +55,7 @@ from app.services.llm_provider import LlmMessage, no_thinking_body
 
 #: 场景骨架 JSON 的输出预算: 比整课骨架 (1600) 小一个量级 —— 这正是它与
 #: scene_courses 全课管线的分界, 别把它涨回去。
-SCENE_BRIEF_MAX_TOKENS = 800
+SCENE_BRIEF_MAX_TOKENS = 1200
 #: 结构化生成 (定人设/排议程) 的温度 = 课程骨架同一档 (0.4); 台词的 0.7 是另一回事。
 SCENE_BRIEF_TEMPERATURE = 0.4
 
@@ -65,7 +65,9 @@ _JOBS: set[asyncio.Task[None]] = set()
 
 _SPEC_JSON_SHAPE = (
     '只输出 JSON: {"title": "...", "description": "...", "persona_cn": "...", '
-    '"user_role_cn": "...", "context_cn": "...", "goal": "...", "beats": ["..."], '
+    '"user_role_cn": "...", "context_cn": "...", "goal": "...", '
+    '"roles": [{"role_id": "r1", "name_cn": "...", "persona_cn": "...", "voice": "..."}], '
+    '"beats": ["..."], '
     '"opener": "...", "opener_cn": "...", "level": "..."}'
 )
 
@@ -75,14 +77,18 @@ def spec_messages(brief: str) -> list[LlmMessage]:
     system = (
         "你是口语陪练的场景策划, 学员是中文母语、能读写但开口少的英语初学者 (CEFR A2-B1)。"
         "学员自己描述了想练的自由对话场景, 把它补成**一页轻量场景骨架** —— "
-        "人设 + 议程 + 开场白; 不要词表, 不要完整剧本。\n"
+        "角色 + 议程 + 开场白; 不要词表, 不要完整剧本。\n"
         "只输出一个 JSON 对象, 不要解释、不要 markdown 围栏。\n"
         "硬约束 (违反任何一条都算不合格):\n"
         "- title ≤20 个中文字; description 一句中文 (≤60 字), 选择器卡片直接展示\n"
-        "- persona_cn = AI 要扮演的角色身份 (中文), user_role_cn = 学员扮演的身份 (中文), "
+        "- persona_cn = AI 侧总体人设 (中文), user_role_cn = 学员扮演的身份 (中文), "
         "context_cn = 这场对话的情境 (中文), goal = 这一场聊下来要练成什么 (中文)\n"
+        f"- roles: **2-3 个** AI 角色, 每个是 {{role_id, name_cn, persona_cn, voice}}; "
+        "role_id 依次用 r1/r2/r3; name_cn 是气泡上的称呼 (≤10 个中文字, 如「前台 Amy」); "
+        "voice 只能从 "
+        f"{list(VOICES)} 里选, 且**同一场内不得重复** (两个角色同一个音就听不出是谁在说)\n"
         "- beats: 议程 3-6 条, 每条一句中文 (对话按这些方向推进, 不跑题不重复)\n"
-        "- opener 是 AI 角色的英文开场白 (一句, ≤20 词, 锚定学员水平, 自然引出第一条议程); "
+        "- opener 是**第一个角色**的英文开场白 (一句, ≤20 词, 锚定学员水平, 自然引出第一条议程); "
         "opener_cn 是它的简体中文意思 (出现英文单词视为不合格)\n"
         "- level ∈ A1|A2|B1|B2|C1|C2 (按学员水平取, 拿不准用 A2/B1)\n" + _SPEC_JSON_SHAPE
     )
@@ -292,22 +298,46 @@ def dialogue_scene_view(scene_id: str, spec: CustomDialogueScene) -> DialogueSce
 
     自定义场景**没有**双语展示对 (选择器卡片就按学员描述的语言展示), 所以
     ``title_en``/``description_en`` 留空 (D5: 缺字段 = 那一行不渲染);
-    ``suggestions`` 留空是纪律而非省事 —— 它是"参考回答素材位", 静态兜底句正是
+    ``suggestion_lines`` 留空是纪律而非省事 —— 它是"参考回答素材位", 静态兜底句正是
     "每轮同一句"的根因 (T3 删死兜底时立的规), 生成器没有资格造一句新的。
+
+    ``roles`` 为空 = **存量行** (v3.0 才加的字段, 落在 DB 里的旧 doc 不会回填),
+    用 ``persona_cn`` 合成一个角色让老自定义场景还能开聊; 新作业一律产出 1-3 个角色。
     """
+    roles = tuple(
+        SceneRole(
+            role_id=role.role_id,
+            name=role.name_cn,
+            name_en="",
+            voice=role.voice,
+            persona="",
+            persona_cn=role.persona_cn,
+        )
+        for role in spec.roles
+    ) or (
+        SceneRole(
+            role_id="r1",
+            name=spec.persona_cn,
+            name_en="",
+            voice=VOICES[0],
+            persona="",
+            persona_cn=spec.persona_cn,
+        ),
+    )
     return DialogueScene(
         id=scene_id,
         title=spec.title,
         description=spec.description,
-        opening=spec.opener,
-        suggestion="",
         title_en="",
         description_en="",
-        persona=spec.persona_cn,
+        roles=roles,
         user_role=spec.user_role_cn,
+        user_role_en="",
+        opening_lines=(
+            OpeningLine(role_id=roles[0].role_id, text=spec.opener, text_cn=spec.opener_cn),
+        ),
+        suggestion_lines=(),
         beats=tuple(spec.beats),
-        openings=(spec.opener,),
-        suggestions=(),
         # ``goal`` 也是 prompt 素材, 而 DialogueScene 只有一格情境位: 情境与目标拼成一行
         # 进 ``context`` (目录场景没有独立 goal, 不占这一格)。
         context=f"{spec.context_cn}(本场目标:{spec.goal})",

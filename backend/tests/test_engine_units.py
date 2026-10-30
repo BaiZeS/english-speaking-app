@@ -478,7 +478,7 @@ def test_scene_messages_skip_empty_turns_and_keep_roles() -> None:
     """
     from app.services import dialogue_scenes
 
-    scene = dialogue_scenes.resolve_scene("daily_conversation")
+    scene = dialogue_scenes.resolve_scene("small_talk")
     assert scene is not None
     messages = dialogue._scene_messages(
         scene,
@@ -501,12 +501,12 @@ async def test_generate_strips_quoted_opening_and_degrades(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     install_llm(monkeypatch, ['"Hi there!"\nextra commentary'])
-    res = await client.post("/api/v1/dialogue/generate", json={"scene": "daily_conversation"})
+    res = await client.post("/api/v1/dialogue/generate", json={"scene": "small_talk"})
     assert res.json()["status"] == "ready"
     assert res.json()["lines"][0]["text"] == "Hi there!"
     llm_provider.reset_llm_provider_for_tests()
     install_llm(monkeypatch, [RuntimeError("upstream 503")])
-    down = await client.post("/api/v1/dialogue/generate", json={"scene": "daily_conversation"})
+    down = await client.post("/api/v1/dialogue/generate", json={"scene": "small_talk"})
     assert down.json()["status"] == "stub" and down.json()["lines"][0]["text"]
 
 
@@ -526,7 +526,7 @@ async def test_turn_without_credentials_is_503_not_a_recycled_line(
         {"role": "user", "text": "third"},
     ]
     res = await client.post(
-        "/api/v1/dialogue/turn", json={"scene_id": "daily_conversation", "history": history}
+        "/api/v1/dialogue/turn", json={"scene_id": "small_talk", "history": history}
     )
     assert res.status_code == 503
     assert res.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
@@ -556,7 +556,7 @@ async def test_turn_with_identity_and_audio_persists_anchored_evidence(
         await client.post(
             "/api/v1/dialogue/turn",
             json={
-                "scene_id": "daily_conversation",
+                "scene_id": "small_talk",
                 "history": [],
                 "user_audio_b64": audio,
                 "device_id": "dev-dlg-anchor",

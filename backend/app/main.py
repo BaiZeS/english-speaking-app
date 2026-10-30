@@ -16,6 +16,7 @@ from app.api.v1 import (
     books,
     course_sessions,
     dialogue,
+    dialogue_threads,
     expressions,
     health,
     history,
@@ -56,6 +57,8 @@ app = FastAPI(
 install_error_handler(app)
 app.include_router(books.router, prefix="/api/v1")
 app.include_router(dialogue.router, prefix="/api/v1")
+# v3.0 微信式会话线程 (列表/开会话/取线程/删会话) —— 一轮对话的写入在 T4 接上
+app.include_router(dialogue_threads.router, prefix="/api/v1")
 app.include_router(scene_specs.router, prefix="/api/v1")
 app.include_router(llm.router, prefix="/api/v1")
 app.include_router(version.router, prefix="/api/v1")

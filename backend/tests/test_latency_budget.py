@@ -466,7 +466,7 @@ async def test_dialogue_turn_respects_the_same_gen_wall(
     started = time.monotonic()
     res = await client.post(
         "/api/v1/dialogue/turn",
-        json={"scene_id": "daily_conversation", "history": [{"role": "user", "text": "hi"}]},
+        json={"scene_id": "small_talk", "history": [{"role": "user", "text": "hi"}]},
     )
     assert time.monotonic() - started < 3.0
     assert res.status_code == 503, res.text

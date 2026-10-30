@@ -43,7 +43,7 @@ def _reset_llm_provider() -> Iterator[None]:
 
 def turn_payload(**over: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "scene_id": "daily_conversation",
+        "scene_id": "small_talk",
         "history": [
             {"role": "assistant", "text": "How was your weekend?"},
             {"role": "user", "text": "I go to park yesterday."},
@@ -118,7 +118,7 @@ async def test_client_chosen_model_scores_stay_out_of_the_profile(
     events = await dialogue._persist_turn_evidence(
         db,
         user=user,
-        scene_id="daily_conversation",
+        scene_id="small_talk",
         anchored=None,
         model="qwen-turbo",  # 客户端选的, 不是服务端默认
         grammar=61.0,
@@ -141,7 +141,7 @@ async def test_server_default_model_scores_enter_the_profile(
     events = await dialogue._persist_turn_evidence(
         db,
         user=user,
-        scene_id="daily_conversation",
+        scene_id="small_talk",
         anchored=None,
         model="qwen3.8-max",
         grammar=61.0,
@@ -219,7 +219,7 @@ async def test_anchored_ise_dropped_without_credentials(
     await db.commit()
     probe = await dialogue.turn(
         dialogue.DialogueTurnRequest(
-            scene_id="daily_conversation",
+            scene_id="small_talk",
             history=[],
             user_audio_b64=base64.b64encode(audio).decode(),
             device_id=DEV + "-4",
@@ -302,7 +302,7 @@ def test_scene_messages_include_description_and_persona() -> None:
     本用例用 ``resolve_scene`` 精确命中目录 —— "静默回落第一条"的兜底已删, 未知 id 会
     返回 ``None``, 这里顺带钉它不会把 custom 前缀当成目录。
     """
-    scene = dialogue_scenes.resolve_scene("ordering_coffee")
+    scene = dialogue_scenes.resolve_scene("coffee_shop")
     assert scene is not None
     messages = dialogue._scene_messages(scene, [], [])
     system = messages[0]
