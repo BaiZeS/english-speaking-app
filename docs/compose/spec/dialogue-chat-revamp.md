@@ -1,6 +1,6 @@
 ---
 feature: dialogue-chat-revamp
-status: in-progress
+status: delivered
 updated: 2026-10-30
 source: feat/dialogue-chat-revamp
 ---
@@ -8,6 +8,38 @@ source: feat/dialogue-chat-revamp
 # 对话聊天改版：单词练习全删，微信式群聊成唯一主功能（v3.0.0）
 
 ## Report
+
+**What was built** — App 从「课本 + 单词 + 测评 + 对话」的合集重写成**只有微信式情景对话**的一件产品：
+
+- **两屏**：会话列表（= 场景列表，头像组 / 预览 / 未读红点 / 长按删除 / 「+」一句话生成场景）→ 群聊页。底部 4 Tab 取消，23 个 route 收缩到 4 个；设置作为更新失败逃生门保留并改到列表右上角进入。
+- **12 个生活场景 × 2-3 个角色**，角色各有昵称与固定音色（Mia/Chloe/Milo/Dean），头像为首字圆形色块（零新增图片资源）。
+- **角色消息是语音条**：默认只有时长 + 波形，点击才播放并展开中英对照；音频在台词请求内合成（`TTS_TURN_BUDGET_S = 3.0`），**超预算软失败**为 `audio_pending` 并由客户端按需 `GET /tts` 兜底，绝不因无声而失败。
+- **学员可以说中文**：语音固定走讯飞 `zh_cn`（实测原生吃中英混读），**没有语言切换控件、请求里没有 `lang` 字段**；语言由服务端从转写文本事后判定，只决定要不要跑英文逐词 ISE。也支持文字输入。角色听得懂中文，用英文继续推进议程。
+- **每轮评分**（切题 / 信息量 / 得体 / 任务推进；说英文才附发音分）由后台作业异步回填，`grading_status` 水位 + 终态 CAS + 失败静默；**缺轴整行不渲染**，不是 0 分。
+- **建议回答**默认折叠（「💡 建议回答 · 看提示」），复用每轮已返回的 `suggestion`/`suggestion_cn`，**开口前可看且零额外 LLM 调用**。
+- **长按翻译**：自带双语的本地切换（零请求），其余走新增 `POST /translate`（6.0s 独立预算 + 方向自检，翻不出来 503，绝不回显原文）。
+- **会话落库** `dialogue_threads`（迁移 `e7a2c4f0b913`），开会话幂等；**旧表一张未删**。
+- **全删**：词汇 Tab、弱词专项训练、打基础四题型、跟读/影子跟读、表达库、CEFR 测评、练习记录、统计与能力画像。后端路由面 40+ → 12（`GET /scenes/jobs/{job_id}` 按裁决保留）。
+
+**Verification** —（全部在 worktree 内跑，未 push / 未打 tag / 未部署生产）
+
+| 命令 | 结果 |
+|---|---|
+| `backend: ruff check .` | PASS（All checks passed） |
+| `backend: ruff format --check .` | PASS（92 files already formatted） |
+| `backend: mypy app` | PASS（57 文件 strict，原 73） |
+| `backend: pytest -q` | PASS **269 passed**（基线 653；差集为随功能删除的 24 个测试文件，有效契约改写迁移而非删除） |
+| `backend: scripts/smoke_thread_turn.py` | PASS **真火端到端**：中文语音→`zh_cn` 逐字转写→英文台词+真实音频→建议句→评分 `pending→ready`；确认中文轮无发音轴 |
+| `backend: scripts/smoke_iat_lang.py` | PASS `zh_cn` 中英混读实测（四类音频对照），是删掉语言切换控件的证据 |
+| `android: scripts/ktlint.sh` | PASS（exit 0） |
+| `android: testDebugUnitTest` | PASS **134 passed / 0 failed**（基线 384；含新增 `ui/chat` 22 条纯函数锁） |
+| `android: detekt` | 22 issues（基线 103）；`ui/chat` 与本次新代码零贡献，唯一残留 `EnglishApi TooManyFunctions` 在改动前即存在（原 30 个方法） |
+| `android: assembleDebug` | PASS |
+| `git diff -- AppDatabase.kt MistakeWordEntity.kt` | **空**（Room 实体与 version=3 逐字未动） |
+| 迁移 `drop_*` 检查 | 只出现在新迁移自身的 `downgrade()`；无任何旧表 drop |
+| 503 事务边界 | `raise turn_generation_unavailable()` 位于任何 append/save **之前**，且有测试断言「会话不新增气泡、turn_count 不推进」 |
+
+**未验证 / 待办**：真机走查（本盒无设备）；发版与部署需单独授权（旧包 ≤2.3.1 在这版后端上会 404，须先定 `APP_MIN_SUPPORTED_VERSION`）；首轮评分偏严待裁决（真火实测 36 分，见 Journey log）。
 
 ## [S1] Problem
 
@@ -249,9 +281,19 @@ IAT 8.0 + max(ISE 8.5, GEN 14.0) + TTS 3.0 = 25.0 ≤ 25.0   ✓ 余量 0
 - [x] T6: `POST /translate` — acceptance: `zh→en`、`en→zh` 各一例；缺凭据 → 503 `TRANSLATION_UNAVAILABLE`；预算是具名常量且被 AST 门点名 (covers: S2.7)
 - [x] T7: 时延求和表纳入 TTS 并同批过门 — acceptance: `test_latency_budget.py` 求和式含 `TTS_TURN_BUDGET_S`，算式 `8 + max(8.5,14) + 3 = 25 ≤ 25` 全绿，三把锁均指向新常量名 (depends: T4, T6; covers: S2.6)
 - [x] T8: 后端大扫除 —— 删课程/词汇/测评/统计端点及其服务层与测试 — acceptance: 保留清单（`/dialogue/*` `/tts` `/translate` `/scenes/jobs/{job_id}` `/llm/models` `/app/version` `/health`）之外一律不再注册，**`GET /scenes/jobs/{job_id}` 明确留在路由里**；`ruff check` / `ruff format --check` / `mypy app` / `pytest` 全绿；被删用例逐条登记在报告里 (covers: S2.1) (depends: T5, T6, T7)
-- [ ] T9: Android 导航收缩 + 会话列表屏 — acceptance: 根为会话列表、`Routes.kt` 只剩 4 个目的地、底部栏删除；更新失败弹窗「进入设置」仍能落到 Settings；`AppTabsTest` 按新导航重写并绿 (covers: S2.1) (depends: T8)
-- [ ] T10: Android 微信式群聊屏 —— 语音条 / 点击展开文字 / 长按翻译 / 建议折叠 / 评分卡 / 按住说话 + 文字输入（无语言切换控件） — acceptance: 气泡纯函数各有 JVM 单测（单调 key、时长格式化、双语空白不渲染、`audio_pending` 走 `/tts` 兜底、翻译本地切 vs 端点分派、grade 三态渲染）；`assembleDebug` 成功 (covers: S2.3, S2.5, S2.7, S2.8) (depends: T9)
-- [ ] T11: Android 删除单词/课程/跟读/测评/统计屏 + Room 留体删用 — acceptance: `ui/vocab` `ui/drill` `ui/expressions` `ui/assessment` `ui/lesson` `ui/player` `ui/home` `ui/me` `ui/history` 与 `ui/scenes/{Briefing,Drill,Review,SceneDetail,Generate,Mission}*` 不再存在；`AppDatabase.kt` 的 entities/version **逐字不变**；ktlint exit 0；detekt 相对基线 103 零新增 (covers: S2.9) (depends: T9)
-- [ ] T12: 版本身份 + 文档定版 — acceptance: `versionCode=16` / `versionName="3.0.0"` / CHANGELOG 新条目三者同范围；README、`docs/usage-guide.md`、`docs/operations.md` 对账并明确标注「未部署、未发版」 (covers: S2.10) (depends: T8, T10, T11)
+- [x] T9: Android 导航收缩 + 会话列表屏 — acceptance: 根为会话列表、`Routes.kt` 只剩 4 个目的地、底部栏删除；更新失败弹窗「进入设置」仍能落到 Settings；`AppTabsTest` 按新导航重写并绿 (covers: S2.1) (depends: T8)
+- [x] T10: Android 微信式群聊屏 —— 语音条 / 点击展开文字 / 长按翻译 / 建议折叠 / 评分卡 / 按住说话 + 文字输入（无语言切换控件） — acceptance: 气泡纯函数各有 JVM 单测（单调 key、时长格式化、双语空白不渲染、`audio_pending` 走 `/tts` 兜底、翻译本地切 vs 端点分派、grade 三态渲染）；`assembleDebug` 成功 (covers: S2.3, S2.5, S2.7, S2.8) (depends: T9)
+- [x] T11: Android 删除单词/课程/跟读/测评/统计屏 + Room 留体删用 — acceptance: `ui/vocab` `ui/drill` `ui/expressions` `ui/assessment` `ui/lesson` `ui/player` `ui/home` `ui/me` `ui/history` 与 `ui/scenes/{Briefing,Drill,Review,SceneDetail,Generate,Mission}*` 不再存在；`AppDatabase.kt` 的 entities/version **逐字不变**；ktlint exit 0；detekt 相对基线 103 零新增 (covers: S2.9) (depends: T9)
+- [x] T12: 版本身份 + 文档定版 — acceptance: `versionCode=16` / `versionName="3.0.0"` / CHANGELOG 新条目三者同范围；README、`docs/usage-guide.md`、`docs/operations.md` 对账并明确标注「未部署、未发版」 (covers: S2.10) (depends: T8, T10, T11)
 
 ## Journey log
+
+1. **一次用户澄清改掉了整个输入设计**。我原方案里加了「录音前中/EN 切换」，理由是讯飞 `language` 必须在送音频前定死。用户澄清"不需要中文语音，只是用户可能会说中文，系统能识别转写就行"之后去实测，发现 `zh_cn` **原生支持中英混读**（纯英文音频转写与 `en_us` 实质等价，反之 `en_us` 对中文出乱码）。于是切换控件、请求里的 `lang` 字段全部删除，语言改为事后从转写文本判定。**教训：我把它当成"约束"的东西，其实只是我没验证过的假设。**
+
+2. **worktree 缺 `.env` 会让实测全线骗人**。讯飞签名用空密钥报 HTTP 401、MiMo TTS **静默**退化成 stub 假音频（只打一行 DEBUG，日志上看着像合成成功）。第一次中英对照探针全部失败就是这个原因，不是服务不支持。同理，复用主检出的 `.venv` 是另一个陷阱：`_editable_impl_*.pth` 写死主检出绝对路径，直接复制会让测试**静默加载 main 的代码**。
+
+3. **两个"半更新"形状**。① `dict(row.doc)` 浅拷贝与 ORM 共享内层 list，调用方就地改掉了"旧值"，写回时新旧内容相等 ⇒ `doc` 列根本不进 UPDATE，症状是 `turn_count` 写了、消息还是旧的 —— 比整行失败难查得多。② 评分水位最初读 `row.updated_at`，而 GET 标已读就会刷新它 ⇒ 每次打开聊天都把时钟清零，挂死的 pending 永远够不到水位。两者都加了回归锁。
+
+4. **首轮评分偏严是一个需要裁决的产品问题，不是 bug**。真火首轮：学员第一句就正确点单，模型却给 36 分并说"未回应当前议程（处理错误或结账）"—— 它自行把议程推前了再回头打学员。修法要先定"议程游标以谁为准"，**把分数调高是错的**。已记入待办，本批未擅自改动。
+
+5. **独立审查连续 5 次因基础设施故障未产出**（`APIError` / SQLite `database is locked`，均发生在**回传**阶段而非执行阶段）。最终改为自审 + 逐条取证（AppDatabase 零 diff、无旧表 drop、503 在写库前、翻译无回显路径、T5 四条测试存在）。**代价是这次缺少第二双眼睛**，尤其值得人工复核的是并发段：`dialogue_threads` 的乐观锁在"评分回填"与"学员提交"撞车时的重试路径。
