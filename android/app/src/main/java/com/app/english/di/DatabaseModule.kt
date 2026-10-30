@@ -3,10 +3,6 @@ package com.app.english.di
 import android.content.Context
 import androidx.room.Room
 import com.app.english.data.local.AppDatabase
-import com.app.english.data.local.CourseCacheDao
-import com.app.english.data.local.EnglishContentDatabase
-import com.app.english.data.local.ExpressionCacheDao
-import com.app.english.data.local.MistakeWordDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -14,6 +10,14 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+/**
+ * 本机 Room 库。
+ *
+ * v3.0 之后**没有任何代码路径读写它** (弱词本与练习记录都随各自功能退役了), 但库本身
+ * 必须原样留着: `AppDatabase` 的实体列表与 version 一字不许动 —— Room 2.6.1 的 schema
+ * 身份哈希在 version 不变时一改就崩存量安装, 而 v2.3.1 换证书已经让存量设备付出过一次
+ * 卸载重装的代价, 不该再来一次。详见 `data/local/AppDatabase.kt` 顶部那段注记。
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
@@ -25,28 +29,4 @@ object DatabaseModule {
             AppDatabase::class.java,
             "english_assistant.db"
         ).fallbackToDestructiveMigration().build()
-
-    /**
-     * v2.0 P6 的内容缓存库(计划 §6.5): 与 AppDatabase 完全独立 —— 课本链路的
-     * 库 schema 冻结在 v3, 生成课/表达库缓存炸了可以随时重建。
-     */
-    @Provides
-    @Singleton
-    fun provideEnglishContentDatabase(
-        @ApplicationContext context: Context
-    ): EnglishContentDatabase = Room.databaseBuilder(
-        context.applicationContext,
-        EnglishContentDatabase::class.java,
-        "english_content.db"
-    ).fallbackToDestructiveMigration().build()
-
-    @Provides
-    fun provideMistakeWordDao(db: AppDatabase): MistakeWordDao = db.mistakeWordDao()
-
-    @Provides
-    fun provideCourseCacheDao(db: EnglishContentDatabase): CourseCacheDao = db.courseCacheDao()
-
-    @Provides
-    fun provideExpressionCacheDao(db: EnglishContentDatabase): ExpressionCacheDao =
-        db.expressionCacheDao()
 }

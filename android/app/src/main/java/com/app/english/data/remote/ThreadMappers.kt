@@ -3,6 +3,7 @@ package com.app.english.data.remote
 import com.app.english.domain.model.ChatGrade
 import com.app.english.domain.model.ChatMessage
 import com.app.english.domain.model.ChatThread
+import com.app.english.domain.model.GenerationJob
 import com.app.english.domain.model.ThreadSummary
 
 /**
@@ -52,4 +53,21 @@ fun ThreadGradeDto.toDomain(): ChatGrade = ChatGrade(
     axes = axes,
     comment = comment,
     commentCn = commentCn
+)
+
+/**
+ * 生成任务 -> 领域模型。
+ *
+ * 这条映射原来住在 `SessionMappers.kt` (随通关会话一起删了), 但**自定义场景的骨架作业
+ * 还在用它** —— 轮询端点 `GET /scenes/jobs/{id}` 是整课生成与场景骨架共用的, 前者退役
+ * 不代表轮询的解析可以跟着消失。
+ */
+fun GenerationJobDto.toDomain(): GenerationJob = GenerationJob(
+    jobId = jobId,
+    status = status,
+    progress = progress,
+    stageText = stageText,
+    sceneId = sceneId,
+    error = error,
+    kind = kind
 )

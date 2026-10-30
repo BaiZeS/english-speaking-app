@@ -11,7 +11,7 @@ import retrofit2.http.Query
  * v3.0 之后后端只剩情景对话一条产品线, 这个接口也就只剩它的四面:
  * 场景目录 / 会话线程 / 语音条 / 长按翻译, 加上模型目录与 OTA 版本两个支撑面。
  *
- * 被删的是单词与课程那一整族 (`lessons` `books` `sessions/*` `score` `scenes/{…}`
+ * 被删的是单词与课程那一整族 (`lessons` `books` `sessions/…` `score` `scenes/{…}`
  * `assessment` `expressions` `stats` `ability` `polish` `history`) —— 对应的功能已从
  * 产品里移除, 不是搬到别处。
  */

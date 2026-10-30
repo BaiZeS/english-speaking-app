@@ -72,15 +72,10 @@ data class ThreadSummaryDto(
 )
 
 @Serializable
-data class ThreadCreateRequestDto(
-    @SerialName("scene_key") val sceneKey: String
-)
+data class ThreadCreateRequestDto(@SerialName("scene_key") val sceneKey: String)
 
 @Serializable
-data class ThreadDeletedDto(
-    val deleted: Boolean = true,
-    val id: String = ""
-)
+data class ThreadDeletedDto(val deleted: Boolean = true, val id: String = "")
 
 /**
  * 一轮的入参: 语音或文字二选一。
@@ -111,10 +106,7 @@ data class ThreadTurnResponseDto(
 
 /** `POST /translate` —— 只服务没有现成双语的那条消息 (有对照的本地切, 不发请求)。 */
 @Serializable
-data class TranslateRequestDto(
-    val text: String,
-    @SerialName("target_lang") val targetLang: String
-)
+data class TranslateRequestDto(val text: String, @SerialName("target_lang") val targetLang: String)
 
 @Serializable
 data class TranslateResponseDto(

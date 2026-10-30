@@ -1,35 +1,18 @@
 package com.app.english.di
 
-import com.app.english.data.repository.AbilityRepository
-import com.app.english.data.repository.AbilityRepositoryImpl
-import com.app.english.data.repository.AssessmentRepository
-import com.app.english.data.repository.AssessmentRepositoryImpl
-import com.app.english.data.repository.BooksRepository
-import com.app.english.data.repository.BooksRepositoryImpl
+import com.app.english.data.repository.ChatRepository
+import com.app.english.data.repository.ChatRepositoryImpl
 import com.app.english.data.repository.EnglishRepository
 import com.app.english.data.repository.EnglishRepositoryImpl
-import com.app.english.data.repository.ExpressionRepository
-import com.app.english.data.repository.ExpressionRepositoryImpl
 import com.app.english.data.repository.GenerateRepository
 import com.app.english.data.repository.GenerateRepositoryImpl
-import com.app.english.data.repository.HistoryRepository
-import com.app.english.data.repository.HistoryRepositoryImpl
-import com.app.english.data.repository.MistakeWordRepository
-import com.app.english.data.repository.MistakeWordRepositoryImpl
-import com.app.english.data.repository.ProgressRepository
-import com.app.english.data.repository.ProgressRepositoryImpl
-import com.app.english.data.repository.SceneRepository
-import com.app.english.data.repository.SceneRepositoryImpl
-import com.app.english.data.repository.SessionRepository
-import com.app.english.data.repository.SessionRepositoryImpl
-import com.app.english.data.repository.StatsRepository
-import com.app.english.data.repository.StatsRepositoryImpl
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
+/** v3.0 只剩情景对话一条线: 线程数据面 + 目录/TTS/翻译/版本 + 自定义场景生成。 */
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
@@ -39,45 +22,9 @@ abstract class RepositoryModule {
 
     @Binds
     @Singleton
-    abstract fun bindHistoryRepository(impl: HistoryRepositoryImpl): HistoryRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindMistakeWordRepository(impl: MistakeWordRepositoryImpl): MistakeWordRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindBooksRepository(impl: BooksRepositoryImpl): BooksRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindStatsRepository(impl: StatsRepositoryImpl): StatsRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindSceneRepository(impl: SceneRepositoryImpl): SceneRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindSessionRepository(impl: SessionRepositoryImpl): SessionRepository
+    abstract fun bindChatRepository(impl: ChatRepositoryImpl): ChatRepository
 
     @Binds
     @Singleton
     abstract fun bindGenerateRepository(impl: GenerateRepositoryImpl): GenerateRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindProgressRepository(impl: ProgressRepositoryImpl): ProgressRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindExpressionRepository(impl: ExpressionRepositoryImpl): ExpressionRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindAbilityRepository(impl: AbilityRepositoryImpl): AbilityRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindAssessmentRepository(impl: AssessmentRepositoryImpl): AssessmentRepository
 }

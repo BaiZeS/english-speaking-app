@@ -11,9 +11,9 @@ import com.app.english.domain.model.PracticeStats
 import com.app.english.domain.model.Role
 import com.app.english.domain.model.SceneCatalog
 import com.app.english.domain.model.SceneCategoryStat
+import com.app.english.domain.model.SceneRole
 import com.app.english.domain.model.SceneSummary
 import com.app.english.domain.model.ScoreResult
-import com.app.english.domain.model.SceneRole
 import com.app.english.domain.model.WordScore
 
 fun LessonSummaryDto.toDomain(): LessonSummary = LessonSummary(

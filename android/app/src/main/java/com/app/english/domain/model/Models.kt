@@ -133,7 +133,8 @@ data class DialogueScene(
      * 但渲染层不许崩: 落到第一个角色, 让这句话至少有人认领。 */
     fun roleOf(roleId: String): SceneRole? = roles.firstOrNull { it.id == roleId }
 
-    fun displayRole(roleId: String): SceneRole = roleOf(roleId) ?: roles.firstOrNull() ?: SceneRole()
+    fun displayRole(roleId: String): SceneRole =
+        roleOf(roleId) ?: roles.firstOrNull() ?: SceneRole()
 
     /**
      * 非内置场景 (学员自己描的那种)。判据是 **`kind != "catalog"`** 而不是 `== "custom"`:
