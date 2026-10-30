@@ -170,6 +170,11 @@ GRADING_TURN_BUDGET_S = 45.0
 #: 润色**没有**确定性降级 (规则改写容易改错意思), 超时即诚实返回 ``polish=None``。
 POLISH_BUDGET_S = 10.0
 
+#: 长按翻译 (``POST /translate``, v3.0) 的硬预算: 与润色同族 —— 都是**独立请求**,
+#: 不占台词那条链的 25s 总额 (那条已经顶格, 见 ``tests/test_latency_budget.py`` 的求和表)。
+#: 比润色更短是因为翻译的输出就是一句话, 而且它挂在长按手势上, 用户正盯着屏幕等。
+TRANSLATE_BUDGET_S = 6.0
+
 #: 自定义场景骨架**后台作业** (:func:`app.services.scene_spec_generator.run_scene_brief_job`)
 #: 的墙钟 (§3 C2/C3): 与 ``REVIEW_COPY_JOB_BUDGET_S`` / ``GRADING_*`` 同一族 —— 它在请求
 #: 之外跑 (202 + 轮询), 30s 契约对它不成立, 但**必须封顶**: 挂死的 LLM 不能把 job 永远

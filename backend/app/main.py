@@ -26,6 +26,7 @@ from app.api.v1 import (
     scene_specs,
     scenes,
     score,
+    translate,
     tts,
     version,
 )
@@ -66,6 +67,8 @@ app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(history.router, prefix="/api/v1")
 app.include_router(lessons.router, prefix="/api/v1")
 app.include_router(tts.router, prefix="/api/v1")
+# v3.0 长按翻译: 只服务没有现成双语的那条消息, 独立预算、失败不机翻占位
+app.include_router(translate.router, prefix="/api/v1")
 app.include_router(score.router, prefix="/api/v1")
 # 情景课 (任务通关闭环) 画廊/详情/剧本 —— 计划 §5.3, 纯新增只读端点
 app.include_router(scenes.router, prefix="/api/v1")

@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1 import dialogue_threads as dt
 from app.config import settings
 from app.models.db import DialogueThread
-from app.services import thread_audio, thread_grading, thread_store
+from app.services import llm_provider, thread_audio, thread_grading, thread_store
 from app.services.mission_engine import AnchoredPronunciation
 from app.services.users import lookup_user
 from tests.test_dialogue_threads import DEV_A as DEV
@@ -303,8 +303,10 @@ async def test_llm_unavailable_is_503_and_turn_is_not_persisted(
     thread_id = await _thread_id(client)
     before = (await client.get(f"/api/v1/dialogue/threads/{thread_id}", params=_q(DEV))).json()
     monkeypatch.setattr(thread_audio, "_provider", _FakeTts())
-    # 仓内口径: 未配凭据 = 拿不到台词 (不是"降级成目录句")。
+    # 仓内口径: 未配凭据 = 拿不到台词 (不是"降级成目录句")。provider 是缓存单例,
+    # 不 reset 会端着上一个用例装好的假客户端, 症状是"没配凭据却 200"。
     monkeypatch.setattr(settings, "llm_api_key", "")
+    llm_provider.reset_llm_provider_for_tests()
 
     resp = await _post_turn(client, thread_id, {"mode": "text", "text": "I want noodles"})
     assert resp.status_code == 503, resp.text

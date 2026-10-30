@@ -45,13 +45,16 @@ from httpx import AsyncClient
 
 from app.api.v1 import course_sessions as cs
 from app.api.v1 import dialogue
+from app.api.v1 import dialogue_threads as dt
 from app.config import settings
 from app.models.course import FoundationStep, SceneCourse
 from app.services import assessment_engine as ae
 from app.services import drill_grader as dg
 from app.services import llm_provider
 from app.services import mission_engine as me
+from app.services import thread_audio as ta
 from app.services.llm_provider import LlmMessage
+from tests.test_mission import generation_json
 from tests.test_scene_store import make_course_dict
 
 #: 客户端事实: OkHttp readTimeout=30s (android/.../di/NetworkModule.kt, 无 callTimeout).
@@ -638,11 +641,19 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
     )
     assert ise_service_worst_s <= cs.ISE_TURN_BUDGET_S  # 外层包装不该短于服务层自己的上限
     assert ise_service_worst_s <= dialogue._ISE_TASK_BUDGET_S
+    assert ise_service_worst_s <= dt.ISE_TURN_BUDGET_S
     # 音频步的 IAT 只有服务层自己的 8s + ws open_timeout 5s (调用点没包预算)。
     iat_service_worst_s = float(settings.xunfei_iat_timeout_s) + 5.0
     mission_turn_s = cs.IAT_TURN_BUDGET_S + dg.GEN_TURN_BUDGET_S
     dialogue_turn_s = dialogue._VOICE_CALL_BUDGET_S + max(
         dialogue._ISE_TASK_BUDGET_S, dg.GEN_TURN_BUDGET_S
+    )
+    # v3.0 群聊一轮: IAT + (ISE ∥ 台词) + **请求内 TTS**。语音条是串在台词之后的
+    # (要先有文本才知道合成什么), 所以它是**加**上去的, 不被 max 吃掉。
+    thread_turn_s = (
+        dt.IAT_TURN_BUDGET_S
+        + max(dt.ISE_TURN_BUDGET_S, dg.GEN_TURN_BUDGET_S)
+        + ta.TTS_TURN_BUDGET_S
     )
 
     fits: dict[str, float] = {
@@ -650,18 +661,31 @@ def test_worst_case_sum_of_each_sync_path_fits_under_30s() -> None:
         "step (read_along: 只有 ISE)": float(settings.xunfei_ise_timeout_s),
         "mission 单轮 (台词独占预算)": mission_turn_s,
         "dialogue 单轮 (同一形状)": dialogue_turn_s,
+        # v3.0 群聊一轮: 8 + max(8.5, 14) + 3 = **25.0**, 而门是 25 + 5 <= 30 ——
+        # **顶格零余量**。任何一处放宽预算都必须同步削减他处或改全局 readTimeout
+        # (后者会连 /tts、/translate 一起放宽, 且必须配强更才对存量包有效)。
+        "thread 单轮 (v3.0, 含请求内 TTS)": thread_turn_s,
         # §P6: 收工与"到轮次上限自动收工"都**不再同步等总评文案** —— 请求里只剩
         # DB/聚合, 文案交给后台作业。自动收工因此从下面的 over_budget 搬回这里:
         # 它的最坏时长就是那一轮本身的 mission_turn_s, 不再叠加一次总评 LLM。
         "finish-mission (202, 只有 DB/聚合)": 0.0,
         "mission 到轮次上限自动收工 (总评已异步)": mission_turn_s,
         "polish": dg.POLISH_BUDGET_S,
+        # v3.0 长按翻译: 独立请求、独立预算, 不占上面那条已经顶格的 25s。
+        "translate": dg.TRANSLATE_BUDGET_S,
         # 老客户端同步路径; async_judge=true 走 202 + 120s 后台作业 (见 split 测试)。
         "assessment/complete": dg.ASSESSMENT_JUDGE_BUDGET_S,
         # §3 C3 自定义场景: 请求只校验身份/长度 + 建 job 行, LLM 在 202 之外慢慢跑
         # (墙见 test_scene_brief_job_is_async_with_a_named_wall)。
         "dialogue scenes custom (202, 请求内零 LLM)": 0.0,
     }
+    # "顶格"是个**需要被知道**的形状, 不是一个可以悄悄变化的事实: 有人放宽任一预算,
+    # 这条就红, 逼他重新算一遍而不是让零余量悄悄存在。
+    assert thread_turn_s + MARGIN_S == CLIENT_READ_TIMEOUT_S, (
+        f"群聊一轮不再正好顶格 (当前 {thread_turn_s + MARGIN_S:.1f} vs 门 "
+        f"{CLIENT_READ_TIMEOUT_S:.1f}): 要么预算变了要重算, 要么余量/超时变了要改这条注释"
+    )
+
     for name, worst in fits.items():
         assert worst + MARGIN_S <= CLIENT_READ_TIMEOUT_S, (
             f"{name} 最坏 {worst:.1f}s + {MARGIN_S:.0f}s 余量 已越过客户端 "
@@ -881,3 +905,62 @@ def test_dialogue_turn_is_no_longer_a_bare_provider_chat() -> None:
     # 形状标记: 两边共用同一份 schema 与同一份 JSON 形状 (漂移的接缝在这儿)。
     assert "mission_engine.GENERATION_RULES" in inspect.getsource(dialogue._scene_messages)
     assert "mission_engine.GENERATION_JSON_SHAPE" in inspect.getsource(dialogue._scene_messages)
+
+
+@pytest.mark.asyncio
+async def test_thread_turn_respects_the_same_gen_wall(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v3.0 群聊一轮走**同一堵** GEN 墙: 挂死的 LLM 必须被预算砍成 503, 而不是拖死 socket.
+
+    断的是"这条新路由真的受那堵墙约束" —— 它调 ``mission_engine.generate_turn``,
+    所以 ``shrink_budget`` 改的仍是 ``mission_engine`` 命名空间 (同 ``dialogue`` 那条)。
+    """
+    from tests.test_dialogue_threads import _open
+
+    shrink_budget(monkeypatch, me, "GEN_TURN_BUDGET_S")
+    _hanging(monkeypatch)
+    thread_id = (await _open(client, "dev-lat")).json()["id"]
+    started = time.monotonic()
+    res = await client.post(
+        f"/api/v1/dialogue/threads/{thread_id}/turn",
+        json={"mode": "text", "text": "I want noodles"},
+        params={"device_id": "dev-lat"},
+    )
+    assert res.status_code == 503, res.text
+    assert res.json()["error"]["code"] == "TURN_GENERATION_UNAVAILABLE"
+    assert time.monotonic() - started < 3.0
+
+
+@pytest.mark.asyncio
+async def test_thread_tts_budget_exceeded_degrades_instead_of_failing(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TTS 墙到点必须是**软失败** (200 + ``audio_pending``), 不能把已经成功的台词打死.
+
+    这条是"请求内合成"这个选择的前提: 语音条排在台词之后 (要先有文本才知道合成什么),
+    所以它是**加**在 25s 求和上的一段。如果它超时会 503, 那就等于让学员为一次 TTS
+    抖动重答一遍 —— 重答会再烧一次 LLM, 还会在会话里留下两颗一样的用户气泡。
+    """
+    from tests.test_dialogue_threads import _open
+
+    install_slow_llm(monkeypatch, [(0.0, generation_json(reply="What would you like?"))])
+
+    async def _hanging_tts(text: str, voice: str) -> Any:
+        await asyncio.sleep(HANG_S)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(ta._provider, "synthesize", _hanging_tts)
+    shrink_budget(monkeypatch, ta, "TTS_TURN_BUDGET_S")
+
+    thread_id = (await _open(client, "dev-tts")).json()["id"]
+    started = time.monotonic()
+    res = await client.post(
+        f"/api/v1/dialogue/threads/{thread_id}/turn",
+        json={"mode": "text", "text": "I want noodles"},
+        params={"device_id": "dev-tts"},
+    )
+    assert res.status_code == 200, res.text
+    assert time.monotonic() - started < 3.0, "TTS 预算没起作用, 整轮被拖死了"
+    line = next(m for m in res.json()["messages"] if m["kind"] == "line")
+    assert line["audio_url"] is None and line["audio_pending"] is True, line
